@@ -1,7 +1,7 @@
 import { OAuth2Client, OAuth2Fetch } from "@badgateway/oauth2-client";
 import type { OAuth2Token } from "@badgateway/oauth2-client";
-import { existsSync, promises as fs, writeFileSync } from "fs";
-import { createInterface } from "readline";
+import { existsSync, promises as fs, writeFileSync } from "node:fs";
+import { createInterface } from "node:readline";
 
 import { __root } from "../env";
 import { createServer } from "../server";

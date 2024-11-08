@@ -1,5 +1,5 @@
-import * as Bottleneck from "bottleneck";
-import * as util from "util";
+import Bottleneck from "bottleneck";
+import * as util from "node:util";
 
 // 100 requests/minute
 const limiter = new Bottleneck({

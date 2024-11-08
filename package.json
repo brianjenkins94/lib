@@ -7,7 +7,7 @@
   "license": "MIT",
   "scripts": {
     "build": "cp -r ./util ./docs/util",
-    "test": "find ./test -name \"*.ts\" -exec npx tsx \"{}\" \\;"
+    "test": "npx tsx test/runtime/node.ts && deno run test/runtime/deno.ts"
   },
   "devDependencies": {
     "@tsconfig/node-lts": "latest",

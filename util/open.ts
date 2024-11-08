@@ -1,10 +1,9 @@
 #!/usr/bin/env node
 
-import { existsSync, promises as fs } from "fs";
-import { SpawnOptionsWithoutStdio, spawn } from "child_process";
-import { unescape } from "querystring";
-import * as path from "path";
-import * as url from "url";
+import { existsSync, promises as fs } from "node:fs";
+import { SpawnOptionsWithoutStdio, spawn } from "node:child_process";
+import { unescape } from "node:querystring";
+import * as path from "node:path";
 import mime from "mime/lite";
 
 import { createServer } from "./server";
@@ -147,6 +146,8 @@ async function serve() {
 	});
 }
 
+/*
 if (import.meta.url === url.pathToFileURL(process.argv[1]).toString()) {
 	await serve();
 }
+*/

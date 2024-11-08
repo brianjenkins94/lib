@@ -21,3 +21,25 @@ export function titleCaseToKebabCase(string) {
 export function equalsIgnoreCase(a, b) {
 	return a.localeCompare(b, undefined, { "sensitivity": "base" }) === 0;
 }
+
+export function toTitleCase(string) {
+	return string.replace(/(^|\s)\S/gu, function(match) {
+		return match.toUpperCase();
+	});
+}
+
+export function dedent(input) {
+	input = input
+		.replace(/^\t+/gmu, function(match) {
+			return " ".repeat(match.length * 4);
+		});
+
+	const indentationWidth = (/^ {2,}/mu.exec(input) ?? [""])[0].length;
+
+	return input
+		.replace(new RegExp("^( {" + indentationWidth + "})+", "gmu"), "")
+		.replace(/(?<=^)\n|(?<=\n+) +(?=$)/gu, "");
+		//.replace(/^ +/gmu, function(match) {
+		//	return "\t".repeat(match.length / 4);
+		//});
+}

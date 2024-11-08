@@ -1,8 +1,8 @@
-import { existsSync, promises as fs } from "fs";
+import { existsSync, promises as fs } from "node:fs";
 import * as pathToRegexp from "path-to-regexp";
-import * as http from "http";
-import * as path from "path";
-import * as url from "url";
+import * as http from "node:http";
+import * as path from "node:path";
+import * as url from "node:url";
 import mime from "mime/lite";
 
 import { render } from "./render";

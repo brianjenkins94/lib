@@ -1,7 +1,7 @@
 import { scheduleJob } from "node-schedule";
-import * as path from "path";
-import * as url from "url";
-import { promises as fs } from "fs";
+import * as path from "node:path";
+import * as url from "node:url";
+import { promises as fs } from "node:fs";
 
 export async function bindScheduledTasks(scheduledTasksDirectory) {
 	const files = [];

@@ -1,6 +1,6 @@
-export function partition(array, callback) {
-	return array.reduce(function(result, element, index) {
-		if (callback(element, index, array)) {
+export function partition(promises, callback) {
+	return promises.reduce(function(result, element, index) {
+		if (callback(element, index, promises)) {
 			result[0].push(element);
 		} else {
 			result[1].push(element);
@@ -22,4 +22,10 @@ export async function filterAsync(promises, callback) {
 	return promises.filter(function(_, index) {
 		return results[index];
 	});
+}
+
+export function series(promises) {
+	return promises.reduce(function(previous, next) {
+		return previous.then(next);
+	}, Promise.resolve());
 }
