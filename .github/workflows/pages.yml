@@ -16,6 +16,7 @@
 	},
 	"jobs": {
 		"build": {
+			"runs-on": "ubuntu-latest",
 			"steps": [
 				{ "uses": "actions/checkout@v4", "with": { "ref": "main" } },
 				{ "uses": "actions/setup-node@v4" },
@@ -33,6 +34,7 @@
 			"timeout-minutes": 15
 		},
 		"deploy": {
+			"runs-on": "ubuntu-latest",
 			"environment": {
 				"name": "github-pages",
 				"url": "${{ steps.deployment.outputs.page_url }}"
