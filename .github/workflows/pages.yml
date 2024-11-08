@@ -1,0 +1,50 @@
+{
+	"name": "cd",
+	"on": {
+		"push": {
+			"branches": ["main"]
+		}
+	},
+	"concurrency": {
+		"group": "${{ github.ref }}",
+		"cancel-in-progress": true
+	},
+	"permissions": {
+		"contents": "read",
+		"pages": "write",
+		"id-token": "write"
+	},
+	"jobs": {
+		"build": {
+			"steps": [
+				{ "uses": "actions/checkout@v4", "with": { "ref": "main" } },
+				{ "uses": "actions/setup-node@v4" },
+
+				{ "run": "npm install" }, #{ "uses": "bahmutov/npm-install@v1", "with": { "useLockFile": false } },
+				{ "run": "npm run build" },
+				{ "run": "npx tsx util/tree.ts" },
+				{
+					"uses": "actions/upload-pages-artifact@v3",
+					"with": {
+						"path": "./docs"
+					}
+				}
+			],
+			"timeout-minutes": 15
+		},
+		"deploy": {
+			"environment": {
+				"name": "github-pages",
+				"url": "${{ steps.deployment.outputs.page_url }}"
+			},
+			"needs": ["build"],
+			"steps": [
+				{
+					"id": "deployment",
+					"uses": "actions/deploy-pages@v4"
+				}
+			],
+			"timeout-minutes": 15
+		}
+	}
+}

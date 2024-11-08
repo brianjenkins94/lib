@@ -1,0 +1,26 @@
+{
+  "name": "lib",
+  "version": "0.0.0",
+  "description": "",
+  "type": "module",
+  "author": "Brian Jenkins",
+  "license": "MIT",
+  "scripts": {
+    "build": "cp -r ./util ./docs/util",
+    "test": "find ./test -name \"*.ts\" -exec npx tsx \"{}\" \\;"
+  },
+  "devDependencies": {
+    "@tsconfig/node-lts": "latest",
+    "@types/node": "latest",
+    "@typescript-eslint/eslint-plugin": "latest",
+    "@typescript-eslint/parser": "latest",
+    "tsup": "latest",
+    "tsx": "latest",
+    "typescript": "latest"
+  },
+  "engines": {
+    "node": ">=18.0.0",
+    "npm": ">=8.0.0"
+  },
+  "sideEffects": false
+}
