@@ -1,12 +1,12 @@
 import { chromium } from "playwright-chromium";
 import type { Browser, BrowserContext, Page } from "playwright-chromium";
-import { spawn } from "child_process";
-import * as path from "path";
+import { spawn } from "node:child_process";
+import * as path from "node:path";
 import { build } from "esbuild";
 
 import { __root, isWindows } from "../env";
 import { sleep } from "../sleep";
-import { series } from "../promises";
+import { series } from "../array";
 
 export async function attach() {
 	try {
