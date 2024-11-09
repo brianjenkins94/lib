@@ -5,6 +5,7 @@
 	// List of extensions which should be recommended for users of this workspace.
 	"recommendations": [
 		"dbaeumer.vscode-eslint",
+		"denoland.vscode-deno",
 		"ms-vscode-remote.remote-containers",
 		"streetsidesoftware.code-spell-checker",
 		"unifiedjs.vscode-mdx"

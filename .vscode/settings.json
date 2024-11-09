@@ -6,6 +6,7 @@
 		"editor.defaultFormatter": "dbaeumer.vscode-eslint",
 		"editor.formatOnSave": true
 	},
+	"deno.enable": true,
 	"editor.formatOnSave": false,
 	"files.insertFinalNewline": true,
 	"files.trimTrailingWhitespace": true,

@@ -6,6 +6,8 @@
         "@clack/prompts": "^0.7.0",
         "bottleneck": "^2.19.5",
         "ejs": "^3.1.10",
+        "gatsby-source-google-docs": "^2.4.3",
+        "googleapis": "^144.0.0",
         "hyperformula": "^2.7.1",
         "mime": "^4.0.4",
         "node-schedule": "^2.1.1",
