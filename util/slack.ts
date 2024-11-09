@@ -4,7 +4,7 @@ export function postMessage(message, options = {}) {
 	return fetch(SLACK_WEBHOOK_URL, {
 		"method": "POST",
 		"body": JSON.stringify({
-            //"channel": "#cs-dev",
+            //"channel": "#general",
 			"text": message.trimEnd(),
 			"icon_emoji": ":sunglasses:",
 			...options
