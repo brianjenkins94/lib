@@ -22,8 +22,5 @@
     "node": ">=22.0.0",
     "npm": ">=10.0.0"
   },
-  "sideEffects": false,
-  "workspaces": [
-    "components/*"
-  ]
+  "sideEffects": false
 }

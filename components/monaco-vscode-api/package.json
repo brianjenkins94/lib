@@ -4,11 +4,16 @@
   "author": "Brian Jenkins",
   "license": "MIT",
   "scripts": {
+    "build": "tsup --format esm --treeshake",
     "postinstall": "chmod 755 ./install.sh && ./install.sh",
     "serve": "npx http-server src/",
     "start": "npm run serve"
   },
-  "devDependencies": {},
+  "devDependencies": {
+    "import-meta-resolve": "latest",
+    "json5": "latest",
+    "node-stdlib-browser": "latest"
+  },
   "engines": {
     "node": ">=22.0.0",
     "npm": ">=10.0.0"

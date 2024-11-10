@@ -26,10 +26,10 @@ await initializeMonacoService({
 }, document.body, constructOptions, envOptions);
 
 for (const config of [
-  //{ part: Parts.TITLEBAR_PART, element: '#titleBar' },
-  //{ part: Parts.BANNER_PART, element: '#banner' },
+	//{ part: Parts.TITLEBAR_PART, element: '#titleBar' },
+	//{ part: Parts.BANNER_PART, element: '#banner' },
 	{ "part": Parts.SIDEBAR_PART, "element": "#sidebar" },
-  //{ part: Parts.ACTIVITYBAR_PART, get element () { return getSideBarPosition() === Position.LEFT ? '#activityBar' : '#activityBar-right' }, onDidElementChange: onDidChangeSideBarPosition },
+	//{ part: Parts.ACTIVITYBAR_PART, get element () { return getSideBarPosition() === Position.LEFT ? '#activityBar' : '#activityBar-right' }, onDidElementChange: onDidChangeSideBarPosition },
 	{ "part": Parts.PANEL_PART, "element": "#console" },
 	{ "part": Parts.EDITOR_PART, "element": "#editors" },
 	{ "part": Parts.STATUSBAR_PART, "element": "#statusbar" },
@@ -67,3 +67,55 @@ await registerExtension({
 export {
 	remoteAuthority
 };
+
+const { registerFileUrl, getApi } = registerExtension({
+	"name": "helloworld-web-sample",
+	"displayName": "helloworld-web-sample",
+	"description": "HelloWorld example for VS Code in the browser",
+	"version": "0.0.1",
+	"publisher": "vscode-samples",
+	"private": true,
+	"license": "MIT",
+	"repository": "https://github.com/microsoft/vscode-extension-samples/helloworld-web-sample",
+	"engines": {
+		"vscode": "^1.84.0"
+	},
+	"categories": [
+		"Other"
+	],
+	"activationEvents": [
+		"onLanguage:plaintext"
+	],
+	"browser": "./extension.js",
+	"contributes": {
+		"commands": [
+			{
+				"command": "helloworld-web-sample.helloWorld",
+				"title": "Hello World"
+			}
+		],
+		"configuration": [
+			{
+				"order": 22,
+				"id": "lsp-web-extension-sample",
+				"title": "lsp-web-extension-sample",
+				"properties": {
+					"lsp-web-extension-sample.trace.server": {
+						"type": "string",
+						"scope": "window",
+						"enum": [
+							"off",
+							"messages",
+							"verbose"
+						],
+						"default": "verbose",
+						"description": "Traces the communication between VS Code and the lsp-web-extension-sample language server."
+					}
+				}
+			}
+		]
+	}
+}, ExtensionHostKind.LocalWebWorker);
+
+registerFileUrl('/package.json', new URL('./extensions/hello-world/package.json', import.meta.url).toString())
+registerFileUrl('/extension.js', new URL('./extensions/hello-world/extension.js', import.meta.url).toString())

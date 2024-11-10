@@ -18,7 +18,7 @@ cp -rf monaco-vscode-api/demo/ demo/
 
 rm -rf monaco-vscode-api/
 
-cd demo
+cd demo/
 
 if [[ "$(uname -s)" == Darwin* ]]; then
 	sed -i "" "s/file:[^\"]*/latest/g" package.json
