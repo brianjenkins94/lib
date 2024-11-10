@@ -1,4 +1,4 @@
-import { promises as fs } from "fs";
+import * as fs from "../../util/fs";
 import * as path from "path";
 import { __root } from "../../util/env";
 import { spawn } from "child_process";

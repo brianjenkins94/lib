@@ -1,7 +1,7 @@
 import { scheduleJob } from "node-schedule";
 import * as path from "node:path";
 import * as url from "node:url";
-import { promises as fs } from "node:fs";
+import * as fs from "./fs";
 
 export async function bindScheduledTasks(scheduledTasksDirectory) {
 	const files = [];
@@ -9,7 +9,7 @@ export async function bindScheduledTasks(scheduledTasksDirectory) {
 	await (async function recurse(directory) {
 		for (const file of await fs.readdir(directory)) {
 			if ((await fs.stat(path.join(directory, file))).isDirectory()) {
-                //recurse(path.join(directory, file));
+				//recurse(path.join(directory, file));
 			} else if (path.extname(file).toLowerCase() === ".ts") {
 				files.push(path.join(directory, file));
 			}

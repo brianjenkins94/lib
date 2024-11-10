@@ -1,4 +1,4 @@
-import { existsSync, promises as fs } from "node:fs";
+import * as fs from "./fs";
 import * as pathToRegexp from "path-to-regexp";
 import * as http from "node:http";
 import * as path from "node:path";
@@ -182,7 +182,7 @@ export function serveStatic(staticPath) {
 		const fullPath = path.join(staticPath, request.params[0]);
 
 		if (path.resolve(fullPath).startsWith(staticPath)) {
-			if (existsSync(fullPath) && (await fs.stat(fullPath)).isFile()) {
+			if (fs.existsSync(fullPath) && (await fs.stat(fullPath)).isFile()) {
 				return {
 					"statusCode": 200,
 					"headers": {
@@ -190,7 +190,7 @@ export function serveStatic(staticPath) {
 					},
 					"body": await fs.readFile(fullPath)
 				};
-			} else if (path.extname(fullPath) === "" && existsSync(path.join(fullPath, "index.html"))) {
+			} else if (path.extname(fullPath) === "" && fs.existsSync(path.join(fullPath, "index.html"))) {
 				request.params[0] += "/index.html";
 
 				return serve(request, response);

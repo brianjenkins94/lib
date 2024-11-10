@@ -1,5 +1,5 @@
 import * as ejs from "ejs";
-import { promises as fs } from "node:fs";
+import * as fs from "./fs";
 
 export async function render(template, data = {}, options = {}) {
 	// Convert the object values to strings
