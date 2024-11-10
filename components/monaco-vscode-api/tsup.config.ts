@@ -212,7 +212,7 @@ async function manualChunks(chunkAliases: Record<string, string[]>) {
             }))).flat(Infinity))];
 
             await fs.writeFile(path.join(chunksDirectory, chunkAlias + ".ts"), dependencies.map(function(module) {
-                return (module.includes("monaco-vscode-chat") ? "//" : "") + "import \"../" + path.relative(__dirname, module).replace(/\\/gu, "/") + "\";\n";
+                return "import \"../" + path.relative(__dirname, module).replace(/\\/gu, "/") + "\";\n";
             }));
         }
 

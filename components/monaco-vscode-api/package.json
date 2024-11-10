@@ -6,7 +6,7 @@
   "scripts": {
     "build": "tsup --format esm --treeshake",
     "postinstall": "chmod 755 ./install.sh && ./install.sh",
-    "serve": "npx http-server src/",
+    "serve": "npx http-server dist/",
     "start": "npm run serve"
   },
   "devDependencies": {
