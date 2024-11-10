@@ -1,6 +1,6 @@
 import { OAuth2Client, OAuth2Fetch } from "@badgateway/oauth2-client";
 import type { OAuth2Token } from "@badgateway/oauth2-client";
-import { existsSync, promises as fs, writeFileSync } from "node:fs";
+import * as fs from "../fs";
 import { createInterface } from "node:readline";
 
 import { __root } from "../env";
@@ -50,7 +50,7 @@ export const fetchWrapper = new OAuth2Fetch({
 		if (fetchWrapper.activeGetStoredToken !== null) {
 			await fetchWrapper.activeGetStoredToken;
 
-			if (existsSync("token.json")) {
+			if (fs.existsSync("token.json")) {
 				return JSON.parse(await fs.readFile("token.json", { "encoding": "utf8" }));
 			}
 		}
@@ -119,12 +119,12 @@ export const fetchWrapper = new OAuth2Fetch({
 		});
 	},
 	"storeToken": function(token) {
-		if (!existsSync("token.json")) {
-			writeFileSync("token.json", JSON.stringify(token, undefined, "\t") + "\n");
+		if (!fs.existsSync("token.json")) {
+			fs.writeFileSync("token.json", JSON.stringify(token, undefined, "\t") + "\n");
 		}
 	},
 	"getStoredToken": async function() {
-		if (existsSync("token.json")) {
+		if (fs.existsSync("token.json")) {
 			return JSON.parse(await fs.readFile("token.json", { "encoding": "utf8" }));
 		} else {
 			return null;

@@ -1,5 +1,5 @@
 import * as readline from "node:readline";
-import * as fs from "node:fs";
+import * as fs from "./fs";
 import * as stream from "node:stream";
 
 export class FakeReadStream extends stream.Readable {
@@ -31,7 +31,7 @@ export class FakeReadStream extends stream.Readable {
 			this.emit("line", this.buffer.pop(), this);
 		}
 
-        return this;
+		return this;
 	}
 }
 
@@ -46,7 +46,7 @@ export class FakeWriteStream extends stream.Writable {
 	}
 
 	private constructor(filePath) {
-        super();
+		super();
 
 		this.input.path = filePath;
 	}
@@ -54,7 +54,7 @@ export class FakeWriteStream extends stream.Writable {
 	public write(chunk) {
 		this.buffer.push(chunk);
 
-        return true;
+		return true;
 	}
 
 	public flush() {
@@ -63,9 +63,9 @@ export class FakeWriteStream extends stream.Writable {
 }
 
 export function createInterface(options: readline.ReadLineOptions) {
-    if (typeof options.input === "string") {
-        options.input = FakeReadStream.createReadStream(options.input)
-    }
+	if (typeof options.input === "string") {
+		options.input = FakeReadStream.createReadStream(options.input)
+	}
 
 	return readline.createInterface(options);
 }

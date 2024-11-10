@@ -1,6 +1,5 @@
 {
     "type": "module",
-    "private": true,
     "dependencies": {
         "@badgateway/oauth2-client": "^2.4.2",
         "@clack/prompts": "^0.7.0",

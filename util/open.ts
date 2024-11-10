@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { existsSync, promises as fs } from "node:fs";
+import * as fs from "./fs";
 import { SpawnOptionsWithoutStdio, spawn } from "node:child_process";
 import { unescape } from "node:querystring";
 import * as path from "node:path";
@@ -69,7 +69,7 @@ async function serve() {
 
 	const packageJsonFile = path.join(process.cwd(), "package.json");
 
-	if (existsSync(packageJsonFile)) {
+	if (fs.existsSync(packageJsonFile)) {
 		const parsedPackageJson = JSON.parse(await fs.readFile(packageJsonFile, { "encoding": "utf8" }));
 
 		if (parsedPackageJson?.["repository"]?.["url"] !== undefined) {
@@ -99,7 +99,7 @@ async function serve() {
 		const fullPath = path.join(basePath, unescape(request.url.replace("/~", "")));
 
 		if (path.resolve(fullPath).startsWith(basePath)) {
-			if (existsSync(fullPath)) {
+			if (fs.existsSync(fullPath)) {
 				if ((await fs.stat(fullPath)).isFile()) {
 					return {
 						"statusCode": 200,
