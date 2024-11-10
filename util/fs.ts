@@ -2,8 +2,8 @@ import type { Abortable } from "node:events";
 import * as fs from "node:fs";
 import { OpenMode } from "node:fs";
 
-export { createReadStream, createWriteStream, existsSync, writeFileSync } from "fs";
-export { copyFile, cp, rename, rm, mkdir, readdir, stat, unlink, writeFile, appendFile, glob } from "fs/promises";
+export { createReadStream, createWriteStream, existsSync, writeFileSync } from "node:fs";
+export { copyFile, cp, rename, rm, mkdir, readdir, stat, unlink, writeFile, appendFile, glob } from "node:fs/promises";
 
 interface ReadFileOptions {
     encoding?: BufferEncoding;

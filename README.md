@@ -1,6 +1,6 @@
 # lib
 
-> Experiment using GitHub Pages as a personal code library.
+> An experiment using GitHub Pages as a personal code library.
 
 ## Contributors
 

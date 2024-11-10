@@ -1,0 +1,17 @@
+{
+  "name": "monaco-vscode-api-esbuild",
+  "type": "module",
+  "author": "Brian Jenkins",
+  "license": "MIT",
+  "scripts": {
+    "postinstall": "chmod 755 ./install.sh && ./install.sh",
+    "serve": "npx http-server src/",
+    "start": "npm run serve"
+  },
+  "devDependencies": {},
+  "engines": {
+    "node": ">=22.0.0",
+    "npm": ">=10.0.0"
+  },
+  "sideEffects": true
+}

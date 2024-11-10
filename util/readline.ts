@@ -26,9 +26,9 @@ export class FakeReadStream extends stream.Readable {
 
 	public resume() {
 		if (this.buffer.length === 0) {
-			this.emit("close");
+			super.emit("close");
 		} else {
-			this.emit("line", this.buffer.pop(), this);
+			super.emit("line", this.buffer.pop(), this);
 		}
 
 		return this;
