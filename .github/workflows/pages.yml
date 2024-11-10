@@ -19,7 +19,7 @@
 			"runs-on": "ubuntu-latest",
 			"steps": [
 				{ "uses": "actions/checkout@v4", "with": { "ref": "main" } },
-				{ "uses": "actions/setup-node@v4" },
+				{ "uses": "actions/setup-node@v4", "with": { "node-version": "22" } },
 
 				{ "run": "npm install" }, #{ "uses": "bahmutov/npm-install@v1", "with": { "useLockFile": false } },
 				{ "run": "npm run build" },
