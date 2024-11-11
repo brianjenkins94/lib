@@ -2,6 +2,8 @@
 
 CWD=$(pwd)
 
+cd "$(dirname "$0")"
+
 rm -rf demo/ monaco-vscode-api/
 
 if [[ "$(uname -s)" == MINGW* ]]; then
