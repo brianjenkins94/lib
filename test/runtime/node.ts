@@ -9,7 +9,7 @@ for await (const file of fs.glob(path.join(__root, "util", "**", "*.ts"), {
     }
 })) {
     console.log(">", ["npx", "tsx", file].join(" "))
-    let subprocess = spawn("npx", ["tsx", file], {
+    let process = spawn("npx", ["tsx", file], {
         "shell": true,
         //"stdio": "inherit"
     });
@@ -17,11 +17,11 @@ for await (const file of fs.glob(path.join(__root, "util", "**", "*.ts"), {
     await new Promise<void>(function recurse(resolve, reject) {
         const buffer = [];
 
-        subprocess.stderr.on("data", function(chunk) {
+        process.stderr.on("data", function(chunk) {
             buffer.push(chunk);
         });
 
-        subprocess.on("close", async function(code) {
+        process.on("close", async function(code) {
             if (code === 0) {
                 resolve();
 
@@ -31,20 +31,18 @@ for await (const file of fs.glob(path.join(__root, "util", "**", "*.ts"), {
             const [packageName] = /(?<=').*(?=')/u.exec(Buffer.concat(buffer).toString())
 
             console.log(">", ["npx", "install", packageName + "@latest"].join(" "))
-            const subsubprocess = spawn("npm", ["install", packageName + "@latest"], {
+            const subprocess = spawn("npm", ["install", packageName + "@latest"], {
                 "cwd": path.join(__root, "util"),
                 "shell": true,
                 "stdio": "inherit"
             });
 
             await new Promise(function(resolve, reject) {
-                subsubprocess.on("close", resolve);
+                subprocess.on("close", resolve);
             });
 
-            const subbuffer = [];
-
             console.log(">", ["npx", "tsx", file].join(" "))
-            subprocess = spawn("npx", ["tsx", file], {
+            process = spawn("npx", ["tsx", file], {
                 "shell": true,
                 //"stdio": "inherit"
             });

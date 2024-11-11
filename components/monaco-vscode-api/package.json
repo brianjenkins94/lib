@@ -5,7 +5,7 @@
   "license": "MIT",
   "scripts": {
     "build": "tsup --format esm --treeshake",
-    "postinstall": "chmod 755 ./install.sh && ./install.sh",
+    "preinstall": "chmod 755 ./install.sh && ./install.sh",
     "serve": "npx http-server dist/",
     "start": "npm run serve"
   },
