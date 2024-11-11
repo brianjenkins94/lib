@@ -21,7 +21,9 @@ class ReadLineStream extends Readable {
 		})
 
 		readline.on("line", (line) => {
-			super.emit("line", line)
+			if (line !== "\n") {
+				super.emit("line", line)
+			}
 		});
 
 		for await (const chunk of this._readStream) {}
