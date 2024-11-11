@@ -11,26 +11,16 @@ declare module "readline" {
     }
 }
 
-function createReadStream(filePath, cwd?) {
-    const directory = path.dirname(filePath);
-    const fileName = path.basename(filePath);
-    filePath = cwd === undefined ? directory : path.join(path.dirname(cwd), directory);
+const readStream = createReadLineStream(fs.createReadStream("testdir/input.txt"));
 
-    return createInterface({
-        "input": path.join(filePath, fileName)
-    });
-}
-
-const readStream = createReadLineStream("input.txt");
-
-const writeStream = fs.createWriteStream("output.txt");
+const writeStream = fs.createWriteStream("testdir/output.txt");
 
 async function readLine(line, parentReadStream = readStream) {
     parentReadStream.pause();
 
     switch (true) {
         case /^@import ".*";$/.test(line): {
-            await readFile(createReadStream(line.substring(line.indexOf("\"") + 1, line.length - 2), parentReadStream.input.path));
+            await readFile(createReadLineStream(fs.createReadStream(line.substring(line.indexOf("\"") + 1, line.length - 2))));
             break;
         }
         default: {

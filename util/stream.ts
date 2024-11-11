@@ -2,53 +2,41 @@ import { createInterface, Interface as ReadlineInterface } from "node:readline";
 import { Readable, Writable } from "node:stream";
 
 class ReadLineStream extends Readable {
-	private _iterable;
-	private _line;
-	private _readline: ReadlineInterface;
+	private _readStream;
 
-	public constructor(iterable, options?) {
-		super({
-			...options,
-			"highWaterMark": 1
+	public constructor(readStream, options = {}) {
+		super(options);
+
+		this._readStream = readStream;
+		this._readStream._readableState.highWaterMark = 1
+
+		readStream.on("readable", () => {
+			super.read(0)
+		})
+	}
+
+	public override async _read(size: number): Promise<void> {
+		const readline = createInterface({
+			"input": this._readStream
+		})
+
+		readline.on("line", (line) => {
+			super.emit("line", line)
 		});
 
-		this._iterable = iterable;
-
-		this._readline = createInterface({
-			"input": this
-		})
-
-		this._readline.on("line", (line) => {
-			super.emit("line", line)
-		})
-	}
-
-	private async _readChunks() {
-		for (let chunk of this._iterable) {
-			chunk = Buffer.from(chunk, "utf8");
-
-			super.emit("line", this._line);
-
-			if (!this.push(chunk)) {
-				return;
-			}
-		}
-	}
-
-	public override _read(size: number): void {
-		this._readChunks()
+		for await (const chunk of this._readStream) {}
 	}
 }
 
-export function createReadLineStream(options) {
-	return new ReadLineStream(options);
+export function createReadLineStream(readStream, options) {
+	return new ReadLineStream(readStream, options);
 }
 
 class WriteMemoryStream extends Writable {
 	private _decoder = new TextDecoder();
 	public data = "";
 
-	public constructor(options?) {
+	public constructor(options = {}) {
 		super(options);
 	}
 
