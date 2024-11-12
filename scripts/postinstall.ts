@@ -70,15 +70,23 @@ const configs = (await mapAsync(workspaces, async function(workspace) {
         return;
     }
 
-    let customConfig = {};
+    let customConfig = {
+        "entry": {}
+    };
 
     if (fs.existsSync(path.join(workspace, "tsup.config.ts"))) {
-        customConfig = (await import(url.pathToFileURL(path.join("./" + workspace, "tsup.config.ts")).toString()))["default"]
+        customConfig = {
+            ...customConfig,
+            ...(await import(url.pathToFileURL(path.join("./" + workspace, "tsup.config.ts")).toString()))["default"]
+        };
     }
 
-    customConfig["entry"] ??= Object.fromEntries(Object.entries(packageJson["exports"]).map(function([exportName, sourceFile]) {
-        return [path.basename(exportName) === "." ? path.basename(sourceFile, path.extname(sourceFile)) : path.basename(exportName), path.join(workspace, sourceFile)];
-    }))
+    customConfig["entry"] = {
+        ...customConfig["entry"],
+        ...Object.fromEntries(Object.entries(packageJson["exports"]).map(function([exportName, sourceFile]) {
+            return [path.basename(exportName) === "." ? path.basename(sourceFile, path.extname(sourceFile)) : path.basename(exportName), path.join(workspace, sourceFile)];
+        }))
+    }
 
     return {
         ...defaultConfig,

@@ -35,10 +35,41 @@ export async function tsup(config: Options[] | Options) {
 		}
 	})
 
-	console.log(defineConfig(config))
-
-	console.log(process.cwd())
-
 	// @ts-expect-error
-	return (await import("tsup")).build(defineConfig(config)[0]);
+	return new Promise(async function(resolve, reject) {
+		(await import("tsup")).build(defineConfig({
+			...config,
+			"esbuildPlugins": [
+				{
+					"name": "build-write-false",
+					"setup": function(build) {
+						build.onEnd(function(result) {
+							resolve(result);
+						})
+					}
+				},
+				...config["esbuildPlugins"]
+			],
+		})[0]);
+	});
 }
+
+/*
+export async function esbuildWriteFalse(options: Options) {
+	return (await build({
+		"bundle": true,
+		"format": "esm",
+		"stdin": {
+			"resolveDir": __root,
+			"sourcefile": "fetch.ts",
+			"contents": ``
+		},
+		"write": false,
+		"define": {
+			"process": "{}",
+			"process.env": "{}",
+			"process.env.NODE_ENV": "\"production\""
+		}
+	})).outputFiles[0].text;
+}
+*/
