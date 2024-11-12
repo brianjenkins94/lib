@@ -8,11 +8,6 @@
     "serve": "npx http-server dist/",
     "start": "npm run serve"
   },
-  "devDependencies": {
-    "import-meta-resolve": "latest",
-    "json5": "latest",
-    "node-stdlib-browser": "latest"
-  },
   "engines": {
     "node": ">=22.0.0",
     "npm": ">=10.0.0"
