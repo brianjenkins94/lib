@@ -10,7 +10,7 @@ interface ReadFileOptions {
     flag?: OpenMode | undefined;
 }
 
-export function readFile(path, options: ReadFileOptions & Abortable = {}) {
+export function readFile(path, options: Omit<ReadFileOptions, "encoding"> & { encoding?: Exclude<BufferEncoding, "utf8" | "utf-8"> } & Abortable = {}) {
     return fs.promises.readFile(path, { "encoding": "utf8", ...options });
 }
 

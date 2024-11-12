@@ -17,7 +17,6 @@ export function esbuildOptions(overrides: BuildOptions = {}) {
 export async function tsup(config: Options) {
 	return new Promise(async function(resolve, reject) {
 		(await import("tsup")).build({
-			"esbuildOptions": esbuildOptions(config.esbuildOptions as BuildOptions),
 			"format": "esm",
 			"treeshake": true,
 			...config,
@@ -27,6 +26,7 @@ export async function tsup(config: Options) {
 			}) : Object.fromEntries(Object.entries(config.entry).map(function([entryName, sourceFile]) {
 				return [entryName, sourceFile.replace(/\\/gu, "/")]
 			})),
+			"esbuildOptions": esbuildOptions(config.esbuildOptions as BuildOptions),
 			"esbuildPlugins": [
 				{
 					"name": "build-write-false",
