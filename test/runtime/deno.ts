@@ -1,6 +1,6 @@
 import { walk } from "jsr:@std/fs/walk";
 import * as path from "jsr:@std/path/posix";
-import { __root } from "../../util/env.ts";
+import { __root } from "../../util/env";
 
 for await (const { "path": file } of walk(path.join(__root, "util"), { "includeDirs": false, "skip": [/node_modules/ui] })) {
     console.log(">", ["deno", "--allow-all", "--unstable-sloppy-imports", file].join(" "))
