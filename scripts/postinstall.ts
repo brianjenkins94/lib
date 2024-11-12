@@ -94,4 +94,6 @@ const configs = (await mapAsync(workspaces, async function(workspace) {
     }
 })).filter(Boolean);
 
-await tsup(configs);
+await mapAsync(configs, function(config) {
+    return tsup(config)
+});

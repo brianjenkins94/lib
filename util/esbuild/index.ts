@@ -14,31 +14,19 @@ export function esbuildOptions(overrides: BuildOptions = {}) {
 	};
 }
 
-export async function tsup(config: Options[] | Options) {
-	if (!Array.isArray(config)) {
-		config = [config];
-	}
-
-	config = config.map(function(options) {
-		return {
-			"esbuildOptions": esbuildOptions(options.esbuildOptions as BuildOptions),
-			"esbuildPlugins": [],
+export async function tsup(config: Options) {
+	return new Promise(async function(resolve, reject) {
+		(await import("tsup")).build({
+			"esbuildOptions": esbuildOptions(config.esbuildOptions as BuildOptions),
 			"format": "esm",
 			"treeshake": true,
-			...options,
-			// WORKAROUND: `tsup` gives the entry straight to `globby` and `globby` doesn't get along with Windows paths.
-			"entry": Array.isArray(options.entry) ? options.entry.map(function(entry) {
-				return entry.replace(/\\/gu, "/");
-			}) : Object.fromEntries(Object.entries(options.entry).map(function([entryName, sourceFile]) {
-				return [entryName, sourceFile.replace(/\\/gu, "/")]
-			}))
-		}
-	})
-
-	// @ts-expect-error
-	return new Promise(async function(resolve, reject) {
-		(await import("tsup")).build(defineConfig({
 			...config,
+			// WORKAROUND: `tsup` gives the entry straight to `globby` and `globby` doesn't get along with Windows paths.
+			"entry": Array.isArray(config.entry) ? config.entry.map(function(entry) {
+				return entry.replace(/\\/gu, "/");
+			}) : Object.fromEntries(Object.entries(config.entry).map(function([entryName, sourceFile]) {
+				return [entryName, sourceFile.replace(/\\/gu, "/")]
+			})),
 			"esbuildPlugins": [
 				{
 					"name": "build-write-false",
@@ -49,8 +37,8 @@ export async function tsup(config: Options[] | Options) {
 					}
 				},
 				...config["esbuildPlugins"]
-			],
-		})[0]);
+			]
+		});
 	});
 }
 
