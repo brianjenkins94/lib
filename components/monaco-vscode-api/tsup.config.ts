@@ -12,7 +12,7 @@ const __dirname = path.dirname(__filename);
 
 export default defineConfig(await manualChunks({
     "entry": {
-        "monaco": ["demo/package.json"]
+        "monaco": ["./demo/package.json"]
     },
     "esbuildOptions": esbuildOptions({
         "nodePaths": [path.join(__dirname, "demo", "node_modules")]

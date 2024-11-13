@@ -27,7 +27,7 @@ export async function tsup(config: Options) {
 			}) : Object.fromEntries(Object.entries(config.entry).map(function([entryName, sourceFile]) {
 				return [entryName, sourceFile.replace(/\\/gu, "/")]
 			})),
-			"esbuildOptions": config.esbuildOptions as BuildOptions ?? esbuildOptions(),
+			"esbuildOptions": config.esbuildOptions ?? esbuildOptions(),
 			"esbuildPlugins": [
 				{
 					"name": "build-write-false",
