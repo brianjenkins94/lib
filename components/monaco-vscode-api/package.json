@@ -13,9 +13,7 @@
     "npm": ">=10.0.0"
   },
   "exports": {
-    ".": "./main.ts",
-    "./editor.worker": "./demo/node_modules/vscode/src/vs/editor/editor.worker.js",
-    "./extensionHost.worker": "./demo/node_modules/vscode/vscode/src/vs/workbench/api/worker/extensionHostWorker.js"
+    ".": "./main.ts"
   },
   "sideEffects": true
 }

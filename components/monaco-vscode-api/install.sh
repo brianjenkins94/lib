@@ -18,7 +18,7 @@ else
     cd ..
 fi
 
-cp -rf monaco-vscode-api/demo/ .
+cp -Rf monaco-vscode-api/demo/ demo/
 
 rm -rf monaco-vscode-api/
 

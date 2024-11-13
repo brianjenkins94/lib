@@ -15,7 +15,7 @@ export default defineConfig(await manualChunks({
         "monaco": ["./demo/package.json"]
     },
     "esbuildOptions": esbuildOptions({
-        "nodePaths": ["./demo/node_modules/"]
+        "nodePaths": [path.join(__dirname, "demo", "node_modules")]
     }),
     "esbuildPlugins": [
         importMetaUrl(__dirname)
