@@ -23,7 +23,7 @@ const workspaces = (await new Promise(function(resolve, reject) {
 })).map(path.dirname)
 
 await Promise.all(workspaces.map(function(workspace) {
-    return series([
+    return () => series([
         new Promise(function(resolve, reject) {
             // FROM: https://github.com/vercel/turborepo/blob/1ae620cdf454d0258a162a96976e3064433391a2/packages/turbo/bin/turbo#L29
             const subprocess = spawn("npm", ["install", "--loglevel=error", "--prefer-offline", "--no-audit", "--progress=false"], {
