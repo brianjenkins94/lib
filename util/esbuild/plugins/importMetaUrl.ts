@@ -1,12 +1,11 @@
 import { createHash } from "crypto";
-import * as url from "url";
 import * as path from "path";
 import JSON5 from "json5";
-import polyfillNode from "node-stdlib-browser/helpers/esbuild/plugin"; // NOT "esbuild-plugins-node-modules-polyfill" OR "esbuild-plugin-polyfill-node"
+import polyfillNode from "node-stdlib-browser/helpers/esbuild/plugin"; // NOT "esbuild-plugins-node-modules-polyfill" NOR "esbuild-plugin-polyfill-node"
 import stdLibBrowser from "node-stdlib-browser";
 
 import * as fs from "../../fs";
-import { tsup } from "../";
+import { esbuildOptions, tsup } from "../";
 
 // Handle `new URL("./path/to/asset", import.meta.url)`
 
@@ -29,12 +28,47 @@ async function replaceAsync(regex, input, callback = async (execResults: RegExpE
     return output.join("");
 }
 
-export function importMetaUrl(options = {}) {
+async function handleTypeScript(filePath, baseName) {
+    const results = await tsup({
+        "config": false,
+        "entry": [filePath],
+        "inject": [
+            import.meta.resolve("node-stdlib-browser/helpers/esbuild/shim", import.meta.url)
+        ],
+        "define": {
+            "Buffer": "Buffer"
+        },
+        "esbuildOptions": esbuildOptions({
+            "write": false
+        }),
+        "esbuildPlugins": [
+            polyfillNode(Object.fromEntries(["buffer", "crypto", "events", "os", "net", "path", "process", "stream", "util"].map(function(libName) {
+                return [libName, stdLibBrowser[libName]];
+            }))),
+            importMetaUrl(__dirname)
+        ],
+        "external": ["vscode"], //[/^vscode.*/u],
+        "format": "cjs",
+        "platform": "browser"
+    });
+
+    console.log(results);
+
+    const extension = path.extname(baseName);
+    baseName = path.basename(baseName, extension);
+
+    filePath = path.join(cacheDirectory, baseName + ".cjs");
+    baseName += ".js";
+}
+
+export function importMetaUrl(__dirname) {
+    const assetsDirectory = path.join(__dirname, "dist", "assets");
+
     return {
         "name": "import-meta-url",
         "setup": function(build) {
             build.onLoad({ "filter": /.*/u }, async function({ "path": importer }) {
-                const contents = await fs.readFile(importer, { "encoding": "utf8" });
+                const contents = await fs.readFile(importer);
 
                 const workerRegEx = /worker(?:\.jsx?|\.tsx?)?(?:\?worker)?/u;
 
@@ -44,7 +78,7 @@ export function importMetaUrl(options = {}) {
             });
 
             build.onLoad({ "filter": /.*/u }, async function({ "path": importer }) {
-                let contents = await fs.readFile(importer, { "encoding": "utf8" });
+                let contents = await fs.readFile(importer);
 
                 const newUrlRegEx = /new URL\((?:"|')(.*?)(?:"|'), \w+(?:\.\w+)*\)(?:\.\w+(?:\(\))?)?/gu;
 
@@ -55,35 +89,7 @@ export function importMetaUrl(options = {}) {
                         let baseName = path.basename(filePath);
 
                         if (filePath.endsWith(".ts")) {
-                            console.log(importer);
-
-                            await tsup({
-                                "config": false,
-                                "entry": [filePath],
-                                "inject": [
-                                    url.fileURLToPath(import.meta.resolve("node-stdlib-browser/helpers/esbuild/shim"))
-                                ],
-                                "define": {
-                                    "Buffer": "Buffer"
-                                },
-                                "esbuildPlugins": [
-                                    // These plugins don't appear to be order-sensitive.
-                                    polyfillNode(Object.fromEntries(["buffer", "crypto", "events", "os", "net", "path", "process", "stream", "util"].map(function(libName) {
-                                        return [libName, stdLibBrowser[libName]];
-                                    }))),
-                                    importMetaUrl()
-                                ],
-                                "external": ["vscode"], //[/^vscode.*/u],
-                                "format": "cjs",
-                                "outDir": cacheDirectory,
-                                "platform": "browser"
-                            });
-
-                            const extension = path.extname(baseName);
-                            baseName = path.basename(baseName, extension);
-
-                            filePath = path.join(cacheDirectory, baseName + ".cjs");
-                            baseName += ".js";
+                            await handleTypeScript();
                         }
 
                         // TODO: Improve
@@ -109,7 +115,7 @@ export function importMetaUrl(options = {}) {
                                 baseName += ".json";
                                 break;
                             case filePath.endsWith(".json"):
-                                await fs.writeFile(filePath, JSON.stringify(JSON5.parse(await fs.readFile(filePath, { "encoding": "utf8" }) || "{}"), undefined, "\t") + "\n");
+                                await fs.writeFile(filePath, JSON.stringify(JSON5.parse(await fs.readFile(filePath) || "{}"), undefined, "\t") + "\n");
                                 break;
                             case filePath.endsWith(".mp3"):
                                 return "\"data:audio/mpeg;base64,\"";
@@ -133,6 +139,7 @@ export function importMetaUrl(options = {}) {
                         baseName = baseName + "-" + hash + extension;
 
                         // Copy it to the assets directory
+                        await fs.mkdir(assetsDirectory, { "recursive": true })
                         await fs.copyFile(filePath, path.join(assetsDirectory, baseName));
 
                         if (importer.endsWith(".ts")) {

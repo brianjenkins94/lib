@@ -34,7 +34,7 @@ export async function manualChunks(options, __dirname) {
                 }
             }
 
-            packageJsonPath = await findParentPackageJson(modulePath);
+            packageJsonPath = await findParentPackageJson(path.dirname(modulePath));
 
             const packageJson = await fs.readFile(packageJsonPath);
 
@@ -48,7 +48,7 @@ export async function manualChunks(options, __dirname) {
         })))].flat(Infinity);
 
         files[modules[0]] = dependencies.map(function(module) {
-            return "import \"./" + path.relative(path.dirname(packageJsonPath), module).replace(/\\/gu, "/") + "\";";
+            return "import \"../" + path.relative(path.dirname(packageJsonPath), module).replace(/\\/gu, "/") + "\";";
         }).join("\n");
 
         return [chunkAlias, path.relative(__root, packageJsonPath)];

@@ -18,7 +18,7 @@ export default defineConfig(await manualChunks({
         "nodePaths": ["./demo/node_modules/"]
     }),
     "esbuildPlugins": [
-        importMetaUrl()
+        importMetaUrl(__dirname)
     ],
     "external": [
         "fonts"
@@ -29,5 +29,6 @@ export default defineConfig(await manualChunks({
         ".svg": "dataurl",
         ".tmLanguage": "dataurl",
         ".wasm": "copy"
-    }
+    },
+    "tsconfig": path.join(__dirname, "tsconfig.json")
 }, __dirname));

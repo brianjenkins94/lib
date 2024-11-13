@@ -84,7 +84,7 @@ const configs = (await mapAsync(workspaces, async function(workspace) {
     customConfig["entry"] = {
         ...customConfig["entry"],
         ...Object.fromEntries(Object.entries(packageJson["exports"]).map(function([exportName, sourceFile]) {
-            return [path.basename(exportName) === "." ? path.basename(sourceFile, path.extname(sourceFile)) : path.basename(exportName), path.join(workspace, sourceFile)];
+            return [path.basename(exportName) === "." ? path.basename(sourceFile, path.extname(sourceFile)) : path.basename(exportName), "./" + path.join(workspace, sourceFile)];
         }))
     }
 
