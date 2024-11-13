@@ -1,4 +1,5 @@
 import * as path from "path";
+import * as url from "url";
 
 import { virtualFileSystem } from "./"
 import * as fs from "../../fs"
@@ -25,7 +26,7 @@ export async function manualChunks(options, __dirname) {
             let modulePath;
 
             try {
-                modulePath = import.meta.resolve(path.join(__dirname, module), import.meta.url);
+                modulePath = url.fileURLToPath(import.meta.resolve(path.join(__dirname, module), import.meta.url));
             } catch (error) {
                 modulePath = path.join(__dirname, "node_modules", module);
 
@@ -48,10 +49,10 @@ export async function manualChunks(options, __dirname) {
         })))].flat(Infinity);
 
         files[modules[0]] = dependencies.map(function(module) {
-            return "import \"../" + path.relative(path.dirname(packageJsonPath), module).replace(/\\/gu, "/") + "\";";
+            return "import \"./" + path.relative(path.dirname(packageJsonPath), module).replace(/\\/gu, "/") + "\";";
         }).join("\n");
 
-        return [chunkAlias, path.relative(__root, packageJsonPath)];
+        return [chunkAlias, "./" + path.relative(__root, packageJsonPath)];
     }));
 
     return {
