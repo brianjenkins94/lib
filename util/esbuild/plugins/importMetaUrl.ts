@@ -57,14 +57,6 @@ export function importMetaUrl(options = {}) {
                         if (filePath.endsWith(".ts")) {
                             console.log(importer);
 
-                            await Promise.all((await fs.readdir(cacheDirectory)).map(function(path) {
-                                return new Promise<void>(async function(resolve, reject) {
-                                    await fs.rm(path, { "recursive": true, "force": true });
-
-                                    resolve();
-                                });
-                            }));
-
                             await tsup({
                                 "config": false,
                                 "entry": [filePath],
@@ -79,7 +71,7 @@ export function importMetaUrl(options = {}) {
                                     polyfillNode(Object.fromEntries(["buffer", "crypto", "events", "os", "net", "path", "process", "stream", "util"].map(function(libName) {
                                         return [libName, stdLibBrowser[libName]];
                                     }))),
-                                    importMetaUrlPlugin()
+                                    importMetaUrl()
                                 ],
                                 "external": ["vscode"], //[/^vscode.*/u],
                                 "format": "cjs",

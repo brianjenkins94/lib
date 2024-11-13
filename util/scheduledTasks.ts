@@ -20,7 +20,7 @@ export async function bindScheduledTasks(scheduledTasksDirectory) {
 		const defaultExport = (await import(url.pathToFileURL(file).toString())).default;
 
 		if (defaultExport !== undefined) {
-			console.log("Scheduling ." + file.substring(scheduledTasksDirectory.length).replace(/\\+/gu, "/"));
+			console.log("Scheduling ." + file.substring(scheduledTasksDirectory.length).replace(/\\/gu, "/"));
 
 			scheduleJob(...defaultExport);
 		}

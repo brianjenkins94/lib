@@ -7,6 +7,10 @@ import { virtualFileSystem } from "../../util/esbuild/plugins"
 import { esbuildOptions } from "../../util/esbuild"
 import * as fs from "../../util/fs"
 import { mapAsync } from "../../util/array";
+import { __root } from "../../util/env"
+
+const __filename = url.fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 async function findParentPackageJson(directory) {
     if (fs.existsSync(path.join(directory, "package.json"))) {
@@ -16,58 +20,57 @@ async function findParentPackageJson(directory) {
     }
 }
 
+const files = {};
+
 async function manualChunks(chunkAliases: Record<string, string[]>) {
     return Object.fromEntries(await mapAsync(Object.entries(chunkAliases), async function([chunkAlias, modules]) {
-        if (!fs.existsSync(path.join(chunksDirectory, chunkAlias + ".ts"))) {
-            const dependencies = [...new Set((await mapAsync(modules, async function(module) {
-                let modulePath;
+        let packageJsonPath;
 
-                try {
-                    modulePath = url.fileURLToPath(resolve(module, import.meta.url));
-                } catch (error) {
-                    modulePath = path.join(__dirname, "node_modules", module);
+        const dependencies = [...new Set((await mapAsync(modules, async function(module) {
+            let modulePath;
 
-                    if (!fs.existsSync(modulePath)) {
-                        return [];
-                    }
+            try {
+                modulePath = import.meta.resolve(path.join(__dirname, module), import.meta.url);
+            } catch (error) {
+                modulePath = path.join(__dirname, "node_modules", module);
+
+                if (!fs.existsSync(modulePath)) {
+                    return [];
                 }
+            }
 
-                const packageJsonPath = await findParentPackageJson(modulePath);
+            packageJsonPath = await findParentPackageJson(modulePath);
 
-                const packageJson = await fs.readFile(packageJsonPath, { "encoding": "utf8" });
+            const packageJson = await fs.readFile(packageJsonPath);
 
-                return (await mapAsync(Object.keys(JSON.parse(packageJson).dependencies ?? {}), function(module) {
-                    return new Promise(function(resolve, reject) {
-                        resolve(path.join(path.dirname(packageJsonPath), "node_modules", module));
-                    });
-                })).filter(function(element) {
-                    return fs.existsSync(element);
+            return (await mapAsync(Object.keys(JSON.parse(packageJson).dependencies ?? {}), function(module) {
+                return new Promise(function(resolve, reject) {
+                    resolve(path.join(path.dirname(packageJsonPath), "node_modules", module));
                 });
-            })))].flat(Infinity);
+            })).filter(function(element) {
+                return fs.existsSync(element);
+            });
+        })))].flat(Infinity);
 
-            await fs.writeFile(path.join(chunksDirectory, chunkAlias + ".ts"), dependencies.map(function(module) {
-                return "import \"../" + path.relative(__dirname, module).replace(/\\/gu, "/") + "\";\n";
-            }));
-        }
+        files[modules[0]] = dependencies.map(function(module) {
+            return "import \"./" + path.relative(path.dirname(packageJsonPath), module).replace(/\\/gu, "/") + "\";";
+        }).join("\n");
 
-        return [chunkAlias, path.join("chunks", chunkAlias + ".ts")];
+        return [chunkAlias, path.relative(__root, packageJsonPath)];
     }));
 }
 
 export default defineConfig({
     "entry": {
-        "main": "main.ts",
         ...await manualChunks({
-            "monaco": ["./demo/src/main.ts"]
-        }),
-        "assets/editor.worker": "./demo/node_modules/vscode/workers/editor.worker.js",
-        "assets/extensionHost.worker": "./demo/node_modules/vscode/vscode/src/vs/workbench/api/worker/extensionHostWorker.js"
+            "monaco": ["demo/package.json"]
+        })
     },
     "esbuildOptions": esbuildOptions({
         "nodePaths": ["./demo/node_modules/"]
     }),
     "esbuildPlugins": [
-        virtualFileSystem(vfs),
+        virtualFileSystem(files, __dirname),
         importMetaUrl()
     ],
     "external": [

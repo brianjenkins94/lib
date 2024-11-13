@@ -8,6 +8,12 @@
     "serve": "npx http-server dist/",
     "start": "npm run serve"
   },
+  "dependencies": {
+    "@vscode/iconv-lite-umd": "^0.7.0",
+    "jschardet": "^3.1.4",
+    "monaco-editor": "npm:@codingame/monaco-vscode-editor-api@^11.0.1",
+    "vscode": "npm:@codingame/monaco-vscode-api@^11.0.1"
+  },
   "engines": {
     "node": ">=22.0.0",
     "npm": ">=10.0.0"

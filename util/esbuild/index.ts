@@ -1,6 +1,5 @@
 // @ts-expect-error
 import type { BuildOptions, Format, Options } from "tsup";
-import { defineConfig } from "tsup";
 
 export function esbuildOptions(overrides: BuildOptions = {}) {
 	overrides["assetNames"] ??= "assets/[name]";
@@ -15,6 +14,8 @@ export function esbuildOptions(overrides: BuildOptions = {}) {
 }
 
 export async function tsup(config: Options) {
+	console.log(config);
+
 	return new Promise(async function(resolve, reject) {
 		(await import("tsup")).build({
 			"format": "esm",

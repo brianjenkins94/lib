@@ -153,7 +153,7 @@ export async function bindRoutes(from, to, options = {}) {
 				pathName = path.join(basePath, pathName);
 			}
 
-			pathName = pathName.replace(/\\+/gu, "/");
+			pathName = pathName.replace(/\\/gu, "/");
 
 			routes.push({
 				"method": method,
