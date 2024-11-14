@@ -1,4 +1,4 @@
-export function partition(promises, callback) {
+export function partition(promises: (() => Promise<any>)[], callback) {
 	return promises.reduce(function(result, element, index) {
 		if (callback(element, index, promises)) {
 			result[0].push(element);
@@ -10,11 +10,11 @@ export function partition(promises, callback) {
 	}, [[], []]);
 }
 
-export function mapAsync(promises, callback) {
-	return Promise.all(promises.map(callback));
+export function mapAsync(array, callback) {
+	return Promise.all(array.map(callback));
 }
 
-export async function filterAsync(promises, callback) {
+export async function filterAsync(promises: (() => Promise<any>)[], callback) {
 	const results = await mapAsync(promises, function(element) {
 		return callback(element);
 	});
@@ -24,8 +24,26 @@ export async function filterAsync(promises, callback) {
 	});
 }
 
-export function series(promises) {
+export function series(promises: (() => Promise<any>)[]) {
 	return promises.reduce(function(previous, next) {
 		return previous.then(next);
 	}, Promise.resolve());
+}
+
+export function reduceAsync(promises: ((...args: any[]) => Promise<unknown>)[], initial?) {
+	return promises.reduce(async function(previous, next) {
+		return next(await previous());
+	}, () => initial);
+}
+
+async function mapEntriesAsync(object, callback) {
+	return Object.fromEntries(await mapAsync(Object.entries(object), callback));
+}
+
+export function mapEntries(object, callback) {
+	if (callback.constructor.name === "AsyncFunction") {
+		return mapEntriesAsync(object, callback);
+	} else {
+		return Object.fromEntries(Object.entries(object).map(callback))
+	}
 }

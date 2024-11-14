@@ -67,13 +67,14 @@ export function importMetaUrl(__dirname) {
     return {
         "name": "import-meta-url",
         "setup": function(build) {
+            // This is just for logging
             build.onLoad({ "filter": /.*/u }, async function({ "path": importer }) {
                 const contents = await fs.readFile(importer);
 
                 const workerRegEx = /worker(?:\.jsx?|\.tsx?)?(?:\?worker)?/u;
 
                 if (workerRegEx.test(contents)) {
-                    console.log(importer);
+                    //console.log(importer);
                 }
             });
 
@@ -85,48 +86,26 @@ export function importMetaUrl(__dirname) {
                 if (newUrlRegEx.test(contents)) {
                     // TODO: This whole function could use a review.
                     contents = await replaceAsync(newUrlRegEx, contents, async function([_, match]) {
-                        let filePath = path.join(path.dirname(importer), match);
+                        let filePath = (await build.resolve(match, {
+                            "kind": "import-statement",
+                            "resolveDir": path.dirname(importer),
+                        })).path;
                         let baseName = path.basename(filePath);
 
                         if (filePath.endsWith(".ts")) {
                             await handleTypeScript();
                         }
 
-                        // TODO: Improve
-                        if (!fs.existsSync(filePath)) {
-                            const fallbackPaths = [
-                                path.join(__dirname, "demo", "node_modules", match),
-                                path.join(__dirname, "demo", "node_modules", match + ".js"),
-                                path.join(__dirname, "demo", "node_modules", "vscode", match)
-                            ];
-
-                            for (const fallbackPath of fallbackPaths) {
-                                if (fs.existsSync(fallbackPath)) {
-                                    filePath = fallbackPath;
-                                    baseName = path.basename(filePath);
-
-                                    break;
-                                }
-                            }
-                        }
-
                         switch (true) {
-                            case filePath.endsWith(".code-snippets"):
-                                baseName += ".json";
-                                break;
                             case filePath.endsWith(".json"):
                                 await fs.writeFile(filePath, JSON.stringify(JSON5.parse(await fs.readFile(filePath) || "{}"), undefined, "\t") + "\n");
                                 break;
                             case filePath.endsWith(".mp3"):
                                 return "\"data:audio/mpeg;base64,\"";
-                            case filePath.endsWith(".html"):
-                            case filePath.endsWith(".tmLanguage"):
-                            case filePath.endsWith(".woff"):
-                                await fs.copyFile(filePath, path.join(assetsDirectory, baseName));
-
-                                return "\"./" + baseName + "\"";
                             default:
                         }
+
+                        console.log("new entrypoint?: " + path.relative(__dirname, filePath))
 
                         // Caching opportunity here:
                         const file = await fs.readFile(filePath);

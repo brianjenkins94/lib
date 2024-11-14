@@ -2,7 +2,7 @@ import * as path from "path";
 import * as fs from "../util/fs";
 import { __root } from "../util/env";
 import { spawn } from "child_process";
-import { mapAsync, series } from "../util/array"
+import { mapAsync, series, mapEntries } from "../util/array"
 import * as url from "url"
 import { tsup } from "../util/esbuild"
 
@@ -83,9 +83,9 @@ const configs = (await mapAsync(workspaces, async function(workspace) {
 
     customConfig["entry"] = {
         ...customConfig["entry"],
-        ...Object.fromEntries(Object.entries(packageJson["exports"]).map(function([exportName, sourceFile]) {
+        ...mapEntries(packageJson["exports"], function([exportName, sourceFile]) {
             return [path.basename(exportName) === "." ? path.basename(sourceFile, path.extname(sourceFile)) : path.basename(exportName), "./" + path.join(workspace, sourceFile)];
-        }))
+        })
     }
 
     return {

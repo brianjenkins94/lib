@@ -3,7 +3,7 @@ import * as url from "url";
 
 import { virtualFileSystem } from "./"
 import * as fs from "../../fs"
-import { mapAsync } from "../../array";
+import { mapAsync, mapEntries } from "../../array";
 import { __root } from "../../env"
 
 async function findParentPackageJson(directory) {
@@ -19,14 +19,14 @@ export async function manualChunks(options, __dirname) {
 
     const files = {};
 
-    const entry = Object.fromEntries(await mapAsync(Object.entries(chunkAliases), async function([chunkAlias, modules]) {
+    const entry = await mapEntries(Object.entries(chunkAliases), async function([chunkAlias, modules]) {
         let packageJsonPath;
 
         const dependencies = [...new Set((await mapAsync(modules, async function(module) {
             let modulePath;
 
             try {
-                modulePath = url.fileURLToPath(import.meta.resolve(path.join(__dirname, module), import.meta.url));
+                modulePath = import.meta.resolve(path.join(__dirname, module), import.meta.url);
             } catch (error) {
                 modulePath = path.join(__dirname, "node_modules", module);
 
@@ -53,7 +53,7 @@ export async function manualChunks(options, __dirname) {
         }).join("\n");
 
         return [chunkAlias, "./" + path.relative(__root, packageJsonPath)];
-    }));
+    });
 
     return {
         ...options,

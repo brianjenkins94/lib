@@ -25,7 +25,11 @@ export default defineConfig(await manualChunks({
     ],
     "loader": {
         ".bin": "copy",
+        ".code-snippets": "json",
+        ".html": "dataurl",
         ".map": "empty",
+        ".png": "dataurl",
+        ".scm": "dataurl",
         ".svg": "dataurl",
         ".tmLanguage": "dataurl",
         ".wasm": "copy"
