@@ -1,7 +1,5 @@
 #!/bin/bash
 
-CWD=$(pwd)
-
 cd "$(dirname "$0")"
 
 rm -rf demo/ monaco-vscode-api/
@@ -37,6 +35,5 @@ npm pkg delete dependencies["ws"]
 
 #npm pkg set overrides["@xterm/xterm"]="5.4.0-beta.20"
 
-npm install jschardet @vscode/iconv-lite-umd vscode@npm:@codingame/monaco-vscode-api@$VERSION monaco-editor@npm:@codingame/monaco-vscode-editor-api@$VERSION
-
-cd "$CWD"
+# FROM: https://github.com/vercel/turborepo/blob/1ae620cdf454d0258a162a96976e3064433391a2/packages/turbo/bin/turbo#L29
+npm install --loglevel=error --prefer-offline --no-audit --progress=false jschardet @vscode/iconv-lite-umd vscode@npm:@codingame/monaco-vscode-api@$VERSION monaco-editor@npm:@codingame/monaco-vscode-editor-api@$VERSION
