@@ -19,7 +19,7 @@ export async function manualChunks(options, __dirname) {
 
     const files = {};
 
-    const entry = await mapEntries(Object.entries(chunkAliases), async function([chunkAlias, modules]) {
+    const entry = await mapEntries(chunkAliases, async function([chunkAlias, modules]) {
         let packageJsonPath;
 
         const dependencies = [...new Set((await mapAsync(modules, async function(module) {

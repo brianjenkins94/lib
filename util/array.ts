@@ -32,15 +32,15 @@ export function series(promises: (() => Promise<any>)[]) {
 
 export function reduceAsync(promises: ((...args: any[]) => Promise<unknown>)[], initial?) {
 	return promises.reduce(async function(previous, next) {
-		return next(await previous());
-	}, () => initial);
+		return next(await previous);
+	}, Promise.resolve(initial));
 }
 
 async function mapEntriesAsync(object, callback) {
 	return Object.fromEntries(await mapAsync(Object.entries(object), callback));
 }
 
-export function mapEntries(object, callback) {
+export function mapEntries(object: Record<string, any>, callback) {
 	if (callback.constructor.name === "AsyncFunction") {
 		return mapEntriesAsync(object, callback);
 	} else {
