@@ -14,9 +14,9 @@ export default defineConfig(await manualChunks({
     "entry": {
         "monaco": ["./demo/package.json"]
     },
-    "esbuildOptions": esbuildOptions({
+    "esbuildOptions": {
         "nodePaths": [path.join(__dirname, "demo", "node_modules")]
-    }),
+    },
     "esbuildPlugins": [
         importMetaUrl(__dirname)
     ],
@@ -34,5 +34,6 @@ export default defineConfig(await manualChunks({
         ".tmLanguage": "dataurl",
         ".wasm": "copy"
     },
-    "tsconfig": path.join(__dirname, "tsconfig.json")
+    "tsconfig": path.join(__dirname, "tsconfig.json"),
+    "outbase": path.join(__dirname, "dist")
 }, __dirname));

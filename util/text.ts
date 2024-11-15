@@ -43,3 +43,22 @@ export function dedent(input) {
 		//	return "\t".repeat(match.length / 4);
 		//});
 }
+
+export async function replaceAsync(regex, input, callback = async (execResults: RegExpExecArray) => Promise.resolve(execResults[1])) {
+    regex = new RegExp(regex.source, [...new Set([...regex.flags, "d"])].join(""));
+
+    const output = [];
+
+    let index = input.length;
+    let result;
+
+    for (let origin = 0; result = regex.exec(input); origin = index) {
+        index = result.indices[1][1] + 1;
+
+        output.push(input.substring(origin, result.indices[1][0] - 1), await callback(result));
+    }
+
+    output.push(input.substring(index));
+
+    return output.join("");
+}

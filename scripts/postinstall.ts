@@ -10,7 +10,7 @@ const gitLs = spawn("git", ["ls-files", "\"**/package.json\""], {
     "shell": true
 })
 
-const workspaces = (await new Promise(function(resolve, reject) {
+const workspaces = (await new Promise<string[]>(function(resolve, reject) {
     const buffer = []
 
     gitLs.stdout.on("data", function(chunk) {
@@ -94,6 +94,4 @@ const configs = (await mapAsync(workspaces, async function(workspace) {
     }
 })).filter(Boolean);
 
-await mapAsync(configs, function(config) {
-    return tsup(config)
-});
+await mapAsync(configs, tsup);

@@ -1,6 +1,11 @@
 // @ts-expect-error
 import type { BuildOptions, Format, Options, Entry } from "tsup";
+import * as path from "path";
+import JSON5 from "json5";
+
 import { reduceAsync, mapEntries } from "../array"
+import * as fs from "../fs";
+import { importMetaUrl, virtualFileSystem } from "./plugins";
 
 export function esbuildOptions(overrides: BuildOptions = {}) {
 	overrides["assetNames"] ??= "assets/[name]";
@@ -29,74 +34,61 @@ export async function tsup(config: Options) {
 				"treeshake": true,
 				...config,
 				"entry": entry,
-				"esbuildOptions": config.esbuildOptions ?? esbuildOptions(),
+				"esbuildOptions": esbuildOptions({
+					...(config.esbuildOptions ?? {}),
+					"write": false
+				}),
 				"esbuildPlugins": [
 					{
 						"name": "discover-entrypoints",
 						"setup": function(build) {
-							const entrypoints = config.entry;
+							const entrypoints = entry;
 
-							build.onLoad({ "filter": /.*/u }, async function({ "path": importer }) {
-								let contents = await fs.readFile(importer);
+							// @ts-expect-error
+							build.onLoad({ "filter": /.*/u }, importMetaUrl(async function(match, args) {
+								let filePath = (await build.resolve(match, {
+									"kind": "import-statement",
+									"resolveDir": path.dirname(args.path),
+								})).path;
+								let baseName = path.basename(filePath);
 
-								const newUrlRegEx = /new URL\((?:"|')(.*?)(?:"|'), \w+(?:\.\w+)*\)(?:\.\w+(?:\(\))?)?/gu;
-
-								if (newUrlRegEx.test(contents)) {
-									// TODO: This whole function could use a review.
-									contents = await replaceAsync(newUrlRegEx, contents, async function([_, match]) {
-										let filePath = (await build.resolve(match, {
-											"kind": "import-statement",
-											"resolveDir": path.dirname(importer),
-										})).path;
-										let baseName = path.basename(filePath);
-
-										if (filePath.endsWith(".ts")) {
-											await handleTypeScript();
+								const loaders = {
+									".ts": function() {
+										throw new Error("Not yet implemented.");
+									},
+									"default": function() {
+										if (entrypoints["./assets/" + baseName] !== undefined) {
+											console.warn(baseName + " already exists!");
 										}
 
-										switch (true) {
-											case filePath.endsWith(".json"):
-												await fs.writeFile(filePath, JSON.stringify(JSON5.parse(await fs.readFile(filePath) || "{}"), undefined, "\t") + "\n");
-												break;
-											case filePath.endsWith(".mp3"):
-												return "\"data:audio/mpeg;base64,\"";
-											default:
+										entrypoints["./assets/" + baseName] = filePath
+
+										return "\"./assets/" + baseName + "\""
+									},
+									".json": async function() {
+										if (entrypoints["./assets/" + baseName] !== undefined) {
+											console.warn(baseName + " already exists!");
 										}
 
-										console.log("new entrypoint?: " + path.relative(__dirname, filePath))
+										entrypoints["./assets/" + baseName] = filePath
 
-										// Caching opportunity here:
-										const file = await fs.readFile(filePath);
+										JSON.stringify(JSON5.parse(await fs.readFile(filePath) || "{}"), undefined, "\t") + "\n"
 
-										const hash = createHash("sha256").update(file).digest("hex").substring(0, 6);
-
-										const extension = path.extname(baseName);
-										baseName = path.basename(baseName, extension);
-
-										baseName = baseName + "-" + hash + extension;
-
-										// Copy it to the assets directory
-										await fs.mkdir(assetsDirectory, { "recursive": true })
-										await fs.copyFile(filePath, path.join(assetsDirectory, baseName));
-
-										if (importer.endsWith(".ts")) {
-											return "\"./assets/" + baseName + "\"";
-										}
-
-										// So that we can refer to it by its unique name.
-										return "\"./" + baseName + "\"";
-									});
-
-									return {
-										"contents": contents,
-										"loader": path.extname(importer).substring(1)
-									};
+										return "\"./assets/" + baseName+ "\""
+									},
+									".mp3": function() {
+										return "\"data:audio/mpeg;base64,\"";
+									}
 								}
-							});
+
+								const extension = path.extname(baseName);
+
+								return loaders[loaders[extension] !== undefined ? extension : "default"]();
+							}));
 
 							build.onEnd(function(results) {
 								resolve(entrypoints);
-							})
+							});
 						}
 					},
 					...config["esbuildPlugins"]
@@ -109,7 +101,7 @@ export async function tsup(config: Options) {
 				"treeshake": true,
 				...config,
 				"entry": entry,
-				"esbuildOptions": config.esbuildOptions ?? esbuildOptions(),
+				"esbuildOptions": esbuildOptions(config.esbuildOptions),
 				"esbuildPlugins": [
 					{
 						"name": "build-write-false",

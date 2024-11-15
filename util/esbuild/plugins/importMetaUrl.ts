@@ -1,32 +1,16 @@
-import { createHash } from "crypto";
+import type { OnLoadResult } from "esbuild";
 import * as path from "path";
-import JSON5 from "json5";
 import polyfillNode from "node-stdlib-browser/helpers/esbuild/plugin"; // NOT "esbuild-plugins-node-modules-polyfill" NOR "esbuild-plugin-polyfill-node"
 import stdLibBrowser from "node-stdlib-browser";
+import { createHash } from "crypto";
+import JSON5 from "json5";
 
 import * as fs from "../../fs";
 import { esbuildOptions, tsup } from "../";
+import { mapEntries } from "../../array";
+import { replaceAsync } from "../../text";
 
 // Handle `new URL("./path/to/asset", import.meta.url)`
-
-async function replaceAsync(regex, input, callback = async (execResults: RegExpExecArray) => Promise.resolve(execResults[1])) {
-    regex = new RegExp(regex.source, [...new Set([...regex.flags, "d"])].join(""));
-
-    const output = [];
-
-    let index = input.length;
-    let result;
-
-    for (let origin = 0; result = regex.exec(input); origin = index) {
-        index = result.indices[1][1] + 1;
-
-        output.push(input.substring(origin, result.indices[1][0] - 1), await callback(result));
-    }
-
-    output.push(input.substring(index));
-
-    return output.join("");
-}
 
 async function handleTypeScript(filePath, baseName) {
     const results = await tsup({
@@ -42,10 +26,9 @@ async function handleTypeScript(filePath, baseName) {
             "write": false
         }),
         "esbuildPlugins": [
-            polyfillNode(Object.fromEntries(["buffer", "crypto", "events", "os", "net", "path", "process", "stream", "util"].map(function(libName) {
+            polyfillNode(mapEntries(["buffer", "crypto", "events", "os", "net", "path", "process", "stream", "util"], function(libName) {
                 return [libName, stdLibBrowser[libName]];
-            }))),
-            importMetaUrl(__dirname)
+            }))
         ],
         "external": ["vscode"], //[/^vscode.*/u],
         "format": "cjs",
@@ -61,39 +44,47 @@ async function handleTypeScript(filePath, baseName) {
     baseName += ".js";
 }
 
-export function importMetaUrl(__dirname) {
-    const assetsDirectory = path.join(__dirname, "dist", "assets");
+export function importMetaUrl(callbackOrDirName?) {
+    if (typeof callbackOrDirName === "function") {
+        return async function(args): Promise<OnLoadResult> {
+            let contents = await fs.readFile(args.path);
+
+            const newUrlRegEx = /new URL\((?:"|')(.*?)(?:"|'), \w+(?:\.\w+)*\)(?:\.\w+(?:\(\))?)?/gu;
+
+            if (newUrlRegEx.test(contents)) {
+                // TODO: This whole function could use a review.
+                contents = await replaceAsync(newUrlRegEx, contents, function([_, match]) {
+                    return callbackOrDirName(match, args);
+                });
+
+                return {
+                    "contents": contents,
+                    "loader": path.extname(args.path).substring(1) as OnLoadResult["loader"]
+                };
+            }
+        };
+    }
+
+    const assetsDirectory = path.join(callbackOrDirName, "dist", "assets");
 
     return {
         "name": "import-meta-url",
         "setup": function(build) {
-            // This is just for logging
-            build.onLoad({ "filter": /.*/u }, async function({ "path": importer }) {
-                const contents = await fs.readFile(importer);
-
-                const workerRegEx = /worker(?:\.jsx?|\.tsx?)?(?:\?worker)?/u;
-
-                if (workerRegEx.test(contents)) {
-                    //console.log(importer);
-                }
-            });
-
-            build.onLoad({ "filter": /.*/u }, async function({ "path": importer }) {
-                let contents = await fs.readFile(importer);
+            build.onLoad({ "filter": /.*/u }, async function(args) {
+                let contents = await fs.readFile(args.path);
 
                 const newUrlRegEx = /new URL\((?:"|')(.*?)(?:"|'), \w+(?:\.\w+)*\)(?:\.\w+(?:\(\))?)?/gu;
 
                 if (newUrlRegEx.test(contents)) {
-                    // TODO: This whole function could use a review.
                     contents = await replaceAsync(newUrlRegEx, contents, async function([_, match]) {
                         let filePath = (await build.resolve(match, {
                             "kind": "import-statement",
-                            "resolveDir": path.dirname(importer),
+                            "resolveDir": path.dirname(args.path),
                         })).path;
                         let baseName = path.basename(filePath);
 
                         if (filePath.endsWith(".ts")) {
-                            await handleTypeScript();
+                            [filePath, baseName] = await handleTypeScript(filePath, baseName);
                         }
 
                         switch (true) {
@@ -104,8 +95,6 @@ export function importMetaUrl(__dirname) {
                                 return "\"data:audio/mpeg;base64,\"";
                             default:
                         }
-
-                        console.log("new entrypoint?: " + path.relative(__dirname, filePath))
 
                         // Caching opportunity here:
                         const file = await fs.readFile(filePath);
@@ -121,7 +110,7 @@ export function importMetaUrl(__dirname) {
                         await fs.mkdir(assetsDirectory, { "recursive": true })
                         await fs.copyFile(filePath, path.join(assetsDirectory, baseName));
 
-                        if (importer.endsWith(".ts")) {
+                        if (args.path.endsWith(".ts")) {
                             return "\"./assets/" + baseName + "\"";
                         }
 
@@ -131,7 +120,7 @@ export function importMetaUrl(__dirname) {
 
                     return {
                         "contents": contents,
-                        "loader": path.extname(importer).substring(1)
+                        "loader": path.extname(args.path).substring(1)
                     };
                 }
             });
