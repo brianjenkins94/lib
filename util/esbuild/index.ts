@@ -42,9 +42,8 @@ export async function tsup(config: Options) {
 					{
 						"name": "discover-entrypoints",
 						"setup": function(build) {
-							const entrypoints = entry;
+							const files = {};
 
-							// @ts-expect-error
 							build.onLoad({ "filter": /.*/u }, importMetaUrl(async function(match, args) {
 								let filePath = (await build.resolve(match, {
 									"kind": "import-statement",
@@ -57,20 +56,20 @@ export async function tsup(config: Options) {
 										throw new Error("Not yet implemented.");
 									},
 									"default": function() {
-										if (entrypoints["./assets/" + baseName] !== undefined) {
+										if (files["./assets/" + baseName] !== undefined) {
 											console.warn(baseName + " already exists!");
 										}
 
-										entrypoints["./assets/" + baseName] = filePath
+										files["./assets/" + baseName] = filePath
 
 										return "\"./assets/" + baseName + "\""
 									},
 									".json": async function() {
-										if (entrypoints["./assets/" + baseName] !== undefined) {
+										if (files["./assets/" + baseName] !== undefined) {
 											console.warn(baseName + " already exists!");
 										}
 
-										entrypoints["./assets/" + baseName] = filePath
+										files["./assets/" + baseName] = filePath
 
 										JSON.stringify(JSON5.parse(await fs.readFile(filePath) || "{}"), undefined, "\t") + "\n"
 
@@ -86,8 +85,12 @@ export async function tsup(config: Options) {
 								return loaders[loaders[extension] !== undefined ? extension : "default"]();
 							}));
 
-							build.onEnd(function(results) {
-								resolve(entrypoints);
+							build.onEnd(async function(results) {
+								config.esbuildPlugins.unshift(virtualFileSystem(await mapEntries(files, async function([fakePath, realPath]) {
+									return [fakePath, await fs.readFile(realPath)]
+								}), path.join(config.esbuildOptions["outdir"], "..")))
+
+								resolve(files);
 							});
 						}
 					},

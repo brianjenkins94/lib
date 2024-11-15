@@ -2,9 +2,7 @@ import { defineConfig } from "tsup";
 import * as path from "path";
 import * as url from "url";
 
-import { importMetaUrl } from "../../util/esbuild/plugins"
 import { manualChunks } from "../../util/esbuild/plugins"
-import { esbuildOptions } from "../../util/esbuild"
 import { __root } from "../../util/env"
 
 const __filename = url.fileURLToPath(import.meta.url);
@@ -15,11 +13,10 @@ export default defineConfig(await manualChunks({
         "monaco": ["./demo/package.json"]
     },
     "esbuildOptions": {
-        "nodePaths": [path.join(__dirname, "demo", "node_modules")]
+        "nodePaths": [path.join(__dirname, "demo", "node_modules")],
+        "outdir": path.join(__dirname, "dist"),
     },
-    "esbuildPlugins": [
-        importMetaUrl(__dirname)
-    ],
+    "esbuildPlugins": [],
     "external": [
         "fonts"
     ],
@@ -35,5 +32,4 @@ export default defineConfig(await manualChunks({
         ".wasm": "copy"
     },
     "tsconfig": path.join(__dirname, "tsconfig.json"),
-    "outbase": path.join(__dirname, "dist")
 }, __dirname));
