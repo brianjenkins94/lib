@@ -1,13 +1,12 @@
 import type { OnLoadResult } from "esbuild";
 import * as path from "path";
-import { createHash } from "crypto";
 
 import * as fs from "../../fs";
 import { replaceAsync } from "../../text";
 
 // Handle `new URL("./path/to/asset", import.meta.url)`
 
-export function importMetaUrl(callbackOrFiles) {
+export function importMetaUrl(callbackOrFiles, __dirname?) {
     if (typeof callbackOrFiles === "function") {
         return async function(args): Promise<OnLoadResult> {
             let contents = await fs.readFile(args.path);
@@ -30,8 +29,9 @@ export function importMetaUrl(callbackOrFiles) {
     return {
         "name": "import-meta-url",
         "setup": function(build) {
+            // This is similar to virtualFileSystem but handles `new URL("./path/to/asset", import.meta.url)`
             build.onLoad({ "filter": /.*/u }, async function(args) {
-                let contents = await fs.readFile(args.path);
+                let contents = callbackOrFiles[path.relative(__dirname, args.path).replace(/\\/gu, "/")];
 
                 const newUrlRegEx = /new URL\((?:"|')(.*?)(?:"|'), \w+(?:\.\w+)*\)(?:\.\w+(?:\(\))?)?/gu;
 

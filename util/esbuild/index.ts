@@ -80,7 +80,7 @@ export async function tsup(config: Options) {
 								return loaders[loaders[extension] !== undefined ? extension : "default"]();
 							}));
 
-							build.onEnd(async function(results) {
+							build.onEnd(async function(result) {
 								resolve(await mapEntries(files, async function([fakePath, realPath]) {
 									if (fakePath.endsWith(".json")) {
 										return [fakePath, JSON.stringify(JSON5.parse(await fs.readFile(realPath) || "{}"), undefined, "\t") + "\n"]
@@ -90,7 +90,8 @@ export async function tsup(config: Options) {
 										const { "outputFiles": [outputFile] } = await new Promise<BuildResult<BuildOptions>>(async function(resolve, reject) {
 											(await import("tsup")).build({
 												"config": false,
-												"entry": [realPath],
+												// WORKAROUND: `tsup` gives the entry straight to `globby` and `globby` doesn't get along with Windows paths.
+												"entry": [realPath.replace(/\\/gu, "/")],
 												"inject": [
 													url.fileURLToPath(import.meta.resolve("node-stdlib-browser/helpers/esbuild/shim", import.meta.url))
 												],
@@ -125,7 +126,7 @@ export async function tsup(config: Options) {
 									}
 
 									return [
-										path.join(path.dirname(fakePath), path.basename(fakePath, path.extname(fakePath))),
+										fakePath,
 										await fs.readFile(realPath)
 									];
 								}));
@@ -152,7 +153,7 @@ export async function tsup(config: Options) {
 							})
 						}
 					},
-					importMetaUrl(files),
+					importMetaUrl(files, path.join(config.esbuildOptions["outdir"], "..")),
 					...config["esbuildPlugins"]
 				]
 			});
