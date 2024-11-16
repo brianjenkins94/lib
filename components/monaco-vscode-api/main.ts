@@ -118,4 +118,4 @@ const { registerFileUrl, getApi } = registerExtension({
 }, ExtensionHostKind.LocalWebWorker);
 
 registerFileUrl('/package.json', new URL('./extensions/hello-world/package.json', import.meta.url).toString())
-registerFileUrl('/extension.js', new URL('./extensions/hello-world/extension.js', import.meta.url).toString())
+registerFileUrl('/extension.js', new URL('./extensions/hello-world/extension.ts', import.meta.url).toString())

@@ -1,7 +1,11 @@
 // @ts-expect-error
-import type { BuildOptions, Format, Options, Entry } from "tsup";
+import type { BuildResult, BuildOptions, Format, Options, Entry } from "tsup";
 import * as path from "path";
 import JSON5 from "json5";
+import polyfillNode from "node-stdlib-browser/helpers/esbuild/plugin"; // NOT "esbuild-plugins-node-modules-polyfill" NOR "esbuild-plugin-polyfill-node"
+import stdLibBrowser from "node-stdlib-browser";
+import { createHash } from "crypto";
+import * as url from "url";
 
 import { reduceAsync, mapEntries } from "../array"
 import * as fs from "../fs";
@@ -30,6 +34,7 @@ export async function tsup(config: Options) {
 	return reduceAsync([
 		(entry) => new Promise<Entry>(async function(resolve, reject) {
 			(await import("tsup")).build({
+				"clean": true,
 				"format": "esm",
 				"treeshake": true,
 				...config,
@@ -50,60 +55,92 @@ export async function tsup(config: Options) {
 									"resolveDir": path.dirname(args.path),
 								})).path;
 								let baseName = path.basename(filePath);
+								const extension = path.extname(baseName);
 
 								const loaders = {
-									".ts": function() {
-										throw new Error("Not yet implemented.");
-									},
-									"default": function() {
-										if (files["./assets/" + baseName] !== undefined) {
-											console.warn(baseName + " already exists!");
-										}
+									"default": async function() {
+										const file = await fs.readFile(filePath);
+
+										const hash = createHash("sha256").update(file).digest("hex").substring(0, 6);
+
+										baseName = path.basename(baseName, extension);
+
+										baseName = baseName + "-" + hash + extension;
 
 										files["./assets/" + baseName] = filePath
 
 										return "\"./assets/" + baseName + "\""
-									},
-									".json": async function() {
-										if (files["./assets/" + baseName] !== undefined) {
-											console.warn(baseName + " already exists!");
-										}
-
-										files["./assets/" + baseName] = filePath
-
-										JSON.stringify(JSON5.parse(await fs.readFile(filePath) || "{}"), undefined, "\t") + "\n"
-
-										return "\"./assets/" + baseName+ "\""
 									},
 									".mp3": function() {
 										return "\"data:audio/mpeg;base64,\"";
 									}
 								}
 
-								const extension = path.extname(baseName);
-
 								return loaders[loaders[extension] !== undefined ? extension : "default"]();
 							}));
 
 							build.onEnd(async function(results) {
-								config.esbuildPlugins.unshift(virtualFileSystem(await mapEntries(files, async function([fakePath, realPath]) {
-									return [fakePath, await fs.readFile(realPath)]
-								}), path.join(config.esbuildOptions["outdir"], "..")))
+								resolve(await mapEntries(files, async function([fakePath, realPath]) {
+									if (fakePath.endsWith(".json")) {
+										return [fakePath, JSON.stringify(JSON5.parse(await fs.readFile(realPath) || "{}"), undefined, "\t") + "\n"]
+									}
 
-								resolve(files);
+									if (fakePath.endsWith(".ts")) {
+										const { "outputFiles": [outputFile] } = await new Promise<BuildResult<BuildOptions>>(async function(resolve, reject) {
+											(await import("tsup")).build({
+												"config": false,
+												"entry": [realPath],
+												"inject": [
+													url.fileURLToPath(import.meta.resolve("node-stdlib-browser/helpers/esbuild/shim", import.meta.url))
+												],
+												"define": {
+													"Buffer": "Buffer",
+													"import.meta.url": "__dirname"
+												},
+												"esbuildOptions": esbuildOptions({
+													"outdir": config.esbuildOptions["outdir"],
+													"write": false
+												}),
+												"esbuildPlugins": [
+													polyfillNode(Object.fromEntries(["buffer", "crypto", "events", "os", "net", "path", "process", "stream", "util"].map(function(libName) {
+														return [libName, stdLibBrowser[libName]];
+													}))),
+													{
+														"name": "build-write-false",
+														"setup": function(build) {
+															build.onEnd(function(result) {
+																resolve(result);
+															})
+														}
+													},
+												],
+												"external": [/^vscode.*/u],
+												"format": "cjs",
+												"platform": "browser"
+											});
+										});
+
+										return [fakePath, outputFile.text];
+									}
+
+									return [
+										path.join(path.dirname(fakePath), path.basename(fakePath, path.extname(fakePath))),
+										await fs.readFile(realPath)
+									];
+								}));
 							});
 						}
 					},
-					...config["esbuildPlugins"]
+					//...config["esbuildPlugins"]
 				]
 			});
 		}),
-		(entry) => new Promise(async function(resolve, reject) {
+		(files) => new Promise(async function(resolve, reject) {
 			(await import("tsup")).build({
+				"clean": true,
 				"format": "esm",
 				"treeshake": true,
 				...config,
-				"entry": entry,
 				"esbuildOptions": esbuildOptions(config.esbuildOptions),
 				"esbuildPlugins": [
 					{
@@ -114,6 +151,7 @@ export async function tsup(config: Options) {
 							})
 						}
 					},
+					virtualFileSystem(files, path.join(config.esbuildOptions["outdir"], "..")),
 					...config["esbuildPlugins"]
 				]
 			});

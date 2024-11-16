@@ -36,20 +36,36 @@ export function reduceAsync(promises: ((...args: any[]) => Promise<unknown>)[], 
 	}, Promise.resolve(initial));
 }
 
-async function mapEntriesAsync(object, callback) {
+async function mapEntriesAsync(object, callback, filter?) {
 	if (Array.isArray(object)) {
-		return mapAsync(Object.entries(object), callback);
+		if (filter !== undefined) {
+			return (await mapAsync(Object.entries(object), callback)).filter(filter);
+		} else {
+			return mapAsync(Object.entries(object), callback);
+		}
 	} else {
-		return Object.fromEntries(await mapAsync(Object.entries(object), callback));
+		if (filter !== undefined) {
+			return Object.fromEntries((await mapAsync(Object.entries(object), callback)).filter(filter));
+		} else {
+			return Object.fromEntries(await mapAsync(Object.entries(object), callback));
+		}
 	}
 }
 
-export function mapEntries(object: [string, any][] | object, callback) {
+export function mapEntries(object: [string, any][] | object, callback, filter?) {
 	if (callback.constructor.name === "AsyncFunction") {
-		return mapEntriesAsync(object, callback);
+		return mapEntriesAsync(object, callback, filter);
 	} else if (Array.isArray(object)) {
-		return object.map(callback);
+		if (filter !== undefined) {
+			return object.map(callback).filter(filter);
+		} else {
+			return object.map(callback);
+		}
 	} else {
-		return Object.fromEntries<[string, any][]>(Object.entries(object).map(callback));
+		if (filter !== undefined) {
+			return Object.fromEntries<[string, any][]>(Object.entries(object).map(callback).filter(filter));
+		} else {
+			return Object.fromEntries<[string, any][]>(Object.entries(object).map(callback));
+		}
 	}
 }
