@@ -143,6 +143,16 @@ export async function tsup(config: Options) {
 				"format": "esm",
 				"treeshake": true,
 				...config,
+				"entry": {
+					...entry,
+					...mapEntries(files, function([filePath]) {
+						if (!filePath.endsWith(".js")) {
+							return;
+						}
+
+						return [path.basename(filePath, path.extname(filePath)), filePath];
+					}, Boolean)
+				},
 				"esbuildOptions": esbuildOptions(config.esbuildOptions),
 				"esbuildPlugins": [
 					{
