@@ -49,6 +49,7 @@ export async function tsup(config: Options) {
 						"setup": function(build) {
 							const files = {};
 
+							// @ts-expect-error
 							build.onLoad({ "filter": /.*/u }, importMetaUrl(async function(match, args) {
 								let filePath = (await build.resolve(match, {
 									"kind": "import-statement",
@@ -151,7 +152,7 @@ export async function tsup(config: Options) {
 							})
 						}
 					},
-					virtualFileSystem(files, path.join(config.esbuildOptions["outdir"], "..")),
+					importMetaUrl(files),
 					...config["esbuildPlugins"]
 				]
 			});
