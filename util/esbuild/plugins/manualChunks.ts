@@ -1,5 +1,4 @@
 import * as path from "path";
-import * as url from "url";
 
 import { virtualFileSystem } from "./"
 import * as fs from "../../fs"
@@ -62,7 +61,7 @@ export async function manualChunks(options, __dirname) {
             ...entry
         },
         "esbuildPlugins": [
-            virtualFileSystem(files, __dirname),
+            virtualFileSystem(files),
             ...options.esbuildPlugins
         ]
     }

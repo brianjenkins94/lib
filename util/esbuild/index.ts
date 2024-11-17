@@ -1,11 +1,12 @@
 // @ts-expect-error
-import type { BuildResult, BuildOptions, Format, Options, Entry } from "tsup";
+import type { BuildOptions, Format, Options } from "tsup";
 import * as path from "path";
 import JSON5 from "json5";
 import polyfillNode from "node-stdlib-browser/helpers/esbuild/plugin"; // NOT "esbuild-plugins-node-modules-polyfill" NOR "esbuild-plugin-polyfill-node"
 import stdLibBrowser from "node-stdlib-browser";
 import { createHash } from "crypto";
 import * as url from "url";
+import { build } from "esbuild";
 
 import { reduceAsync, mapEntries } from "../array"
 import * as fs from "../fs";
@@ -24,6 +25,25 @@ export function esbuildOptions(overrides: BuildOptions = {}) {
 	};
 }
 
+export async function esbuild(config: BuildOptions) {
+	config["assetNames"] ??= "assets/[name]";
+	config["chunkNames"] ??= "assets/[name]-[hash]";
+	config["entryNames"] ??= "[name]";
+
+	const result = await build({
+		"bundle": true,
+		"format": "esm",
+		"write": false,
+		...config
+	});
+
+	if (result.errors.length > 0) {
+		console.error(result.errors);
+	}
+
+	return result;
+}
+
 export async function tsup(config: Options) {
 	// WORKAROUND: `tsup` gives the entry straight to `globby` and `globby` doesn't get along with Windows paths.
 	const entry = Array.isArray(config.entry) ? config.entry.map(function(entry) {
@@ -33,15 +53,18 @@ export async function tsup(config: Options) {
 	});
 
 	return reduceAsync([
-		(entry) => new Promise(async function(resolve, reject) {
-			(await import("tsup")).build({
-				"clean": true,
-				"format": "esm",
-				"treeshake": true,
-				...config,
-				"entry": entry,
-				"esbuildOptions": esbuildOptions(config.esbuildOptions),
-				"esbuildPlugins": [
+		(entry) => new Promise(function(resolve, reject) {
+			return esbuild({
+				"entryPoints": entry,
+				"metafile": true,
+				...config.esbuildOptions,
+				"inject": [
+					url.fileURLToPath(import.meta.resolve("node-stdlib-browser/helpers/esbuild/shim", import.meta.url))
+				],
+				"plugins": [
+					polyfillNode(Object.fromEntries(["buffer", "crypto", "events", "fs", "os", "net", "path", "process", "stream", "util"].map(function(libName) {
+						return [libName, stdLibBrowser[libName]];
+					}))),
 					{
 						"name": "discover-entrypoints",
 						"setup": function(build) {
@@ -71,36 +94,24 @@ export async function tsup(config: Options) {
 										}
 
 										if (filePath.endsWith(".ts")) {
-											const { "outputFiles": [outputFile] } = await new Promise<BuildResult<BuildOptions>>(async function(resolve, reject) {
-												(await import("tsup")).build({
-													"config": false,
-													// WORKAROUND: `tsup` gives the entry straight to `globby` and `globby` doesn't get along with Windows paths.
-													"entry": [filePath.replace(/\\/gu, "/")],
-													"inject": [
-														url.fileURLToPath(import.meta.resolve("node-stdlib-browser/helpers/esbuild/shim", import.meta.url))
-													],
-													"define": {
-														"Buffer": "Buffer",
-														"import.meta.url": "__dirname"
-													},
-													"esbuildOptions": esbuildOptions(config.esbuildOptions),
-													"esbuildPlugins": [
-														polyfillNode(Object.fromEntries(["buffer", "crypto", "events", "os", "net", "path", "process", "stream", "util"].map(function(libName) {
-															return [libName, stdLibBrowser[libName]];
-														}))),
-														{
-															"name": "build-write-false",
-															"setup": function(build) {
-																build.onEnd(function(result) {
-																	resolve(result);
-																})
-															}
-														}
-													],
-													"external": [/^vscode.*/u],
-													"format": "cjs",
-													"platform": "browser"
-												});
+											const { "outputFiles": [outputFile] } = await esbuild({
+												"entryPoints": [filePath.replace(/\\/gu, "/")],
+												"inject": [
+													url.fileURLToPath(import.meta.resolve("node-stdlib-browser/helpers/esbuild/shim", import.meta.url))
+												],
+												"define": {
+													"Buffer": "Buffer",
+													"import.meta.url": "__dirname"
+												},
+												...config.esbuildOptions,
+												"plugins": [
+													polyfillNode(Object.fromEntries(["buffer", "crypto", "events", "os", "net", "path", "process", "stream", "util"].map(function(libName) {
+														return [libName, stdLibBrowser[libName]];
+													})))
+												],
+												"external": ["vscode*"],
+												"format": "cjs",
+												"platform": "browser"
 											});
 
 											file = outputFile.text;
@@ -129,10 +140,9 @@ export async function tsup(config: Options) {
 							}));
 
 							build.onEnd(async function({ "metafile": { outputs }, outputFiles }) {
-								// @ts-expect-error
-								resolve(Object.fromEntries(mapEntries(outputFiles, function(outputFile) {
+								resolve(mapEntries(outputFiles, function(outputFile) {
 									return [outputs[path.relative(__root, outputFile.path).replace(/\\/gu, "/")]["entryPoint"],  outputFile.text]
-								})));
+								}));
 							});
 						}
 					},
@@ -142,7 +152,6 @@ export async function tsup(config: Options) {
 		}),
 		(files) => new Promise(async function(resolve, reject) {
 			(await import("tsup")).build({
-				"clean": true,
 				"format": "esm",
 				"treeshake": true,
 				...config,
@@ -155,23 +164,3 @@ export async function tsup(config: Options) {
 		})
 	], entry)
 }
-
-/*
-export async function esbuildWriteFalse(options: Options) {
-	return (await build({
-		"bundle": true,
-		"format": "esm",
-		"stdin": {
-			"resolveDir": __root,
-			"sourcefile": "fetch.ts",
-			"contents": ``
-		},
-		"write": false,
-		"define": {
-			"process": "{}",
-			"process.env": "{}",
-			"process.env.NODE_ENV": "\"production\""
-		}
-	})).outputFiles[0].text;
-}
-*/
