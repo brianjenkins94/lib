@@ -59,7 +59,7 @@ const defaultConfig = {
     "treeshake": true
 };
 
-const configs = (await mapAsync(workspaces, async function(workspace) {
+const configs = await mapAsync(workspaces, async function(workspace) {
     if (!fs.existsSync(path.join(workspace, "package.json"))) {
         return;
     }
@@ -92,6 +92,6 @@ const configs = (await mapAsync(workspaces, async function(workspace) {
         ...defaultConfig,
         ...customConfig
     }
-})).filter(Boolean);
+}, Boolean);
 
 await mapAsync(configs, tsup);

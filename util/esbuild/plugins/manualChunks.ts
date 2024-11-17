@@ -42,9 +42,9 @@ export async function manualChunks(options, __dirname) {
                 return new Promise(function(resolve, reject) {
                     resolve(path.join(path.dirname(packageJsonPath), "node_modules", module));
                 });
-            })).filter(function(element) {
+            }, function(element) {
                 return fs.existsSync(element);
-            });
+            }));
         })))].flat(Infinity);
 
         files[modules[0]] = dependencies.map(function(module) {

@@ -10,8 +10,12 @@ export function partition(promises: (() => Promise<any>)[], callback) {
 	}, [[], []]);
 }
 
-export function mapAsync(array, callback) {
-	return Promise.all(array.map(callback));
+export async function mapAsync(array, callback, filter?) {
+	if (filter !== undefined) {
+		return (await Promise.all(array.map(callback))).filter(filter);
+	} else {
+		return Promise.all(array.map(callback));
+	}
 }
 
 export async function filterAsync(promises: (() => Promise<any>)[], callback) {
