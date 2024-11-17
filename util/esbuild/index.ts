@@ -10,6 +10,7 @@ import * as url from "url";
 import { reduceAsync, mapEntries } from "../array"
 import * as fs from "../fs";
 import { importMetaUrl, virtualFileSystem } from "./plugins";
+import { __root } from "../env";
 
 export function esbuildOptions(overrides: BuildOptions = {}) {
 	overrides["assetNames"] ??= "assets/[name]";
@@ -32,24 +33,18 @@ export async function tsup(config: Options) {
 	});
 
 	return reduceAsync([
-		(entry) => new Promise<Entry>(async function(resolve, reject) {
+		(entry) => new Promise(async function(resolve, reject) {
 			(await import("tsup")).build({
 				"clean": true,
 				"format": "esm",
 				"treeshake": true,
 				...config,
 				"entry": entry,
-				"esbuildOptions": esbuildOptions({
-					...(config.esbuildOptions ?? {}),
-					"write": false
-				}),
+				"esbuildOptions": esbuildOptions(config.esbuildOptions),
 				"esbuildPlugins": [
 					{
 						"name": "discover-entrypoints",
 						"setup": function(build) {
-							const files = {};
-
-							// @ts-expect-error
 							build.onLoad({ "filter": /.*/u }, importMetaUrl(async function(match, args) {
 								let filePath = (await build.resolve(match, {
 									"kind": "import-statement",
@@ -59,8 +54,11 @@ export async function tsup(config: Options) {
 								const extension = path.extname(baseName);
 
 								const loaders = {
+									// ".json": function() {
+
+									// },
 									"default": async function() {
-										const file = await fs.readFile(filePath);
+										let file = await fs.readFile(filePath);
 
 										const hash = createHash("sha256").update(file).digest("hex").substring(0, 6);
 
@@ -68,72 +66,77 @@ export async function tsup(config: Options) {
 
 										baseName = baseName + "-" + hash + extension;
 
-										files["./assets/" + baseName] = filePath
+										if (filePath.endsWith(".json")) {
+											file = JSON.stringify(JSON5.parse(file || "{}"), undefined, "\t") + "\n"
+										}
 
+										if (filePath.endsWith(".ts")) {
+											const { "outputFiles": [outputFile] } = await new Promise<BuildResult<BuildOptions>>(async function(resolve, reject) {
+												(await import("tsup")).build({
+													"config": false,
+													// WORKAROUND: `tsup` gives the entry straight to `globby` and `globby` doesn't get along with Windows paths.
+													"entry": [filePath.replace(/\\/gu, "/")],
+													"inject": [
+														url.fileURLToPath(import.meta.resolve("node-stdlib-browser/helpers/esbuild/shim", import.meta.url))
+													],
+													"define": {
+														"Buffer": "Buffer",
+														"import.meta.url": "__dirname"
+													},
+													"esbuildOptions": esbuildOptions(config.esbuildOptions),
+													"esbuildPlugins": [
+														polyfillNode(Object.fromEntries(["buffer", "crypto", "events", "os", "net", "path", "process", "stream", "util"].map(function(libName) {
+															return [libName, stdLibBrowser[libName]];
+														}))),
+														{
+															"name": "build-write-false",
+															"setup": function(build) {
+																build.onEnd(function(result) {
+																	resolve(result);
+																})
+															}
+														}
+													],
+													"external": [/^vscode.*/u],
+													"format": "cjs",
+													"platform": "browser"
+												});
+											});
+
+											file = outputFile.text;
+
+											baseName = path.basename(baseName, path.extname(baseName)) + ".js";
+										} else {
+											if (!fs.existsSync(path.join(config.esbuildOptions["outdir"], "assets"))) {
+												await fs.mkdir(path.join(config.esbuildOptions["outdir"], "assets"), {"recursive": true});
+											}
+
+											await fs.writeFile(path.join(config.esbuildOptions["outdir"], "assets", baseName), file)
+										}
+
+										// FIXME: We need to conditionally prefix with `./assets/`, depending on the entrypoint output location.
 										return "\"./assets/" + baseName + "\""
 									},
 									".mp3": function() {
 										return "\"data:audio/mpeg;base64,\"";
-									}
+									},
+									// ".ts": function() {
+
+									// }
 								}
 
 								return loaders[loaders[extension] !== undefined ? extension : "default"]();
 							}));
 
-							build.onEnd(async function(result) {
-								resolve(await mapEntries(files, async function([fakePath, realPath]) {
-									if (fakePath.endsWith(".json")) {
-										return [fakePath, JSON.stringify(JSON5.parse(await fs.readFile(realPath) || "{}"), undefined, "\t") + "\n"]
-									}
-
-									if (fakePath.endsWith(".ts")) {
-										const { "outputFiles": [outputFile] } = await new Promise<BuildResult<BuildOptions>>(async function(resolve, reject) {
-											(await import("tsup")).build({
-												"config": false,
-												// WORKAROUND: `tsup` gives the entry straight to `globby` and `globby` doesn't get along with Windows paths.
-												"entry": [realPath.replace(/\\/gu, "/")],
-												"inject": [
-													url.fileURLToPath(import.meta.resolve("node-stdlib-browser/helpers/esbuild/shim", import.meta.url))
-												],
-												"define": {
-													"Buffer": "Buffer",
-													"import.meta.url": "__dirname"
-												},
-												"esbuildOptions": esbuildOptions({
-													"outdir": config.esbuildOptions["outdir"],
-													"write": false
-												}),
-												"esbuildPlugins": [
-													polyfillNode(Object.fromEntries(["buffer", "crypto", "events", "os", "net", "path", "process", "stream", "util"].map(function(libName) {
-														return [libName, stdLibBrowser[libName]];
-													}))),
-													{
-														"name": "build-write-false",
-														"setup": function(build) {
-															build.onEnd(function(result) {
-																resolve(result);
-															})
-														}
-													},
-												],
-												"external": [/^vscode.*/u],
-												"format": "cjs",
-												"platform": "browser"
-											});
-										});
-
-										return [fakePath, outputFile.text];
-									}
-
-									return [
-										fakePath,
-										await fs.readFile(realPath)
-									];
-								}));
+							build.onEnd(async function({ "metafile": { outputs }, outputFiles }) {
+								// @ts-expect-error
+								resolve(Object.fromEntries(mapEntries(outputFiles, function(outputFile) {
+									return [outputs[path.relative(__root, outputFile.path).replace(/\\/gu, "/")]["entryPoint"],  outputFile.text]
+								})));
 							});
 						}
 					},
-					//...config["esbuildPlugins"]
+					//...config.esbuildPlugins
 				]
 			});
 		}),
@@ -143,28 +146,10 @@ export async function tsup(config: Options) {
 				"format": "esm",
 				"treeshake": true,
 				...config,
-				"entry": {
-					...entry,
-					...mapEntries(files, function([filePath]) {
-						if (!filePath.endsWith(".js")) {
-							return;
-						}
-
-						return [path.basename(filePath, path.extname(filePath)), filePath];
-					}, Boolean)
-				},
 				"esbuildOptions": esbuildOptions(config.esbuildOptions),
 				"esbuildPlugins": [
-					{
-						"name": "build-write-false",
-						"setup": function(build) {
-							build.onEnd(function(result) {
-								resolve(result);
-							})
-						}
-					},
-					importMetaUrl(files, path.join(config.esbuildOptions["outdir"], "..")),
-					...config["esbuildPlugins"]
+					virtualFileSystem(files),
+					...config.esbuildPlugins
 				]
 			});
 		})

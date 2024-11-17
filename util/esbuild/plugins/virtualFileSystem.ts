@@ -2,16 +2,14 @@ import * as path from "path";
 
 const NAMESPACE = "vfs";
 
-export function virtualFileSystem(files = {}, __dirname) {
+export function virtualFileSystem(files = {}) {
     return {
         "name": "virtual-file-system",
         "setup": function(build) {
             build.onResolve({ "filter": /.*/u }, function(args) {
-                const fileName = path.relative(__dirname, path.join(args.resolveDir, args.path)).replace(/\\/gu, "/")
-
-                if (files[fileName] !== undefined) {
+                if (files[args.path.replace(/\\/gu, "/")] !== undefined) {
                     return {
-                        "path": fileName,
+                        "path": args.path,
                         "namespace": NAMESPACE
                     }
                 }
@@ -20,8 +18,7 @@ export function virtualFileSystem(files = {}, __dirname) {
             build.onLoad({ "filter": /.*/u, "namespace": NAMESPACE }, function(args) {
                 if (files[args.path] !== undefined) {
                     return {
-                        "contents": files[args.path],
-                        "resolveDir": path.dirname(path.join(__dirname, args.path))
+                        "contents": files[args.path]
                     }
                 }
             });
