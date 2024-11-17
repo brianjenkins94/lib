@@ -67,76 +67,68 @@ export async function tsup(config: Options) {
 					}))),
 					{
 						"name": "discover-entrypoints",
-						"setup": function(build) {
+						"setup": async function(build) {
+							if (!fs.existsSync(path.join(config.esbuildOptions["outdir"], "assets"))) {
+								await fs.mkdir(path.join(config.esbuildOptions["outdir"], "assets"), {"recursive": true});
+							}
+
 							build.onLoad({ "filter": /.*/u }, importMetaUrl(async function(match, args) {
-								let filePath = (await build.resolve(match, {
+								const filePath = (await build.resolve(match, {
 									"kind": "import-statement",
 									"resolveDir": path.dirname(args.path),
 								})).path;
-								let baseName = path.basename(filePath);
-								const extension = path.extname(baseName);
+
+								let file = await fs.readFile(filePath);
+
+								const hash = createHash("sha256").update(file).digest("hex").substring(0, 6);
+
+								const extension = path.extname(filePath);
 
 								const loaders = {
-									// ".json": function() {
-
-									// },
-									"default": async function() {
-										let file = await fs.readFile(filePath);
-
-										const hash = createHash("sha256").update(file).digest("hex").substring(0, 6);
-
-										baseName = path.basename(baseName, extension);
-
-										baseName = baseName + "-" + hash + extension;
-
-										if (filePath.endsWith(".json")) {
-											file = JSON.stringify(JSON5.parse(file || "{}"), undefined, "\t") + "\n"
-										}
-
-										if (filePath.endsWith(".ts")) {
-											const { "outputFiles": [outputFile] } = await esbuild({
-												"entryPoints": [filePath.replace(/\\/gu, "/")],
-												"inject": [
-													url.fileURLToPath(import.meta.resolve("node-stdlib-browser/helpers/esbuild/shim", import.meta.url))
-												],
-												"define": {
-													"Buffer": "Buffer",
-													"import.meta.url": "__dirname"
-												},
-												...config.esbuildOptions,
-												"plugins": [
-													polyfillNode(Object.fromEntries(["buffer", "crypto", "events", "os", "net", "path", "process", "stream", "util"].map(function(libName) {
-														return [libName, stdLibBrowser[libName]];
-													})))
-												],
-												"external": ["vscode*"],
-												"format": "cjs",
-												"platform": "browser"
-											});
-
-											file = outputFile.text;
-
-											baseName = path.basename(baseName, path.extname(baseName)) + ".js";
-										} else {
-											if (!fs.existsSync(path.join(config.esbuildOptions["outdir"], "assets"))) {
-												await fs.mkdir(path.join(config.esbuildOptions["outdir"], "assets"), {"recursive": true});
-											}
-
-											await fs.writeFile(path.join(config.esbuildOptions["outdir"], "assets", baseName), file)
-										}
-
-										// FIXME: We need to conditionally prefix with `./assets/`, depending on the entrypoint output location.
-										return "\"./assets/" + baseName + "\""
+									".js": function(baseName) {
+										return "\"" + path.join("./assets", path.basename(baseName, path.extname(baseName)) + "-" + hash + ".js") + "\"";
 									},
-									".mp3": function() {
+									".json": function(baseName) {
+										file = JSON.stringify(JSON5.parse(file || "{}"), undefined, "\t") + "\n"
+
+										return loaders["default"](baseName);
+									},
+									"default": async function(baseName) {
+										await fs.writeFile(path.join(config.esbuildOptions["outdir"], "assets", baseName), file)
+
+										return "\"" + path.join("./assets", path.basename(baseName, path.extname(baseName)) + "-" + hash + ".js") + "\"";
+									},
+									".mp3": function(baseName) {
 										return "\"data:audio/mpeg;base64,\"";
 									},
-									// ".ts": function() {
+									".ts": async function(baseName) {
+										const { "outputFiles": [outputFile] } = await esbuild({
+											"entryPoints": [filePath.replace(/\\/gu, "/")],
+											"inject": [
+												url.fileURLToPath(import.meta.resolve("node-stdlib-browser/helpers/esbuild/shim", import.meta.url))
+											],
+											"define": {
+												"Buffer": "Buffer",
+												"import.meta.url": "__dirname"
+											},
+											...config.esbuildOptions,
+											"plugins": [
+												polyfillNode(Object.fromEntries(["buffer", "crypto", "events", "os", "net", "path", "process", "stream", "util"].map(function(libName) {
+													return [libName, stdLibBrowser[libName]];
+												})))
+											],
+											"external": ["vscode*"],
+											"format": "cjs",
+											"platform": "browser"
+										});
 
-									// }
+										file = outputFile.text;
+
+										return loaders["default"](path.join("./assets", path.basename(baseName, path.extname(baseName)) + "-" + hash + ".js"));
+									}
 								}
 
-								return loaders[loaders[extension] !== undefined ? extension : "default"]();
+								return loaders[loaders[extension] !== undefined ? extension : "default"](path.basename(filePath));
 							}));
 
 							build.onEnd(async function({ "metafile": { outputs }, outputFiles }) {

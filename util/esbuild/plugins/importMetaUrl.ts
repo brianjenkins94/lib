@@ -6,15 +6,15 @@ import { replaceAsync } from "../../text";
 
 // Handle `new URL("./path/to/asset", import.meta.url)`
 
-export function importMetaUrl(callbackOrFiles) {
-    return async function(args): Promise<OnLoadResult> {
+export function importMetaUrl(callback) {
+    return async function(args): Promise<OnLoadResult | void> {
         let contents = await fs.readFile(args.path);
 
         const newUrlRegEx = /new URL\((?:"|')(.*?)(?:"|'), \w+(?:\.\w+)*\)(?:\.\w+(?:\(\))?)?/gu;
 
         if (newUrlRegEx.test(contents)) {
             contents = await replaceAsync(newUrlRegEx, contents, function([_, match]) {
-                return callbackOrFiles(match, args);
+                return callback(match, args);
             });
 
             return {
