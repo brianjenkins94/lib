@@ -75,18 +75,18 @@ export async function tsup(config: Options) {
 							build.onLoad({ "filter": /.*/u }, importMetaUrl(async function(match, args) {
 								const filePath = (await build.resolve(match, {
 									"kind": "import-statement",
-									"resolveDir": path.dirname(args.path),
+									"resolveDir": path.dirname(args.path)
 								})).path;
 
 								let file = await fs.readFile(filePath);
 
 								const hash = createHash("sha256").update(file).digest("hex").substring(0, 6);
 
-								const extension = path.extname(filePath);
-
 								const loaders = {
 									".js": function(baseName) {
-										return "\"" + path.join("./assets", path.basename(baseName, path.extname(baseName)) + "-" + hash + ".js") + "\"";
+										console.log(args);
+
+										return "\"./" + path.join("assets", path.basename(baseName, path.extname(baseName)) + "-" + hash + ".js").replace(/\\/gu, "/") + "\"";
 									},
 									".json": function(baseName) {
 										file = JSON.stringify(JSON5.parse(file || "{}"), undefined, "\t") + "\n"
@@ -96,7 +96,7 @@ export async function tsup(config: Options) {
 									"default": async function(baseName) {
 										await fs.writeFile(path.join(config.esbuildOptions["outdir"], "assets", baseName), file)
 
-										return "\"" + path.join("./assets", path.basename(baseName, path.extname(baseName)) + "-" + hash + ".js") + "\"";
+										return "\"./" + path.join("assets", path.basename(baseName, path.extname(baseName)) + "-" + hash + ".js").replace(/\\/gu, "/") + "\"";
 									},
 									".mp3": function(baseName) {
 										return "\"data:audio/mpeg;base64,\"";
@@ -119,14 +119,17 @@ export async function tsup(config: Options) {
 											],
 											"external": ["vscode*"],
 											"format": "cjs",
-											"platform": "browser"
+											"platform": "browser",
+											"tsconfig": config.tsconfig
 										});
 
 										file = outputFile.text;
 
-										return loaders["default"](path.join("./assets", path.basename(baseName, path.extname(baseName)) + "-" + hash + ".js"));
+										return loaders["default"](path.basename(baseName, path.extname(baseName)) + "-" + hash + ".js");
 									}
 								}
+
+								const extension = path.extname(filePath);
 
 								return loaders[loaders[extension] !== undefined ? extension : "default"](path.basename(filePath));
 							}));
@@ -139,7 +142,8 @@ export async function tsup(config: Options) {
 						}
 					},
 					//...config.esbuildPlugins
-				]
+				],
+				"tsconfig": config.tsconfig
 			});
 		}),
 		(files) => new Promise(async function(resolve, reject) {
