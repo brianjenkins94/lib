@@ -77,7 +77,7 @@ const configs = await mapAsync(workspaces, async function(workspace) {
     if (fs.existsSync(path.join(workspace, "tsup.config.ts"))) {
         customConfig = {
             ...customConfig,
-            ...(await import(url.pathToFileURL(path.join("./" + workspace, "tsup.config.ts")).toString()))["default"]
+            ...(await import(url.pathToFileURL(path.join(workspace, "tsup.config.ts")).toString()))["default"]
         };
     }
 

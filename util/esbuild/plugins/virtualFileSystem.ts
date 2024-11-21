@@ -21,7 +21,8 @@ export function virtualFileSystem(files = {}) {
                 if (files[args.path] !== undefined) {
                     return {
                         "contents": files[args.path],
-                        "resolveDir": path.dirname(args.path)
+                        "resolveDir": path.dirname(args.path),
+                        "loader": path.extname(args.path) === ".ts" ? "ts" : "js"
                     }
                 }
             });

@@ -121,15 +121,46 @@ export async function tsup(config: Options) {
 											],
 											"define": {
 												"Buffer": "Buffer",
-												"import.meta.url": "__dirname"
+												"import.meta.url": "location.origin"
 											},
 											...config.esbuildOptions,
 											"plugins": [
 												polyfillNode(Object.fromEntries(["buffer", "crypto", "events", "os", "net", "path", "process", "stream", "util"].map(function(libName) {
 													return [libName, stdLibBrowser[libName]];
-												})))
+												}))),
+												{
+													"name": "import-meta-url",
+													"setup": function(build) {
+														build.onLoad({ "filter": /.*/u }, importMetaUrl(async function(match, args) {
+															const filePath = (await build.resolve(match, {
+																"kind": "import-statement",
+																"resolveDir": path.dirname(args.path)
+															})).path;
+
+															let file = await fs.readFile(filePath);
+
+															let baseName = path.basename(filePath);
+
+															if (path.basename(baseName, path.extname(baseName)).endsWith("worker")) {
+																file = file.replace(/^import.*((?:'|").*(?:'|")).*/gmu, "export default await import($1);");
+															}
+
+															const hash = createHash("sha256").update(file).digest("hex").substring(0, 6);
+
+															baseName = path.basename(baseName, path.extname(baseName)) + "-" + hash + ".js";
+
+															filePath
+
+															files[path.relative(__root, filePath).replace(/\\/gu, "/")] = file.replace(/(?<=^import .*?(?:'|"))\..*\.js(?=(?:'|");?$)/gmu, function([_, match]) {
+																return "./" + path.relative(__root, path.join(path.dirname(filePath), baseName)).replace(/\\/gu, "/");
+															});
+
+															return "\"./" + path.join("assets", baseName).replace(/\\/gu, "/") + "\"";
+														}));
+													}
+												}
 											],
-											"external": ["vscode*"],
+											"external": ["vscode"],
 											"format": "cjs",
 											"platform": "browser",
 											"tsconfig": config.tsconfig
@@ -169,7 +200,7 @@ export async function tsup(config: Options) {
 				"entry": {
 					...config.entry,
 					...mapEntries(files, function([filePath]) {
-						if (!filePath.endsWith(".js")) {
+						if (!(filePath.endsWith(".js") || filePath.endsWith(".ts"))) {
 							return;
 						}
 
