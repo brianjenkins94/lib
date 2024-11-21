@@ -16,7 +16,7 @@ import { __root } from "../env";
 export function esbuildOptions(overrides: BuildOptions = {}) {
 	overrides["assetNames"] ??= "assets/[name]";
 	overrides["chunkNames"] ??= "assets/[name]-[hash]";
-	overrides["entryNames"] ??= "[name]";
+	overrides["entryNames"] ??= "[dir]/[name]";
 
 	return function(options: BuildOptions, context: { "format": Format }) {
 		for (const [key, value] of Object.entries(overrides)) {
@@ -68,6 +68,8 @@ export async function tsup(config: Options) {
 					{
 						"name": "discover-entrypoints",
 						"setup": async function(build) {
+							const files = {};
+
 							if (!fs.existsSync(path.join(config.esbuildOptions["outdir"], "assets"))) {
 								await fs.mkdir(path.join(config.esbuildOptions["outdir"], "assets"), {"recursive": true});
 							}
@@ -80,13 +82,21 @@ export async function tsup(config: Options) {
 
 								let file = await fs.readFile(filePath);
 
-								const hash = createHash("sha256").update(file).digest("hex").substring(0, 6);
-
 								const loaders = {
 									".js": function(baseName) {
-										console.log(args);
+										if (path.basename(baseName, path.extname(baseName)).endsWith("worker")) {
+											file = file.replace(/^import.*((?:'|").*(?:'|")).*/gmu, "export default await import($1);");
+										}
 
-										return "\"./" + path.join("assets", path.basename(baseName, path.extname(baseName)) + "-" + hash + ".js").replace(/\\/gu, "/") + "\"";
+										const hash = createHash("sha256").update(file).digest("hex").substring(0, 6);
+
+										baseName = path.basename(baseName, path.extname(baseName)) + "-" + hash + ".js";
+
+										files[path.relative(__root, filePath).replace(/\\/gu, "/")] = file.replace(/(?<=^import .*?(?:'|"))\..*\.js(?=(?:'|");?$)/gmu, function([_, match]) {
+											return "./" + path.relative(__root, path.join(path.dirname(filePath), baseName)).replace(/\\/gu, "/");
+										});
+
+										return "\"./" + path.join("assets", baseName).replace(/\\/gu, "/") + "\"";
 									},
 									".json": function(baseName) {
 										file = JSON.stringify(JSON5.parse(file || "{}"), undefined, "\t") + "\n"
@@ -96,12 +106,14 @@ export async function tsup(config: Options) {
 									"default": async function(baseName) {
 										await fs.writeFile(path.join(config.esbuildOptions["outdir"], "assets", baseName), file)
 
-										return "\"./" + path.join("assets", path.basename(baseName, path.extname(baseName)) + "-" + hash + ".js").replace(/\\/gu, "/") + "\"";
+										return "\"./" + path.join("assets", baseName).replace(/\\/gu, "/") + "\"";
 									},
 									".mp3": function(baseName) {
 										return "\"data:audio/mpeg;base64,\"";
 									},
 									".ts": async function(baseName) {
+										const hash = createHash("sha256").update(file).digest("hex").substring(0, 6);
+
 										const { "outputFiles": [outputFile] } = await esbuild({
 											"entryPoints": [filePath.replace(/\\/gu, "/")],
 											"inject": [
@@ -135,9 +147,12 @@ export async function tsup(config: Options) {
 							}));
 
 							build.onEnd(async function({ "metafile": { outputs }, outputFiles }) {
-								resolve(mapEntries(outputFiles, function(outputFile) {
-									return [outputs[path.relative(__root, outputFile.path).replace(/\\/gu, "/")]["entryPoint"],  outputFile.text]
-								}));
+								resolve({
+									...mapEntries(outputFiles, function(outputFile) {
+										return [outputs[path.relative(__root, outputFile.path).replace(/\\/gu, "/")]["entryPoint"],  outputFile.text]
+									}),
+									...files
+								});
 							});
 						}
 					},
@@ -146,17 +161,29 @@ export async function tsup(config: Options) {
 				"tsconfig": config.tsconfig
 			});
 		}),
-		(files) => new Promise(async function(resolve, reject) {
-			(await import("tsup")).build({
+		(files) => (async function(files) {
+			return (await import("tsup")).build({
 				"format": "esm",
 				"treeshake": true,
 				...config,
+				"entry": {
+					...config.entry,
+					...mapEntries(files, function([filePath]) {
+						if (!filePath.endsWith(".js")) {
+							return;
+						}
+
+						const hash = createHash("sha256").update(files[filePath]).digest("hex").substring(0, 6);
+
+						return [path.join("assets", path.basename(filePath, path.extname(filePath)) + "-" + hash).replace(/\\/gu, "/"), filePath];
+					}, Boolean)
+				},
 				"esbuildOptions": esbuildOptions(config.esbuildOptions),
 				"esbuildPlugins": [
 					virtualFileSystem(files),
 					...config.esbuildPlugins
 				]
 			});
-		})
+		})(files)
 	], entry)
 }

@@ -309,7 +309,7 @@ export function poll(url, query = {}, options = {}, condition: (response: Respon
 	});
 }
 
-export function withDefaults(baseUrl, options) {
+export function withDefaults(baseUrl, options?) {
 	return {
 		"get": fetchFactory("get", baseUrl, options),
 		"post": fetchFactory("post", baseUrl, options),

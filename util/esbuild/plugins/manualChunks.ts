@@ -51,7 +51,7 @@ export async function manualChunks(options, __dirname) {
             return "import \"./" + path.relative(path.dirname(packageJsonPath), module).replace(/\\/gu, "/") + "\";";
         }).join("\n");
 
-        return [chunkAlias, "./" + path.relative(__root, packageJsonPath)];
+        return [chunkAlias, path.relative(__root, packageJsonPath)];
     });
 
     return {
