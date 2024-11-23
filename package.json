@@ -15,6 +15,8 @@
     "@typescript-eslint/parser": "latest",
     "json5": "latest",
     "node-stdlib-browser": "latest",
+    "ts-morph": "latest",
+    "ts2esm": "latest",
     "tsup": "latest",
     "tsx": "latest",
     "typescript": "latest"

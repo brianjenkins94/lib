@@ -1,9 +1,10 @@
 import * as path from "path";
+import * as url from "url";
 
 import { virtualFileSystem } from "./"
 import * as fs from "../../fs"
 import { mapAsync, mapEntries } from "../../array";
-import { __root } from "../../env"
+import { __root } from "../../env";
 
 async function findParentPackageJson(directory) {
     if (fs.existsSync(path.join(directory, "package.json"))) {
@@ -25,7 +26,7 @@ export async function manualChunks(options, __dirname) {
             let modulePath;
 
             try {
-                modulePath = import.meta.resolve(path.join(__dirname, module), import.meta.url);
+                modulePath = url.fileURLToPath(import.meta.resolve(path.join(__dirname, module), import.meta.url));
             } catch (error) {
                 modulePath = path.join(__dirname, "node_modules", module);
 
