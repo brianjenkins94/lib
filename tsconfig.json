@@ -1,6 +1,10 @@
 {
 	"extends": "@tsconfig/node-lts/tsconfig.json",
 	"compilerOptions": {
+		"baseUrl": ".",
+		"paths": {
+			"@components/*": ["./components/*"]
+		},
 		"alwaysStrict": true,
 		//"exactOptionalPropertyTypes": true,
 		"forceConsistentCasingInFileNames": false,

@@ -30,7 +30,7 @@ class ReadLineStream extends Readable {
 	}
 }
 
-export function createReadLineStream(readStream, options) {
+export function createReadLineStream(readStream, options = {}) {
 	return new ReadLineStream(readStream, options);
 }
 
