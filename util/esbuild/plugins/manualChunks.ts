@@ -26,7 +26,7 @@ export async function manualChunks(options, __dirname) {
             let modulePath;
 
             try {
-                modulePath = url.fileURLToPath(import.meta.resolve(path.join(__dirname, module), import.meta.url));
+                modulePath = import.meta.resolve(path.join(__dirname, module), import.meta.url);
             } catch (error) {
                 modulePath = path.join(__dirname, "node_modules", module);
 
@@ -52,7 +52,7 @@ export async function manualChunks(options, __dirname) {
             return "import \"./" + path.relative(path.dirname(packageJsonPath), module).replace(/\\/gu, "/") + "\";";
         }).join("\n");
 
-        return [chunkAlias, path.relative(__root, packageJsonPath)];
+        return [chunkAlias, path.relative(__root, modules[0])];
     });
 
     return {

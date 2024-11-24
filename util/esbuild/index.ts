@@ -61,6 +61,9 @@ export async function tsup(config: Options) {
 				"inject": [
 					url.fileURLToPath(import.meta.resolve("node-stdlib-browser/helpers/esbuild/shim", import.meta.url))
 				],
+				"define": {
+					"import.meta.url": "location.origin"
+				},
 				"plugins": [
 					polyfillNode(Object.fromEntries(["buffer", "crypto", "events", "fs", "os", "net", "path", "process", "stream", "util"].map(function(libName) {
 						return [libName, stdLibBrowser[libName]];
@@ -85,7 +88,7 @@ export async function tsup(config: Options) {
 								const loaders = {
 									".js": function(baseName) {
 										if (path.basename(baseName, path.extname(baseName)).endsWith("worker")) {
-											file = file.replace(/^import.*((?:'|").*(?:'|")).*/gmu, "export default await import($1);");
+											file = file.replace(/^import.*((?:'|").*(?:'|")).*/mu, "export default await import($1);");
 										}
 
 										const hash = createHash("sha256").update(file).digest("hex").substring(0, 6);
@@ -104,7 +107,7 @@ export async function tsup(config: Options) {
 										return loaders["default"](baseName);
 									},
 									"default": async function(baseName) {
-										await fs.writeFile(path.join(config.esbuildOptions["outdir"], "assets", baseName), file)
+										files[path.relative(__root, filePath).replace(/\\/gu, "/")] = file;
 
 										return "\"./" + path.join("assets", baseName).replace(/\\/gu, "/") + "\"";
 									},
@@ -200,14 +203,14 @@ export async function tsup(config: Options) {
 				"entry": {
 					...config.entry,
 					...mapEntries(files, function([filePath]) {
-						if (!(filePath.endsWith(".js") || filePath.endsWith(".ts"))) {
-							return;
+						if (filePath.endsWith(".js") || filePath.endsWith(".ts")) {
+							const hash = createHash("sha256").update(files[filePath]).digest("hex").substring(0, 6);
+
+							return [path.join("assets", path.basename(filePath, path.extname(filePath)) + "-" + hash).replace(/\\/gu, "/"), filePath];
 						}
 
-						const hash = createHash("sha256").update(files[filePath]).digest("hex").substring(0, 6);
-
-						return [path.join("assets", path.basename(filePath, path.extname(filePath)) + "-" + hash).replace(/\\/gu, "/"), filePath];
-					}, Boolean)
+						return [path.join("assets", path.basename(filePath, path.extname(filePath))).replace(/\\/gu, "/"), filePath];
+					})
 				},
 				"esbuildOptions": esbuildOptions(config.esbuildOptions),
 				"esbuildPlugins": [

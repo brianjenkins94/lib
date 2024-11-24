@@ -6,9 +6,6 @@ import { Range } from "./src/Range";
 import { kebabCaseToPascalCase } from "./util/text";
 import { esbuild, esbuildOptions } from "./util/esbuild";
 
-const components = {};
-const scripts = {};
-
 function fromString(string) {
 	return URL.createObjectURL(new Blob([string], { "type": "text/javascript" }));
 }

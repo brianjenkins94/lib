@@ -22,7 +22,7 @@ export function virtualFileSystem(files = {}) {
                     return {
                         "contents": files[args.path],
                         "resolveDir": path.dirname(args.path),
-                        "loader": path.extname(args.path) === ".ts" ? "ts" : "js"
+                        "loader": build.initialOptions.loader[path.extname(args.path)] ?? path.extname(args.path).substring(1)
                     }
                 }
             });

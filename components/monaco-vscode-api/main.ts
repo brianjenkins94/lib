@@ -50,11 +50,6 @@ for (const config of [
 	});
 }
 
-export async function clearStorage(): Promise<void> {
-	await userDataProvider.reset();
-	await (await getService(IStorageService) as BrowserStorageService).clear();
-}
-
 await registerExtension({
 	"name": "demo",
 	"publisher": "codingame",
@@ -63,10 +58,6 @@ await registerExtension({
 		"vscode": "*"
 	}
 }, ExtensionHostKind.LocalProcess).setAsDefaultApi();
-
-export {
-	remoteAuthority
-};
 
 const { registerFileUrl, getApi } = registerExtension({
 	"name": "helloworld-web-sample",

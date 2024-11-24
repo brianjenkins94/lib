@@ -1,3 +1,4 @@
 export * from "./importMetaUrl";
 export * from "./virtualFileSystem";
-export * from "./manualChunks";
+export * from "./precompile";
+export * from "./precompileComponent";
