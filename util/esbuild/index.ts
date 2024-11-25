@@ -73,7 +73,7 @@ export async function tsup(config: Options) {
 						"setup": async function(build) {
 							const files = {};
 
-							if (!fs.existsSync(path.join(config.esbuildOptions["outdir"], "assets"))) {
+							if (config.esbuildOptions?.["outdir"] !== undefined && !fs.existsSync(path.join(config.esbuildOptions["outdir"], "assets"))) {
 								await fs.mkdir(path.join(config.esbuildOptions["outdir"], "assets"), {"recursive": true});
 							}
 

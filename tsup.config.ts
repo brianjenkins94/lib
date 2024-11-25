@@ -5,10 +5,10 @@ import * as path from "path";
 import { Range } from "./src/Range";
 import { kebabCaseToPascalCase } from "./util/text";
 import { esbuild, esbuildOptions } from "./util/esbuild";
+import { importFromString } from "module-from-string"
 
-function fromString(string) {
-	return URL.createObjectURL(new Blob([string], { "type": "text/javascript" }));
-}
+const components = {};
+const scripts = {};
 
 function precompileComponent(build) {
 	build.onLoad({ "filter": /components/u }, async function({ "path": filePath }) {
@@ -17,37 +17,31 @@ function precompileComponent(build) {
 		const properName = kebabCaseToPascalCase(packageName ?? fileName);
 
 		const { "outputFiles": [outputFile] } = await esbuild({
-			"entryPoints": filePath,
-			/*
-			...config.esbuildOptions,
-			"plugins": [
-
-			],
-			"tsconfig": config.tsconfig
-			*/
+			"entryPoints": [filePath],
+			"external": ["react"]
 		});
 
-		const defaultExport = (await import(fromString(outputFile.text) + "?ts=" + Date.now())).default;
+		const module = await importFromString(outputFile.text);
+
+		const defaultExport = module.default;
 
 		if (fileName.startsWith("index") && defaultExport?.postload !== undefined) {
-			// <monkey-patch>
 			const sourceFile = await fs.readFile(filePath);
 
 			const code = sourceFile
 				// Comment out non-relative imports
 				.replace(/^(import .*? from (?:'|")[^\\.]+(?:'|");)$/gmu, "//$1")
 				// Remove default export
-				.replace(new RegExp("^export default function " + properName + ".*?^\\};$", "msu"), "")
+				.replace(new RegExp("^export default function " + properName + ".*?^\\};?$", "msu"), "")
 				// Remove preload
 				.replace(new RegExp("^" + properName + "\\.preload = .*?^\\};$", "msu"), "")
 				// Replace postload
 				.replace(new RegExp("^" + properName + "\\.postload = .*?^\\};$", "msu"), defaultExport.postload.toString().split("\n").slice(1, -1).join("\n"));
-			// </monkey-patch>
 
 			const { "outputFiles": [compiledOutput] } = await esbuild({
-				"entryPoints": filePath,
 				"stdin": {
-					"contents": code
+					"contents": code,
+					"loader": "tsx"
 				},
 				"plugins": [
 					{
@@ -63,7 +57,7 @@ function precompileComponent(build) {
 				]
 			});
 
-			components[properName] = "function() {\n" + compiledOutput + "\n}";
+			components[properName] = "function() {\n" + compiledOutput.text + "\n}";
 
 			scripts[properName] = defaultExport?.preload?.();
 		}
@@ -73,6 +67,8 @@ function precompileComponent(build) {
 const stack = [];
 
 export default defineConfig({
+	"format": "esm",
+	"treeshake": true,
 	"esbuildOptions": esbuildOptions(),
 	"esbuildPlugins": [
 		{
@@ -84,27 +80,30 @@ export default defineConfig({
 					const properName = kebabCaseToPascalCase(packageName ?? fileName);
 
 					const { "outputFiles": [compiledOutput] } = await esbuild({
-						"entryPoints": filePath,
+						"entryPoints": [filePath],
 						"plugins": [
 							{
 								"name": "precompile-component",
 								"setup": precompileComponent
 							}
-						]
+						],
+						"external": ["react"]
 					});
 
-					const defaultExport = (await import(fromString(compiledOutput.text) + "?ts=" + Date.now())).default;
+					const module = await importFromString(compiledOutput.text);
+
+					const defaultExport = module.default;
 
 					const component = defaultExport();
 
 					let code = compiledOutput.text
 						// Replace return
-						.replace(new RegExp("(?<=^export default function " + properName + ".*?\\n).*?(?=\\n\\})", "msu"), `return \`${render(component)}\`;`)
+						.replace(new RegExp("(?<=^(?:export default )?function " + properName + ".*?\\n).*?(?=\\n\\})", "msu"), `return \`${render(component)}\`;`)
 						// Remove pre/post-load
 						.replace(new RegExp("^" + properName + "\\.(?:pre|post)load = .*?^\\};$", "gmsu"), "");
 
 					if (filePath.includes("packages")) {
-						components[properName] = defaultExport?.postload.toString();
+						components[properName] = defaultExport.postload?.toString();
 
 						code = `
 							const startTime = performance.now();

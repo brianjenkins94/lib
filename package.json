@@ -14,6 +14,7 @@
     "@typescript-eslint/eslint-plugin": "latest",
     "@typescript-eslint/parser": "latest",
     "json5": "latest",
+    "module-from-string": "latest",
     "node-stdlib-browser": "latest",
     "react-dom": "latest",
     "ts-morph": "latest",
