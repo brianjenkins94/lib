@@ -1,5 +1,5 @@
 import * as fs from "./fs";
-import * as pathToRegexp from "path-to-regexp";
+import { pathToRegexp, match } from "path-to-regexp";
 import * as http from "node:http";
 import * as path from "node:path";
 import * as url from "node:url";
@@ -23,12 +23,12 @@ export function createServer(router = {}) {
 
 		try {
 			const [pathName] = Object.keys(router).filter(function(route) {
-				return route.startsWith(request.method) && pathToRegexp.pathToRegexp(route.replace(/^[A-Z]+ /u, "")).test(request.url.split("?")[0]);
+				return route.startsWith(request.method) && pathToRegexp(route.replace(/^[A-Z]+ /u, "")).regexp.test(request.url.split("?")[0]);
 			});
 
 			if (router[pathName] !== undefined) {
 				request["query"] = Object.fromEntries(new URLSearchParams(request.url.split("?")[1]).entries());
-				request["params"] = pathToRegexp.match(pathName.replace(/^[A-Z]+ /u, ""), { "decode": decodeURIComponent })(request.url)?.["params"];
+				request["params"] = match(pathName.replace(/^[A-Z]+ /u, ""))(request.url)?.["params"];
 
 				response["json"] = function(body) {
 					return {

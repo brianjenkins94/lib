@@ -1,13 +1,13 @@
-const SLACK_WEBHOOK_URL = "";
-
-export function postMessage(message, options = {}) {
-	return fetch(SLACK_WEBHOOK_URL, {
-		"method": "POST",
-		"body": JSON.stringify({
-            //"channel": "#general",
-			"text": message.trimEnd(),
-			"icon_emoji": ":sunglasses:",
-			...options
-		})
-	});
+export function initSlack(webhookUrl) {
+	return function postMessage(message, options = {}) {
+		return fetch(webhookUrl, {
+			"method": "POST",
+			"body": JSON.stringify({
+				//"channel": "#general",
+				"text": message.trimEnd(),
+				"icon_emoji": ":sunglasses:",
+				...options
+			})
+		});
+	}
 }

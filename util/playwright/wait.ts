@@ -1,4 +1,4 @@
-import type { Page } from "playwright-chromium";
+import type { Page } from "playwright";
 
 import { sleep } from "../sleep";
 

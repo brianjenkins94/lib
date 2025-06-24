@@ -37,11 +37,23 @@ export function dedent(input) {
 	const indentationWidth = (/^ {2,}/mu.exec(input) ?? [""])[0].length;
 
 	return input
-		.replace(new RegExp("^( {" + indentationWidth + "})+", "gmu"), "")
+		.replace(/^\s*\n(?=\s*\S)/mu, "")
+		.replace(new RegExp("^( {" + indentationWidth + "})", "gmu"), "")
 		.replace(/(?<=^)\n|(?<=\n+) +(?=$)/gu, "");
 		//.replace(/^ +/gmu, function(match) {
 		//	return "\t".repeat(match.length / 4);
 		//});
+}
+
+export function indent(input) {
+    input = input
+        .replace(/^\t+/gmu, function(match) {
+            return " ".repeat(match.length * 4);
+        });
+
+    const indentationWidth = (/^ {2,}/mu.exec(input) ?? [""])[0].length;
+
+    return input.trim().split("\n").map((line, index) => " ".repeat(index && indentationWidth - 4) + line).join("\n");
 }
 
 export async function replaceAsync(regex, input, callback = async (execResults: RegExpExecArray) => Promise.resolve(execResults[1])) {
@@ -61,4 +73,20 @@ export async function replaceAsync(regex, input, callback = async (execResults: 
     output.push(input.substring(index));
 
     return output.join("");
+}
+
+export function longestCommonPrefix([first, ...strings]) {
+	const result = [];
+
+	for (let x = 0; x < first.length; x++) {
+		const char = first[x];
+
+		if (!strings.every((str) => str[x] === char)) {
+			break;
+		}
+
+		result.push(char);
+	}
+
+	return result.join("");
 }

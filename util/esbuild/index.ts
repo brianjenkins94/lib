@@ -10,7 +10,8 @@ import { build } from "esbuild";
 
 import { reduceAsync, mapEntries } from "../array"
 import * as fs from "../fs";
-import { importMetaUrl, virtualFileSystem } from "./plugins";
+import { importMetaUrl } from "./plugins/importMetaUrl";
+import { virtualFileSystem } from "./plugins/virtualFileSystem"
 import { __root } from "../env";
 
 export function esbuildOptions(overrides: BuildOptions = {}) {
@@ -58,9 +59,7 @@ export async function tsup(config: Options) {
 				"entryPoints": entry,
 				"metafile": true,
 				...config.esbuildOptions,
-				"inject": [
-					url.fileURLToPath(import.meta.resolve("node-stdlib-browser/helpers/esbuild/shim", import.meta.url))
-				],
+				//"inject": [url.fileURLToPath(import.meta.resolve("node-stdlib-browser/helpers/esbuild/shim", import.meta.url))],
 				"define": {
 					"import.meta.url": "location.origin"
 				},
@@ -119,9 +118,7 @@ export async function tsup(config: Options) {
 
 										const { "outputFiles": [outputFile] } = await esbuild({
 											"entryPoints": [filePath.replace(/\\/gu, "/")],
-											"inject": [
-												url.fileURLToPath(import.meta.resolve("node-stdlib-browser/helpers/esbuild/shim", import.meta.url))
-											],
+											//"inject": [url.fileURLToPath(import.meta.resolve("node-stdlib-browser/helpers/esbuild/shim", import.meta.url))],
 											"define": {
 												"Buffer": "Buffer",
 												"import.meta.url": "location.origin"

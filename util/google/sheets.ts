@@ -1,19 +1,15 @@
 import { sheets as sheetsApi } from "googleapis/build/src/apis/sheets";
 import type { sheets_v4 as SheetsApi } from "googleapis/build/src/apis/sheets";
-import { OAuth2Client } from "googleapis-common";
+import {  } from "googleapis-common";
+import { fetchWrapper } from "./auth";
+import { OAuth2Client } from "@badgateway/oauth2-client";
+import { OAuth2Client as GoogleOAuth2Client } from "googleapis-common";
 
-export class Sheet {
+class Sheet {
 	private readonly sheetsApi;
 	private readonly spreadSheetId;
 
-	public constructor({ accessToken, refreshToken, ...clientOptions }, spreadSheetId: string) {
-		const client = new OAuth2Client(clientOptions);
-
-		client.setCredentials({
-			"access_token": accessToken,
-			"refresh_token": refreshToken
-		});
-
+	public constructor(client, spreadSheetId: string) {
 		this.sheetsApi = sheetsApi({
 			"version": "v4",
 			"auth": client
@@ -23,33 +19,22 @@ export class Sheet {
 	}
 
 	public async get(range: string, options = { "valueRenderOption": "FORMATTED_VALUE" }) {
-		const data = [];
-
 		const rows = (await this.sheetsApi.spreadsheets.values.get({
 			...options,
 			"spreadsheetId": this.spreadSheetId,
-			"range": range
+			"range": range,
+			"fields": "values"
 		} as SheetsApi.Params$Resource$Spreadsheets$Values$Get))["data"]?.["values"] ?? [];
 
-		for (const row of rows) {
-			if (Array.isArray(row)) {
-				const columns = [];
-
-				for (const cell of row) {
-					try {
-						columns.push(JSON.parse(cell));
-					} catch (error) {
-						columns.push(cell);
-					}
-				}
-
-				data.push(columns);
-			} else {
-				data.push(JSON.parse(row));
+		return rows.map((row) => (Array.isArray(row) ? row : [row]).map(function(cell) {
+			if (typeof cell === "string" && /^[{\[].*[}\]]$/.test(cell.trim())) {
+				try {
+					return JSON.parse(cell);
+				} catch (error) {}
 			}
-		}
 
-		return data;
+			return cell;
+		}));
 	}
 
 	public async getMaxRange(sheetName: string) {
@@ -100,20 +85,33 @@ export class Sheet {
 	}
 }
 
-import { fetchWrapper, oauth2Client } from "./auth";
+export async function initSheets(oauth2ClientOptions, spreadsheetId) {
+	const client = new OAuth2Client({
+		"authorizationEndpoint": "./auth",
+		"tokenEndpoint": "./token",
+		"server": "https://accounts.google.com/o/oauth2/auth",
+		...oauth2ClientOptions
+	});
 
-// TODO: Memoize
-export async function initSheets(spreadsheetId) {
-	const { accessToken, refreshToken } = await fetchWrapper.getToken();
+	const { accessToken, refreshToken } = await fetchWrapper(client, {
+		"scopes": [
+			"https://www.googleapis.com/auth/spreadsheets",
+			"https://www.googleapis.com/auth/documents",
+			"https://www.googleapis.com/auth/drive",
+			"https://www.googleapis.com/auth/drive.file"
+		]
+	}).getToken();
 
-	// TODO: Pretty this up:
-	const sheets = new Sheet({
-		"clientId": oauth2Client.settings.clientId,
-		"clientSecret": oauth2Client.settings.clientSecret,
-		"redirectUri": "http://localhost:3000/callback",
-		"accessToken": accessToken,
-		"refreshToken": refreshToken
-	}, spreadsheetId);
+	const googleOAuth2Client = new GoogleOAuth2Client({
+		"clientId": oauth2ClientOptions.clientId,
+		"clientSecret": oauth2ClientOptions.clientSecret,
+		"redirectUri": "http://localhost:3000/callback"
+	});
 
-	return sheets;
+	googleOAuth2Client.setCredentials({
+		"access_token": accessToken,
+		"refresh_token": refreshToken
+	});
+
+	return new Sheet(googleOAuth2Client, spreadsheetId);
 }

@@ -1,133 +1,73 @@
-import { OAuth2Client, OAuth2Fetch } from "@badgateway/oauth2-client";
-import type { OAuth2Token } from "@badgateway/oauth2-client";
+import { OAuth2Fetch } from "@badgateway/oauth2-client";
+import type { OAuth2Client, OAuth2Token } from "@badgateway/oauth2-client";
 import * as fs from "../fs";
-import { createInterface } from "node:readline";
-
 import { __root } from "../env";
 import { createServer } from "../server";
-import { launch } from "../playwright";
+import { attach, launch } from "../playwright";
+import { waitForNavigation } from "../playwright/wait";
 
-const clientSecret = {
-	"client_id": "",
-	"project_id": "",
-	"auth_uri": "",
-	"token_uri": "",
-	"auth_provider_x509_cert_url": "",
-	"client_secret": "",
-	"redirect_uris": [""],
-	"javascript_origins": [""]
-};
+export function fetchWrapper(oauth2Client: OAuth2Client, { redirectUri = "http://localhost:3000/callback", scopes = [] }) {
+	const fetchWrapper = new OAuth2Fetch({
+		"client": oauth2Client,
+		"getNewToken": async () => {
+			// WORKAROUND: https://github.com/badgateway/oauth2-client/issues/110
+			if (fetchWrapper["activeGetStoredToken"] !== null) {
+				await fetchWrapper["activeGetStoredToken"];
 
-const EMAIL = "";
+				if (fs.existsSync("token.json")) {
+					return JSON.parse(await fs.readFile("token.json", { "encoding": "utf8" }));
+				}
+			}
 
-const AUTH_URL = clientSecret["auth_uri"];
+			let server;
 
-const CLIENT_ID = clientSecret["client_id"];
+			return new Promise<OAuth2Token>(function(resolve, reject) {
+				let page;
 
-const SECRET_KEY = clientSecret["client_secret"];
+				server = createServer();
 
-const REDIRECT_URI = clientSecret["redirect_uris"][0];
+				server.get("/callback", function(request, response) {
+					const { code } = request.query;
 
-const SCOPES = [
-	"https://www.googleapis.com/auth/spreadsheets",
-	"https://www.googleapis.com/auth/documents",
-	"https://www.googleapis.com/auth/drive",
-	"https://www.googleapis.com/auth/drive.file"
-];
+					resolve(oauth2Client.authorizationCode.getToken({
+						"code": code,
+						"redirectUri": redirectUri
+					}));
 
-export const oauth2Client = new OAuth2Client({
-	"authorizationEndpoint": "./auth",
-	"tokenEndpoint": "./token",
-	"server": AUTH_URL,
-	"clientId": CLIENT_ID,
-	"clientSecret": SECRET_KEY
-});
+					page.close();
 
-export const fetchWrapper = new OAuth2Fetch({
-	"client": oauth2Client,
-	"getNewToken": async function() {
-		// WORKAROUND: https://github.com/badgateway/oauth2-client/issues/110
-		if (fetchWrapper.activeGetStoredToken !== null) {
-			await fetchWrapper.activeGetStoredToken;
+					return {
+						"statusCode": 200
+					};
+				});
 
+				server.listen(parseInt(new URL(redirectUri).port), async function() {
+					page = await attach(oauth2Client.settings.server + "?" + new URLSearchParams({
+						"access_type": "offline",
+						"response_type": "code",
+						"scope": scopes.join(" "),
+						"client_id": oauth2Client.settings.clientId,
+						//"state": "",
+						"redirect_uri": redirectUri
+					}).toString());
+				});
+			}).then(function() {
+				server.close();
+			});
+		},
+		"storeToken": function(token) {
+			if (!fs.existsSync("token.json")) {
+				fs.writeFileSync("token.json", JSON.stringify(token, undefined, "\t") + "\n");
+			}
+		},
+		"getStoredToken": async function() {
 			if (fs.existsSync("token.json")) {
 				return JSON.parse(await fs.readFile("token.json", { "encoding": "utf8" }));
+			} else {
+				return null;
 			}
 		}
+	});
 
-		return new Promise<OAuth2Token>(function(resolve, reject) {
-			let page;
-
-			const server = createServer();
-
-			server.get("/callback", function(request, response) {
-				const { code } = request.query;
-
-				resolve(oauth2Client.authorizationCode.getToken({
-					"code": code,
-					"redirectUri": REDIRECT_URI
-				}));
-
-				server.close();
-
-				page.close();
-
-				return {
-					"statusCode": 200
-				};
-			});
-
-			server.listen(parseInt(new URL(REDIRECT_URI).port), async function() {
-				page = await launch(AUTH_URL + "?" + new URLSearchParams({
-					"access_type": "offline",
-					"response_type": "code",
-					"scope": SCOPES.join(" "),
-					"client_id": CLIENT_ID,
-					//"state": "",
-					"redirect_uri": REDIRECT_URI
-				}).toString());
-
-				// Enter email
-				const nextButtonSelector = "#identifierNext";
-
-				await page.waitForSelector("input[type=\"email\"]");
-				await page.type("input[type=\"email\"]", EMAIL);
-				await page.waitForSelector(nextButtonSelector);
-				await page.click(nextButtonSelector);
-
-				// Enter password
-				const passwordNextButtonSelector = "#passwordNext";
-
-				await page.waitForSelector("input[type=\"password\"]");
-
-				const readline = createInterface({
-					"input": process.stdin,
-					"output": process.stdout
-				});
-
-				const PASSWORD = await new Promise(function(resolve, reject) {
-					readline.question("Password: ", resolve);
-				});
-
-				readline.close();
-
-				await page.type("input[type=\"password\"]", PASSWORD);
-
-				await page.waitForSelector(passwordNextButtonSelector);
-				await page.click(passwordNextButtonSelector);
-			});
-		});
-	},
-	"storeToken": function(token) {
-		if (!fs.existsSync("token.json")) {
-			fs.writeFileSync("token.json", JSON.stringify(token, undefined, "\t") + "\n");
-		}
-	},
-	"getStoredToken": async function() {
-		if (fs.existsSync("token.json")) {
-			return JSON.parse(await fs.readFile("token.json", { "encoding": "utf8" }));
-		} else {
-			return null;
-		}
-	}
-});
+	return fetchWrapper;
+}

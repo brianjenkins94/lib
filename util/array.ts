@@ -10,7 +10,7 @@ export function partition(promises: (() => Promise<any>)[], callback) {
 	}, [[], []]);
 }
 
-export async function mapAsync(array, callback, filter?) {
+export async function mapAsync(array, callback = (promise) => promise(), filter?) {
 	if (filter !== undefined) {
 		return (await Promise.all(array.map(callback))).filter(filter);
 	} else {
@@ -34,6 +34,12 @@ export function series(promises: (() => Promise<any>)[]) {
 	}, Promise.resolve());
 }
 
+export function mapSeries(array: (() => Promise<any>)[], callback) {
+	return array.reduce(async function(previous, next) {
+		return [...(await previous), await callback(next)];
+	}, Promise.resolve([]));
+}
+
 export function reduceAsync(promises: ((...args: any[]) => Promise<unknown>)[], initial?) {
 	return promises.reduce(async function(previous, next) {
 		return next(await previous);
@@ -42,7 +48,7 @@ export function reduceAsync(promises: ((...args: any[]) => Promise<unknown>)[], 
 
 async function mapEntriesAsync(object, callback, filter?) {
 	if (filter !== undefined) {
-		return Object.fromEntries((await mapAsync(Array.isArray(object) ? object : Object.entries(object), callback)).filter(filter));
+		return Object.fromEntries((await mapAsync(Array.isArray(object) ? object : Object.entries(object), callback, filter)));
 	} else {
 		return Object.fromEntries(await mapAsync(Array.isArray(object) ? object : Object.entries(object), callback));
 	}

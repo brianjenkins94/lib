@@ -1,5 +1,3 @@
-import { table as createTable } from "table";
-
 const defaultOptions = {
 	"drawHorizontalLine": function(lineIndex, rowCount) {
 		return false; // lineIndex <= 1 || lineIndex === rowCount;
@@ -9,7 +7,13 @@ const defaultOptions = {
 	}
 };
 
-export function table(data, options = defaultOptions) {
+let createTable;
+
+try {
+	createTable = (await import("table")).table
+} catch (error) {}
+
+export async function table(data, options = defaultOptions) {
 	if (typeof data === "object" && !Array.isArray(data)) {
 		data = Object.entries(data);
 	}

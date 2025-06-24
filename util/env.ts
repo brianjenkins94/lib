@@ -1,5 +1,5 @@
-import * as path from "node:path";
-import * as url from "node:url";
+import * as path from "path";
+import * as url from "url";
 
 const __filename = url.fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -18,7 +18,7 @@ const isDeno = ('self' in globalThis && 'Deno' in globalThis.self) || 'Deno' in 
 
 const isNode = !isBun && ('self' in globalThis && 'process' in globalThis.self) || 'process' in globalThis
 
-const isBrowser = !isBun && !isDeno && ('self' in globalThis && 'addEventListener' in globalThis.self) || 'window' in globalThis
+export const isBrowser = !isBun && !isDeno && ('self' in globalThis && 'addEventListener' in globalThis.self) || 'window' in globalThis
 
 export function getRuntime() {
     return isBrowser ? 'browser' : isBun ? 'bun' : isDeno ? 'deno' : isNode ? 'node' : 'unknown'

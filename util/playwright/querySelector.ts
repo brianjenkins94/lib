@@ -1,4 +1,4 @@
-import type { ElementHandle, FrameLocator, Page } from "playwright-chromium";
+import type { ElementHandle, FrameLocator, Page } from "playwright";
 
 export function querySelector(page: FrameLocator | Page) {
 	return async function(...selectors: string[]) {

@@ -11,7 +11,8 @@ export function columnToLetter(n) {
 
 export function initHyperFormula(data) {
 	const hfInstance = HyperFormula.buildFromArray(data, {
-		"licenseKey": "gpl-v3"
+		"licenseKey": "gpl-v3",
+		"maxRows": 1_000_000
 	});
 
 	const sheetId = hfInstance.getSheetId(hfInstance.getSheetNames()[0]);
@@ -51,7 +52,7 @@ export function initHyperFormula(data) {
 		// `end` starts with a digit
 		// Example: A1:1
 		case /^\d/u.test(end):
-			end = /^\d+$/u.exec(start)[0] === end ? /^\D+/u.exec(start)[0] + width : columnToLetter(width) + height;
+			end = /\d+$/u.exec(start)[0] === end ? /^\D+/u.exec(start)[0] + width : columnToLetter(width) + height;
 			break;
 		default:
 		}
@@ -104,7 +105,13 @@ export function initHyperFormula(data) {
 				}
 
 				if (Array.isArray(changes)) {
-					changes = CSV.parse([headers, ...changes]);
+					if (headers.every((header) => Array.isArray(header))) {
+						headers = headers.reduce((result, headers) => result.map((value, index) => headers[index] !== undefined ? headers[index] : value));
+					}
+
+					if (changes.every((change) => !Array.isArray(change) && typeof change === "object")) {
+						changes = CSV.parse([headers, ...changes]);
+					}
 				}
 
 				const { start, end } = this.range;
