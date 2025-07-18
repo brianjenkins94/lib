@@ -1,6 +1,6 @@
 {
 	"name": "cd",
-	"on": {},
+	"on": "workflow_call",
 	"concurrency": {
 		"group": "${{ github.ref }}",
 		"cancel-in-progress": true
