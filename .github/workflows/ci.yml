@@ -85,7 +85,7 @@
         {
           "run": "gh workflow run cd",
           "env": {
-            "GITHUB_TOKEN": "${{ secrets.PAT }}"
+            "GH_TOKEN": "${{ secrets.PAT }}"
           }
         }
       ],
