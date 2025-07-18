@@ -67,7 +67,9 @@
         {
         	"id": "tag",
         	"working-directory": "${{ matrix.package }}",
-          "run": "PACKAGE=\"${{ matrix.package }}\"; TAG_NAME=$(jq --raw-output 'select(.version != null and .version != \"\") | \"\\(.name)-\\(.version)\"' package.json || true); if [[ -n \"$TAG_NAME\" ]] && ! gh release list --json tagName --jq '.[].tagName' | grep -qx \"$TAG_NAME\"; then echo \"tag=$TAG_NAME\" >> \"$GITHUB_OUTPUT\"; else TAG_NAME=$(gh release list --json tagName --jq \"([.[] | select(.tagName | startswith(\\\"${PACKAGE}-\\\")) | .tagName] | map(sub(\\\"${PACKAGE}-\\\"; \\\"\\\")) | map(split(\\\".\\\") | map(tonumber)) | sort | last | map(tostring) | join(\\\".\\\") | \\\"${PACKAGE}-\\\" + .) // \\\"${PACKAGE}-0.1.0\\\"\"); echo \"tag=$TAG_NAME\" >> \"$GITHUB_OUTPUT\"; fi" },
+          "run": "PACKAGE=\"${{ matrix.package }}\"; TAG_NAME=$(jq --raw-output 'select(.version != null and .version != \"\") | \"\\(.name)-\\(.version)\"' package.json || true); if [[ -n \"$TAG_NAME\" ]] && ! gh release list --json tagName --jq '.[].tagName' | grep -qx \"$TAG_NAME\"; then echo \"tag=$TAG_NAME\" >> \"$GITHUB_OUTPUT\"; else TAG_NAME=$(gh release list --json tagName --jq \"([.[] | select(.tagName | startswith(\\\"${PACKAGE}-\\\")) | .tagName] | map(sub(\\\"${PACKAGE}-\\\"; \\\"\\\")) | map(split(\\\".\\\") | map(tonumber)) | sort | last | map(tostring) | join(\\\".\\\") | \\\"${PACKAGE}-\\\" + .) // \\\"${PACKAGE}-0.1.0\\\"\"); echo \"tag=$TAG_NAME\" >> \"$GITHUB_OUTPUT\"; fi"
+        },
+        { "run": "if [[ -z \"$GH_TOKEN\" ]]; then echo \"GH_TOKEN is not set or is empty.\"; else echo \"GH_TOKEN is set.\"; fi" },
         {
           "uses": "softprops/action-gh-release@v2",
           "with": {
@@ -82,7 +84,7 @@
       "runs-on": "ubuntu-latest",
       "needs": ["changes", "release"],
       "steps": [
-        { "run": "if [[ -z \"$GH_TOKEN\" ]]; then echo \"GH_TOKEN is not set or is empty\"; else echo \"GH_TOKEN is set\"; fi" },
+        { "run": "if [[ -z \"$GH_TOKEN\" ]]; then echo \"GH_TOKEN is not set or is empty.\"; else echo \"GH_TOKEN is set.\"; fi" },
         {
           "run": "gh workflow run cd",
           "env": {
