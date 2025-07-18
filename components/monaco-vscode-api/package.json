@@ -1,19 +1,31 @@
 {
   "name": "monaco-vscode-api-esbuild",
+  "version": "0.0.0",
+  "description": "",
+  "type": "module",
   "author": "Brian Jenkins",
   "license": "MIT",
-  "type": "module",
   "scripts": {
-    "preinstall": "chmod 755 ./install.sh && ./install.sh",
-    "serve": "npx http-server dist/",
+    "build": "tsup --format esm --treeshake --outDir docs/",
+    "postinstall": "chmod 755 ./install.sh && ./install.sh",
+    "serve": "npx http-server docs/",
     "start": "npm run serve"
   },
-  "engines": {
-    "node": ">=22.0.0",
-    "npm": ">=10.0.0"
+  "devDependencies": {
+    "@tsconfig/node-lts": "latest",
+    "@types/node": "latest",
+    "import-meta-resolve": "latest",
+    "json5": "latest",
+    "node-stdlib-browser": "latest",
+    "tsup": "latest",
+    "typescript": "latest",
+    "vscode-languageclient": "latest",
+    "vscode-languageserver": "latest",
+    "vscode-languageserver-textdocument": "latest"
   },
-  "exports": {
-    ".": "./main.ts"
+  "engines": {
+    "node": ">=18.0.0",
+    "npm": ">=8.0.0"
   },
   "sideEffects": true
 }

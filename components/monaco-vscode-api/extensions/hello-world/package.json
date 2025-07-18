@@ -44,10 +44,5 @@
 				}
 			}
 		]
-	},
-	"devDependencies": {
-		"vscode-languageclient": "latest",
-		"vscode-languageserver": "latest",
-		"vscode-languageserver-textdocument": "latest"
 	}
 }
