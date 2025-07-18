@@ -8,6 +8,8 @@ export function proxy(from, to) {
 	}).listen(from);
 }
 
+/*
 if (import.meta.url === url.pathToFileURL(process.argv[1]).toString()) {
     proxy(8080, process.argv[2]);
 }
+*/

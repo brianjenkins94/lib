@@ -59,6 +59,8 @@ export async function tree(cwd = process.cwd(), preface = []) {
 	}
 }
 
+/*
 if (import.meta.url === url.pathToFileURL(process.argv[1]).toString()) {
 	tree();
 }
+*/

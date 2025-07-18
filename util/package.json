@@ -6,20 +6,20 @@
     "scripts": {
         "build": "npx tsx ../scripts/build.ts"
     },
-    "dependencies": {
-        "@badgateway/oauth2-client": "^2.4.2",
-        "@clack/prompts": "^0.7.0",
+    "peerDependencies": {
+        "@badgateway/oauth2-client": "^3.2.0",
         "bottleneck": "^2.19.5",
         "ejs": "^3.1.10",
         "gatsby-source-google-docs": "^2.4.3",
-        "googleapis": "^144.0.0",
-        "hyperformula": "^2.7.1",
-        "mime": "^4.0.4",
+        "googleapis": "^153.0.0",
+        "http-proxy": "^1.18.1",
+        "hyperformula": "^3.0.0",
+        "jsonc-parser": "^3.3.1",
+        "mime": "^4.0.7",
         "node-schedule": "^2.1.1",
-        "papaparse": "^5.4.1",
+        "papaparse": "^5.5.3",
         "path-to-regexp": "^8.2.0",
-        "playwright-chromium": "^1.48.2",
-        "table": "^6.8.2"
+        "playwright": "^1.54.1"
     },
     "engines": {
         "node": ">=22.0.0",

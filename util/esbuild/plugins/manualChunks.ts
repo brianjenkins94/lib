@@ -1,7 +1,7 @@
 import * as path from "path";
 import * as url from "url";
 
-import { virtualFileSystem } from "./"
+import { virtualFileSystem } from "./virtualFileSystem"
 import * as fs from "../../fs"
 import { mapAsync, mapEntries } from "../../array";
 import { __root } from "../../env";

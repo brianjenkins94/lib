@@ -30,8 +30,8 @@ for await (const file of fs.glob(path.join(__root, "util", "**", "*.ts"), {
 
             const [packageName] = /(?<=').*(?=')/u.exec(Buffer.concat(buffer).toString())
 
-            console.log(">", ["npx", "install", packageName + "@latest"].join(" "))
-            const subprocess = spawn("npm", ["install", packageName + "@latest"], {
+            console.log(">", ["npx", "install", "--save-peer", packageName + "@latest"].join(" "))
+            const subprocess = spawn("npm", ["install", "--save-peer", packageName + "@latest"], {
                 "cwd": path.join(__root, "util"),
                 "shell": true,
                 "stdio": "inherit"
