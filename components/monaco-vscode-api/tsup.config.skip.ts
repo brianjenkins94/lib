@@ -8,7 +8,7 @@ import JSON5 from "json5";
 import polyfillNode from "node-stdlib-browser/helpers/esbuild/plugin"; // NOT "esbuild-plugins-node-modules-polyfill" OR "esbuild-plugin-polyfill-node"
 import stdLibBrowser from "node-stdlib-browser";
 
-import { esbuildOptions, tsup } from "./util/esbuild";
+import { esbuildOptions, tsup } from "../../util/esbuild";
 
 const cacheDirectory = path.join(__dirname, ".cache");
 const distDirectory = path.join(__dirname, "docs");
