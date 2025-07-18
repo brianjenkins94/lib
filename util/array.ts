@@ -65,3 +65,4 @@ export function mapEntries(object: [string, any][] | object, callback, filter?) 
 		return Object.fromEntries<[string, any][]>((Array.isArray(object) ? object : Object.entries(object)).map(callback));
 	}
 }
+
