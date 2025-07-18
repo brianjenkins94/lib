@@ -67,12 +67,6 @@
         { "run": "npm install" }, #{ "uses": "bahmutov/npm-install@v1", "with": { "useLockFile": false } },
         #{ "run": "npm run build" },
         {
-          "env": {
-            "GH_TOKEN": "${{ secrets.PAT }}"
-          },
-          "run": "if [[ -z \"$GH_TOKEN\" ]]; then echo \"GH_TOKEN is not set or is empty.\"; else echo \"GH_TOKEN is set.\"; fi"
-        },
-        {
         	"id": "tag",
           "env": {
             "GH_TOKEN": "${{ secrets.PAT }}"
@@ -94,12 +88,6 @@
       "runs-on": "ubuntu-latest",
       "needs": ["changes", "release"],
       "steps": [
-        {
-          "env": {
-            "GH_TOKEN": "${{ secrets.PAT }}"
-          },
-          "run": "if [[ -z \"$GH_TOKEN\" ]]; then echo \"GH_TOKEN is not set or is empty.\"; else echo \"GH_TOKEN is set.\"; fi"
-        },
         {
           "env": {
             "GH_TOKEN": "${{ secrets.PAT }}"
