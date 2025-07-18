@@ -45,12 +45,16 @@ await Promise.all(workspaces.map(function(workspace) {
                 //"stdio": "inherit"
             });
 
+            const chunks = [];
+
+            subprocess.stderr.on("data", (chunk) => chunks.push(chunk));
+
             subprocess.on("close", function(code) {
                 subprocess.unref()
 
-                resolve(code);
+                resolve(Buffer.concat(chunks).toString().includes("Missing script") ?  0 : code);
             })
-        }),
+        })
     ])
 }))
 
