@@ -34,6 +34,9 @@
         { "uses": "actions/checkout@v4" },
         {
           "id": "enumerate",
+          "env": {
+            "GH_TOKEN": "${{ secrets.PAT }}"
+          },
           "run": "PACKAGE=\"${{ matrix.package }}\"; TAG_NAME=$(jq --raw-output 'select(.version != null and .version != \"\") | \"\\(.name)-\\(.version)\"' package.json || true); if [[ -n \"$TAG_NAME\" ]] && ! gh release list --json tagName --jq '.[].tagName' | grep -qx \"$TAG_NAME\"; then echo \"tag=$TAG_NAME\" >> \"$GITHUB_OUTPUT\"; else TAG_NAME=$(gh release list --json tagName --jq \"([.[] | select(.tagName | startswith(\\\"${PACKAGE}-\\\")) | .tagName] | map(sub(\\\"${PACKAGE}-\\\"; \\\"\\\")) | map(split(\\\".\\\") | map(tonumber)) | sort | last | (if . == null then null else (map(tostring) | join(\\\".\\\") | \\\"${PACKAGE}-\\\" + .) end)) // \\\"${PACKAGE}-0.1.0\\\"\"); echo \\\"tag=$TAG_NAME\\\" >> \\\"$GITHUB_OUTPUT\\\"; fi"        },
         {
           "if": "steps.enumerate.outputs.PACKAGES != '{}'",
