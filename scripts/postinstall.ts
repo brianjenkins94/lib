@@ -39,22 +39,18 @@ await Promise.all(workspaces.map(function(workspace) {
             })
         }),
         () => new Promise(function(resolve, reject) {
-            const subprocess = spawn("npm", ["run", "build"], {
+            const subprocess = spawn("npm", ["run", "build", "--if-present"], {
                 "cwd": workspace,
                 "shell": true,
                 //"stdio": "inherit"
             });
 
-            const chunks = [];
-
-            subprocess.stderr.on("data", (chunk) => chunks.push(chunk));
-
             subprocess.on("close", function(code) {
                 subprocess.unref()
 
-                resolve(Buffer.concat(chunks).toString().includes("Missing script") ?  0 : code);
+                resolve(code);
             })
-        })
+        }),
     ])
 }))
 
