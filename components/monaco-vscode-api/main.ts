@@ -664,7 +664,6 @@ const { registerFileUrl, getApi } = registerExtension({
 	"name": "humanify",
 	"displayName": "humanify",
 	"description": "",
-	"version": "1.0.0",
 	"publisher": "vscode-samples",
 	"engines": {
 		"vscode": "^1.84.0"
