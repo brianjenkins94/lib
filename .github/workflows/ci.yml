@@ -82,6 +82,7 @@
       "runs-on": "ubuntu-latest",
       "needs": ["changes", "release"],
       "steps": [
+        { "run": "if [[ -z \"$GH_TOKEN\" ]]; then echo "GH_TOKEN is not set or is empty"; else echo "GH_TOKEN is set"; fi" },
         {
           "run": "gh workflow run cd",
           "env": {
