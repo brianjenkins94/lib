@@ -3,9 +3,6 @@
     "author": "Brian Jenkins",
     "license": "MIT",
     "type": "module",
-    "scripts": {
-        "build": "npx tsx ../scripts/build.ts"
-    },
     "peerDependencies": {
         "@badgateway/oauth2-client": "^3.2.0",
         "bottleneck": "^2.19.5",
