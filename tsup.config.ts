@@ -1,6 +1,6 @@
 import { defineConfig } from "tsup";
 import { esbuildOptions } from "./util/esbuild";
-import { precompile } from "./util/esbuild/plugins";
+import { precompile } from "./util/esbuild/plugins/precompile";
 
 export default defineConfig({
 	"format": "esm",
