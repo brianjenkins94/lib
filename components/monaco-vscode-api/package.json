@@ -4,7 +4,7 @@
   "license": "MIT",
   "type": "module",
   "scripts": {
-    "build": "tsup --format esm --treeshake --outDir docs/",
+    "build": "#tsup --format esm --treeshake --outDir docs/",
     "postinstall": "chmod 755 ./install.sh && ./install.sh",
     "serve": "npx http-server docs/",
     "start": "npm run serve"

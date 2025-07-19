@@ -3,6 +3,9 @@
   "on": {
     "workflow_dispatch": null
   },
+  "concurrency": {
+    "group": "${{ github.workflow }}-${{ github.ref }}",
+  },
   "permissions": {
     "contents": "read",
     "pages": "write",
@@ -76,7 +79,7 @@
         { "uses": "actions/setup-node@v4", "with": { "node-version": 22 } },
 
         { "run": "npm install" }, #{ "uses": "bahmutov/npm-install@v1", "with": { "useLockFile": false } },
-        { "run": "npm run " },
+        { "run": "npm run " }, # TODO
 
         { "run": "gh run download --name \"github-pages\""},
         { "run": "tar -xvf artifact.tar --keep-old-files --directory docs/" },
