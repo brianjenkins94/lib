@@ -1,7 +1,0 @@
-{
-    "imports": {
-        "picocolors": "npm:picocolors",
-        "googleapis-common": "npm:googleapis-common",
-        "esbuild": "npm:esbuild"
-    }
-}
