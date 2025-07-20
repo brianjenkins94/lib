@@ -18,7 +18,7 @@
         { "uses": "actions/checkout@v4" },
         {
           "id": "enumerate",
-          "run": "echo PACKAGES=\"$(git ls-files */package.json */*/package.json  --exclude=.* --exclude=**/node_modules/* | jq --compact-output --raw-input --slurp 'split(\"\\n\")[:-1] | map(sub(\"/package.json$\"; \"\")) | reduce .[] as $key ({}; .[$key] = \"\\($key)/**\")')\" >> $GITHUB_OUTPUT"
+          "run": "echo PACKAGES=\"$(git ls-files */package.json */*/package.json --exclude=.* --exclude=**/node_modules/* | jq --compact-output --raw-input --slurp 'split(\"\\n\")[:-1] | map(sub(\"/package.json$\"; \"\")) | reduce .[] as $key ({}; .[$key] = \"\\($key)/**\")')\" >> $GITHUB_OUTPUT"
         },
         {
           "if": "steps.enumerate.outputs.PACKAGES != '{}'",
@@ -83,7 +83,7 @@
           "env": {
             "GH_TOKEN": "${{ secrets.PAT }}"
           },
-          "run": "gh run download --name github-pages; tar -xvf artifact.tar --keep-old-files --directory docs/"
+          "run": "gh run download --name github-pages; tar -xvf artifact.tar --keep-old-files --directory docs/ || true"
         },
 
         { "run": "npm install" }, #{ "uses": "bahmutov/npm-install@v1", "with": { "useLockFile": false } },
