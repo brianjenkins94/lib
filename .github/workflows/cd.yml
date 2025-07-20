@@ -83,7 +83,7 @@
           "env": {
             "GH_TOKEN": "${{ secrets.PAT }}"
           },
-          "run": "RUN_ID=$(gh run list --workflow=cd.yml --json databaseId,status,conclusion --jq '[.[] | select(.status == \"completed\" and .conclusion == \"success\")][0].databaseId'); if [[ -n \"$RUN_ID\" ]]; then gh run download \"$RUN_ID\" --name cd; tar -xvf cd.tar --keep-old-files --directory docs/; fi"
+          "run": "gh run download --name github-pages; tar -xvf artifact.tar --keep-old-files --directory docs/"
         },
 
         { "run": "npm install" }, #{ "uses": "bahmutov/npm-install@v1", "with": { "useLockFile": false } },
