@@ -6,6 +6,7 @@ import * as path from "path";
 import * as fs from "../util/fs";
 import { createGunzip, createGzip } from "zlib";
 import tarStream from "tar-stream";
+import { spawn } from "child_process";
 
 const distDirectory = path.join(__root, "docs");
 
@@ -70,6 +71,22 @@ for (const workspace of workspaces) {
         "files": files,
         "exports": []
     })
+
+    // Ensure a release exists for this package.
+    const code = await new Promise(function(resolve, reject) {
+        const gh = spawn("gh", ["release", "view", workspace + "@" + version]);
+
+        gh.on("exit", function(code) {
+            resolve(code)
+        });
+    });
+
+    if (code !== 0) {
+        console.error(`❌ Skipping ${workspace}: no GitHub release exists`);
+
+        continue;
+    }
+    // </>
 
     const pack = tarStream.pack();
 
