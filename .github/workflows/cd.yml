@@ -64,6 +64,7 @@
         {
           "uses": "softprops/action-gh-release@v2",
           "with": {
+            "draft": true,
             "tag_name": "${{ steps.tag.outputs.TAG_NAME }}",
             "token": "${{ secrets.PAT }}"
           }
@@ -78,10 +79,22 @@
         { "uses": "actions/checkout@v4" },
         { "uses": "actions/setup-node@v4", "with": { "node-version": 22 } },
 
-        { "run": "RUN_ID=$(gh run list --workflow=cd.yml --json databaseId,status,conclusion --jq '[.[] | select(.status == \"completed\" and .conclusion == \"success\")][0].databaseId'); if [[ -n \"$RUN_ID\" ]]; then gh run download \"$RUN_ID\" --name cd; tar -xvf cd.tar --keep-old-files --directory docs/; fi" },
+        {
+          "env": {
+            "GH_TOKEN": "${{ secrets.PAT }}"
+          },
+          "run": "RUN_ID=$(gh run list --workflow=cd.yml --json databaseId,status,conclusion --jq '[.[] | select(.status == \"completed\" and .conclusion == \"success\")][0].databaseId'); if [[ -n \"$RUN_ID\" ]]; then gh run download \"$RUN_ID\" --name cd; tar -xvf cd.tar --keep-old-files --directory docs/; fi"
+        },
 
         { "run": "npm install" }, #{ "uses": "bahmutov/npm-install@v1", "with": { "useLockFile": false } },
         { "run": "npm run publish" },
+
+        {
+          "env": {
+            "GH_TOKEN": "${{ secrets.PAT }}"
+          },
+          "run": "for PACKAGE in $(jq -r '.[]' <<< '${{ needs.changes.outputs.packages }}'); do TAG_NAME=$(jq -r 'select(.version != null and .version != \"\") | \"\\(.name)@\\(.version)\"' \"$PACKAGE/package.json\"); ARCHIVE=\"docs/${TAG_NAME}.tgz\"; if [[ -f \"$ARCHIVE\" ]]; then echo \"Promoting $TAG_NAME\"; gh release edit \"$TAG_NAME\" --draft=false; else echo \"Deleting $TAG_NAME (not published)\"; gh release delete \"$TAG_NAME\" --yes || true; git push origin \":refs/tags/$TAG_NAME\" || true; fi; done"
+        },
 
         {
           "uses": "actions/upload-pages-artifact@v3",

@@ -79,7 +79,13 @@ for (const workspace of workspaces) {
 
     pack.finalize();
 
-    const output = fs.createWriteStream(path.join(distDirectory, workspace + "@latest.tgz"));
+    const outputDirectory = path.join(distDirectory, path.dirname(workspace))
+
+    const output = fs.createWriteStream(path.join(outputDirectory, path.basename(workspace) + "@" + version + ".tgz"));
 
     pack.pipe(createGzip()).pipe(output);
+
+    output.on("finish", async function() {
+        await fs.copyFile(path.join(outputDirectory, path.basename(workspace) + "@" + version + ".tgz"), path.join(outputDirectory, path.basename(workspace) + "@latest.tgz"))
+    });
 }
