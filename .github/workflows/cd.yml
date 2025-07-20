@@ -22,7 +22,7 @@
         },
         {
           "if": "steps.enumerate.outputs.PACKAGES != '{}'",
-          "uses": "dorny/paths-filter@v2",
+          "uses": "dorny/paths-filter@v3",
           "id": "filter",
           "with": {
             "filters": "${{ steps.enumerate.outputs.PACKAGES }}"
@@ -45,8 +45,8 @@
         }
       },
       "steps": [
-        { "uses": "actions/checkout@v3" },
-        { "uses": "actions/setup-node@v3", "with": { "node-version": 22 } },
+        { "uses": "actions/checkout@v4" },
+        { "uses": "actions/setup-node@v4", "with": { "node-version": 22 } },
         { "run": "npm install" }, #{ "uses": "bahmutov/npm-install@v1", "with": { "useLockFile": false } },
         {
           "working-directory": "${{ matrix.package }}",
