@@ -30,8 +30,7 @@
       "uses": "brianjenkins94/lib/.github/workflows/cd.yml@main",
       "secrets": {
         "GH_TOKEN": "${{ secrets.PAT }}"
-      },
-      "timeout-minutes": 15
+      }
     }
   }
 }
