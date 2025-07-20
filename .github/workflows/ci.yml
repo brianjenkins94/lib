@@ -29,6 +29,7 @@
       "runs-on": "ubuntu-latest",
       "needs": ["build-lint-test"],
       "uses": "brianjenkins94/lib/.github/workflows/cd.yml@main",
+      "with": {},
       "secrets": {
         "GH_TOKEN": "${{ secrets.PAT }}"
       },
