@@ -6,8 +6,7 @@
     }
   },
   "concurrency": {
-    "group": "${{ github.workflow }}-${{ github.ref }}",
-    "cancel-in-progress": true
+    "group": "${{ github.workflow }}-${{ github.ref }}"
   },
   "permissions": {
     "contents": "read",
@@ -33,10 +32,6 @@
     "dispatch": {
       "needs": ["build-lint-test"],
       "uses": "brianjenkins94/lib/.github/workflows/cd.yml@main"
-      #"with": {},
-      #"secrets": {
-      #  "GH_TOKEN": "${{ secrets.PAT }}"
-      #}
     }
   }
 }
