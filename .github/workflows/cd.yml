@@ -1,7 +1,7 @@
 {
   "name": "cd",
   "on": {
-    "workflow_dispatch": null
+    "workflow_call": null
   },
   "concurrency": {
     "group": "${{ github.workflow }}-${{ github.ref }}",
@@ -51,6 +51,13 @@
         {
           "working-directory": "${{ matrix.package }}",
           "run": "npm run build --if-present"
+        },
+
+        {
+          "env": {
+            "GH_TOKEN": "${{ secrets.PAT }}"
+          },
+          "run": "for TAG in $(gh release list --limit 100 --json tagName,isDraft --jq '.[] | select(.isDraft) | .tagName'); do gh release delete -y \"$TAG\"; done"
         },
 
         {
