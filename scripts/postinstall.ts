@@ -3,9 +3,7 @@ import { mapAsync } from "../util/array"
 import { spawn } from "child_process";
 import * as path from "path";
 
-const gitLs = spawn("git", ["ls-files", "\"**/package.json\""], {
-    "shell": true
-});
+const gitLs = spawn("sh", ["-c", "git ls-files */package.json */*/package.json"]);
 
 const workspaces = (await new Promise<string[]>(function(resolve, reject) {
     const chunks = []

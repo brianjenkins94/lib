@@ -19,6 +19,7 @@
     "module-from-string": "latest",
     "node-stdlib-browser": "latest",
     "react-dom": "latest",
+    "tar-stream": "latest",
     "ts-morph": "latest",
     "ts2esm": "latest",
     "tsup": "latest",

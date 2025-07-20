@@ -18,7 +18,7 @@
         { "uses": "actions/checkout@v4" },
         {
           "id": "enumerate",
-          "run": "echo PACKAGES=\"$(git ls-files */package.json */*/package.json --exclude=**/node_modules/* --exclude=.* | jq --compact-output --raw-input --slurp 'split(\"\\n\")[:-1] | map(sub(\"/package.json$\"; \"\")) | reduce .[] as $key ({}; .[$key] = \"\\($key)/**\")')\" >> $GITHUB_OUTPUT"
+          "run": "echo PACKAGES=\"$(git ls-files */package.json */*/package.json  --exclude=.* --exclude=**/node_modules/* | jq --compact-output --raw-input --slurp 'split(\"\\n\")[:-1] | map(sub(\"/package.json$\"; \"\")) | reduce .[] as $key ({}; .[$key] = \"\\($key)/**\")')\" >> $GITHUB_OUTPUT"
         },
         {
           "if": "steps.enumerate.outputs.PACKAGES != '{}'",
@@ -77,6 +77,8 @@
       "steps": [
         { "uses": "actions/checkout@v4" },
         { "uses": "actions/setup-node@v4", "with": { "node-version": 22 } },
+
+        { "run": "RUN_ID=$(gh run list --workflow=cd.yml --json databaseId,status,conclusion --jq '[.[] | select(.status == \"completed\" and .conclusion == \"success\")][0].databaseId'); if [[ -n \"$RUN_ID\" ]]; then gh run download \"$RUN_ID\" --name cd; tar -xvf cd.tar --keep-old-files --directory docs/; fi" },
 
         { "run": "npm install" }, #{ "uses": "bahmutov/npm-install@v1", "with": { "useLockFile": false } },
         { "run": "npm run publish" },

@@ -6,9 +6,7 @@ import * as url from "url";
 
 export async function build(workspaces?) {
     workspaces ??= (await new Promise<string[]>(function(resolve, reject) {
-        const gitLs = spawn("git", ["ls-files", "*/package.json", "*/*/package.json"], {
-            "shell": true
-        });
+        const gitLs = spawn("sh", ["-c", "git ls-files */package.json */*/package.json"]);
 
         const chunks = []
 
