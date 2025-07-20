@@ -73,15 +73,21 @@ for (const workspace of workspaces) {
     })
 
     // Ensure a release exists for this package.
-    const code = await new Promise(function(resolve, reject) {
-        const gh = spawn("gh", ["release", "view", workspace + "@" + version]);
+    const isDraft = await new Promise(function(resolve, reject) {
+        const gh = spawn("gh", ["release", "view", workspace + "@" + version, "--json", "isDraft", "--jq", ".isDraft"]);
 
-        gh.on("exit", function(code) {
-            resolve(code)
+        const chunks = [];
+
+        gh.stdout.on("data", function(chunk) {
+            chunks.push(chunk);
+        });
+
+        gh.on("close", function(code) {
+            resolve(code === 0 && Buffer.concat(chunks).toString().trim() === "true");
         });
     });
 
-    if (code !== 0) {
+    if (!isDraft) {
         console.error(`❌ Skipping ${workspace}: no GitHub release exists`);
 
         continue;
@@ -97,6 +103,8 @@ for (const workspace of workspaces) {
     pack.finalize();
 
     const outputDirectory = path.join(distDirectory, path.dirname(workspace))
+
+    await fs.mkdir(outputDirectory, { "recursive": true })
 
     const output = fs.createWriteStream(path.join(outputDirectory, path.basename(workspace) + "@" + version + ".tgz"));
 

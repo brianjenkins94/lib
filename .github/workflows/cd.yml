@@ -92,7 +92,7 @@
           "env": {
             "GH_TOKEN": "${{ secrets.PAT }}"
           },
-          "run": "for PACKAGE in $(jq --raw-output '.[]' <<< '${{ needs.changes.outputs.packages }}'); do TAG_NAME=$(jq --raw-output 'select(.version != null and .version != \"\") | \"\\(.name)@\\(.version)\"' \"$PACKAGE/package.json\"); ARCHIVE=\"docs/${TAG_NAME}.tgz\"; if npm run publish && [[ -f \"$ARCHIVE\" ]]; then gh release edit \"$TAG_NAME\" --draft=false; else gh release delete \"$TAG_NAME\" --yes || true; git push origin \":refs/tags/$TAG_NAME\" || true; fi; done"
+          "run": "for PACKAGE in $(jq --raw-output '.[]' <<< '${{ needs.changes.outputs.packages }}'); do TAG_NAME=$(jq --raw-output 'select(.version != null and .version != \"\") | \"\\(.name)@\\(.version)\"' \"$PACKAGE/package.json\"); ARCHIVE=\"docs/${TAG_NAME}.tgz\"; npm run publish || { gh release delete \"$TAG_NAME\" --yes || true; git push origin \":refs/tags/$TAG_NAME\" || true; exit 1; }; [[ -f \"$ARCHIVE\" ]] || exit 1; gh release edit \"$TAG_NAME\" --draft=false; done"
         },
 
         {
@@ -112,10 +112,7 @@
       },
       "needs": ["publish"],
       "steps": [
-        {
-          "id": "deployment",
-          "uses": "actions/deploy-pages@v4"
-        }
+        { "uses": "actions/deploy-pages@v4" }
       ],
       "timeout-minutes": 15
     }
