@@ -6,12 +6,8 @@
     }
   },
   "concurrency": {
-    "group": "${{ github.workflow }}-${{ github.ref }}"
-  },
-  "permissions": {
-    "contents": "read",
-    "pages": "write",
-    "id-token": "write"
+    "group": "${{ github.workflow }}-${{ github.ref }}",
+    "cancel-in-progress": true
   },
   "jobs": {
     "build-lint-test": {
@@ -30,8 +26,18 @@
       "timeout-minutes": 15
     },
     "dispatch": {
+      "runs-on": "ubuntu-latest",
       "needs": ["build-lint-test"],
-      "uses": "brianjenkins94/lib/.github/workflows/cd.yml@main"
+      "steps": [
+        { "uses": "actions/checkout@v3" },
+        {
+          "env": {
+            "GH_TOKEN": "${{ secrets.PAT }}"
+          },
+          "run": "gh workflow run cd"
+        }
+      ],
+      "timeout-minutes": 15
     }
   }
 }
