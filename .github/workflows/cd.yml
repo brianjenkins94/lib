@@ -72,7 +72,7 @@
       ],
       "timeout-minutes": 15
     },
-    "pack": {
+    "publish": {
       "runs-on": "ubuntu-latest",
       "needs": ["changes", "release"],
       "steps": [
@@ -110,7 +110,7 @@
         "name": "github-pages",
         "url": "${{ steps.deployment.outputs.page_url }}"
       },
-      "needs": ["build"],
+      "needs": ["publish"],
       "steps": [
         {
           "id": "deployment",
