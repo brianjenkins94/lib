@@ -1,4 +1,4 @@
-import Bottleneck from "bottleneck/light";
+import { Bottleneck } from "../util/bottleneck";
 import * as util from "util"
 import * as fs from "fs"
 import * as path from "path";
@@ -6,14 +6,13 @@ import { isBrowser } from "./env";
 
 // FROM: https://github.com/zaaack/keyv-file/blob/master/index.ts#L41
 class KeyvFile {
-	public namespace?: string | undefined
-	public options = {
+	private options = {
 		deserialize: JSON.parse,
 		expiredCheckDelay: 24 * 3600 * 1000, // ms
 		filename: `.cache/keyv-file.json`,
 		serialize: (value) => JSON.stringify(value, undefined, 4),
 		writeDelay: 100, // ms
-		checkFileLock: false,
+		checkFileLock: false
 	};
 	private _cache: object;
 	private _lastExpire: number
@@ -61,17 +60,13 @@ class KeyvFile {
 		fs.unlinkSync(this._lockFile);
 	}
 
-	public async get<Value>(key: string): Promise<StoredData<Value> | undefined> {
+	public async get(key: string) {
 		try {
 			const data = this._cache[key];
-			if (!data) {
-				return undefined;
-			} else if (this.isExpired(data)) {
+			if (this.isExpired(data)) {
 				delete this._cache[key]
-				return undefined;
-			} else {
-				return data.value as StoredData<Value>
 			}
+			return data?.value
 		} catch (error) {}
 	}
 
@@ -86,7 +81,7 @@ class KeyvFile {
 		return this.save()
 	}
 
-	private isExpired(data: WrappedValue) {
+	private isExpired(data) {
 		return typeof data.expire === "number" && data.expire <= Date.now()
 	}
 
@@ -145,18 +140,6 @@ class KeyvFile {
 			}, this.options.writeDelay)
 		});
 		return this._savePromise
-	}
-
-	public async *iterator(namespace?: string) {
-		for (const [key, { value }] of Object.entries(this._cache)) {
-			if (key === undefined) {
-				continue;
-			}
-
-			if (namespace === undefined || key.includes(namespace)) {
-				yield [key, value];
-			}
-		}
 	}
 }
 
@@ -287,14 +270,7 @@ async function attemptParse(response: Response): Promise<any> {
 	return body;
 }
 
-async function sha1(string: string) {
-	return Array.from(
-		new Uint8Array(await crypto.subtle.digest("SHA-1", new TextEncoder().encode(string))),
-		(byte) => byte.toString(16).padStart(2, "0")
-	).join("");
-}
-
-function extendedFetch(url, { cache, debug, fetch, limiter, retry, ...options }): Promise<Response> {
+function extendedFetch(url, { cache, cacheKey, debug, fetch, limiter, retry, ...options }): Promise<Response> {
 	return new Promise(function(resolve, reject) {
 		const requestBuffer = [];
 
@@ -302,31 +278,25 @@ function extendedFetch(url, { cache, debug, fetch, limiter, retry, ...options })
 			requestBuffer.push(options["method"].toUpperCase() + " " + url);
 		}
 
-		if (options["headers"]?.["Content-Type"] !== undefined) {
-			if (debug) {
-				for (const header of ["Content-Type"]) {
-					if (options["headers"][header] !== undefined) {
-						requestBuffer.push(header + ": " + options["headers"][header]);
-					}
+		if (debug && options["headers"]?.["Content-Type"] !== undefined) {
+			for (const header of ["Content-Type"]) {
+				if (options["headers"][header] !== undefined) {
+					requestBuffer.push(header + ": " + options["headers"][header]);
 				}
 			}
 
 			if (options["headers"]["Content-Type"].endsWith("json")) {
-				if (debug) {
-					requestBuffer.push(...util.inspect(typeof options["body"] === "string" ? JSON.parse(options["body"]) : options["body"], { "compact": false, "maxStringLength": 1000 }).split("\n"));
-				}
+				requestBuffer.push(...util.inspect(typeof options["body"] === "string" ? JSON.parse(options["body"]) : options["body"], { "compact": false, "maxStringLength": 1000 }).split("\n"));
 			}
 		}
-
-		const key = options["method"] + ":" + url + (options["body"] !== undefined && !(options["body"] instanceof ReadableStream) ? ":" + sha1(options["body"]) : "")
 
 		const cacheHeader = options["headers"]?.["Cache"] ?? options["headers"]?.["cache"];
 
 		let didResolve = false;
 		let cachePromise = Promise.resolve();
 
-		if (cacheHeader !== undefined && [true, "force-cache", "only-if-cached"].includes(cacheHeader)) {
-			cachePromise = cache.get(key)
+		if (cache && cacheHeader !== undefined && [true, "force-cache", "only-if-cached"].includes(cacheHeader)) {
+			cachePromise = cache.get(cacheKey)
 				.then(function({ body, status }) {
 					didResolve = true;
 					resolve(new Response(JSON.stringify(body), { status }))
@@ -355,8 +325,14 @@ function extendedFetch(url, { cache, debug, fetch, limiter, retry, ...options })
 						if (debug) {
 							responseBuffer.push("HTTP " + String(response.status) + " " + response.statusText);
 
-							for (const header of ["Content-Length", "Content-Type", "Retry-After", "Server", "X-Powered-By"]) {
-								if (response.headers.has(header)) {
+							for (const header of ["Content-Length", "Content-Type", "Retry-After", "Server", "X-Powered-By", /Rate-Limit/ui]) {
+								if (header instanceof RegExp) {
+									for (const [key, value] of response.headers.entries()) {
+										if (header.test(key)) {
+											responseBuffer.push(key.replace(/(^\w|-\w)/gu, (match) => match.toUpperCase()) + ": " + value);
+										}
+									}
+								} else if (response.headers.has(header)) {
 									responseBuffer.push(header + ": " + response.headers.get(header));
 								}
 							}
@@ -367,27 +343,47 @@ function extendedFetch(url, { cache, debug, fetch, limiter, retry, ...options })
 
 							const body = await attemptParse(response);
 
-							if (body !== undefined) {
+							if (debug && body !== undefined) {
 								responseBuffer.push(...util.inspect(body, { "compact": false }).split("\n"));
 							}
 
-							if ((typeof retry === "boolean" && retry === true) || (typeof retry === "function" && retry(options))) {
+							if (retry === true || (typeof retry === "function" && retry(options))) {
 								responseBuffer.push("Retrying...");
 
-								throw new Error("Response status code: " + response.status);
+								const error = new Error("Response status code: " + response.status);
+
+								error["request"] = {
+									"body": options["body"],
+									"headers": options["headers"],
+									"method": options["method"],
+									"url": url
+								};
+
+								error["response"] = {
+									"body": body,
+									"headers": response.headers,
+									"ok": response.ok,
+									"redirected": response.redirected,
+									"status": response.status,
+									"statusText": response.statusText,
+									"type": response.type,
+									"url": response.url
+								};
+
+								throw error;
 							}
-						} else {
+						} else if (!(url instanceof Request)) {
 							const body = await attemptParse(response);
 
-							if (body !== undefined) {
+							if (debug && body !== undefined) {
 								responseBuffer.push(...util.inspect(body, { "compact": false }).split("\n"));
 							}
 
-							if (response.ok && cacheHeader !== undefined && [true, "reload", "no-cache", "force-cache"].includes(cacheHeader)) {
-								cache.set(key, {
-									"url": response.url,
+							if (response.ok && cache && cacheHeader !== undefined && [true, "reload", "no-cache", "force-cache"].includes(cacheHeader)) {
+								cache.set(cacheKey, {
+									"body": body,
 									"status": response.status,
-									"body": body
+									"url": response.url
 								});
 							}
 						}
@@ -410,48 +406,70 @@ function extendedFetch(url, { cache, debug, fetch, limiter, retry, ...options })
 	});
 }
 
+async function sha1(string: string) {
+	return Array.from(
+		new Uint8Array(await crypto.subtle.digest("SHA-1", new TextEncoder().encode(string))),
+		(byte) => byte.toString(16).padStart(2, "0")
+	).join("");
+}
+
 let cache;
 
 let limiter;
 
-function fetchFactory(method, baseUrl?, defaultOptions = {}) {
+function fetchFactory(baseUrl?, defaultOptions = {}) {
 	defaultOptions["fetch"] ??= globalThis.fetch;
 	defaultOptions["retry"] ??= ({ method }) => method === "get";
 	defaultOptions["headers"] ??= {};
 	defaultOptions["debug"] ??= process.env["NODE_ENV"] !== "production"
 
-	if (defaultOptions["debug"] && defaultOptions["cache"] === undefined) {
+	if (defaultOptions["debug"] && defaultOptions["cache"]) {
 		cache ??= new KeyvFile();
 
 		defaultOptions["cache"] = cache;
 	}
 
-	if (limiter === undefined) {
+	if (limiter !== false && limiter === undefined) {
 		// 100 requests/minute
 		limiter = new Bottleneck({
+			"minTime": Math.floor(60_000 / 100),
 			"reservoir": 100,
 			"reservoirRefreshAmount": 100,
 			"reservoirRefreshInterval": 60_000
 		});
-
-		if (defaultOptions["retry"] === true || defaultOptions["retry"]({ method }) === true) {
-			// This could present an issue with parallel requests.
-			limiter.on("failed", function(error, { "options": { id }, retryCount }) {
-				if (retryCount < 2) {
-					return (2 ** (retryCount + 1)) * 1000;
-				}
-			});
-		}
 	}
 
 	defaultOptions["limiter"] ??= limiter;
 
-	const fetch = async function(url, query = {}, options = {}): Promise<Response> {
-		url = new URL(url, baseUrl);
+	if (defaultOptions["limiter"] instanceof Bottleneck && defaultOptions["retry"]) {
+		defaultOptions["limiter"].on("failed", function(error, { "options": { id }, retryCount }) {
+			const { request, response } = error;
 
-		if (typeof query === "object" && query["body"] !== undefined && [defaultOptions, query, options].some(({ headers }) => headers["Content-Type"])) {
-			options = query;
-			query = {};
+			if (defaultOptions["retry"] === false || (typeof defaultOptions["retry"] === "function" && defaultOptions["retry"]({ "method": request.method }) === false)) {
+				throw error;
+			}
+
+			let [header, reset] = response.headers.entries().find(([header]) => /Rate-Limit-(After|Reset)/ui.test(header)) ?? [];
+
+			reset = reset * 1000;
+
+			if (reset >= Date.now()) {
+				reset -= Date.now();
+			}
+
+			if (retryCount < 2) {
+				const jitter = Math.floor(Math.random() * 500);
+
+				return (reset || (2 ** (retryCount + 1)) * 1000) + jitter;
+			} else  {
+				throw error;
+			}
+		});
+	}
+
+	return async function(url, query?, options = {}) {
+		if (typeof url === "string") {
+			url = new URL(url, baseUrl);
 		}
 
 		query = {
@@ -469,102 +487,61 @@ function fetchFactory(method, baseUrl?, defaultOptions = {}) {
 		};
 
 		if (options["body"] !== undefined) {
-			if (method === "get") {
+			if (options["method"] === "get") {
 				throw new Error("That's illegal.");
 			} else if (options["headers"]?.["Content-Type"] === undefined) {
 				throw new Error("`Content-Type` is required when providing a payload.");
 			}
 		}
 
-		const response: Response = await extendedFetch(new URL(url).toString(), {
+		return extendedFetch(url, {
 			...options,
 			"headers": {
-				"Cache": options["headers"]?.["cache"] ?? ((options["debug"] ?? defaultOptions["debug"]) || "no-store"),
+				"Cache": options["headers"]?.["Cache"] ?? options["headers"]?.["cache"] ?? (((options["debug"] ?? defaultOptions["debug"]) && options["method"] === "get") || "no-store"),
 				...options["headers"]
 			},
 			"cache": options["cache"] ?? cache,
+			"cacheKey": options["method"] + ":" + url + (options["body"] !== undefined && !(options["body"] instanceof ReadableStream) ? ":" + await sha1(options["body"]) : ""),
 			"debug": options["debug"] ?? defaultOptions["debug"],
 			"limiter": options["limiter"] ?? defaultOptions["limiter"],
-			"method": method,
+			"method": options["method"].toUpperCase(),
 			"fetch": defaultOptions["fetch"],
 			"retry": options["retry"] ?? defaultOptions["retry"]
 		});
-
-		return response;
 	};
-
-	return fetch;
 }
 
-export const get = fetchFactory("get");
-export const post = fetchFactory("post");
-export const put = fetchFactory("put");
-export const del = fetchFactory("delete");
-
-export function poll(url, query = {}, options = {}, condition: (response: Response) => Promise<boolean> = async (response) => response.ok): Promise<Response> {
-	url = new URL(url);
-
-	if (typeof query === "function") {
-		// @ts-expect-error
-		condition = query;
-		query = {};
-		options = {};
-	} else if (typeof options === "function") {
-		// @ts-expect-error
-		condition = options;
-		options = {};
-	}
-
-	if (typeof query === "object" && query["body"] !== undefined && [query, options].some(({ headers }) => headers["Content-Type"])) {
-		options = query;
-		query = {};
-	}
-
-	query = {
-		...Object.fromEntries(new URLSearchParams(url.search)),
-		...query
-	};
-
-	if (Object.entries(query).length > 0) {
-		url.search = new URLSearchParams(query);
-	}
-
-	if (options["body"] !== undefined) {
-		throw new Error("That's illegal.");
-	}
-
-	return new Promise(async function(resolve, reject) {
-		const response = await get(new URL(url).toString(), options);
-
-		if (await condition(response)) {
-			resolve(response);
-		} else {
-			reject(new Error("Did not pass condition."));
-		}
-	});
-}
-
-export function withDefaults(baseUrl, options = {}) {
-	return {
-		"get": fetchFactory("get", baseUrl, options),
-		"post": fetchFactory("post", baseUrl, options),
-		"put": fetchFactory("put", baseUrl, options),
-		"del": fetchFactory("delete", baseUrl, options),
+export function withDefaults(baseUrl, defaultOptions = {}) {
+	const fido = {
+		"fetch": (url, query?, options?) => (fido.fetch = fetchFactory(baseUrl, defaultOptions))(url, query, options),
+		"get": (url, query?, options?) => fido.fetch(url, options ?? (query && Object.values(query).every((v) => typeof v !== "object") ? query : undefined), { ...(options ?? query), "method": "GET" }),
+		"post": (url, query?, options?) => fido.fetch(url, options ?? (query && Object.values(query).every((v) => typeof v !== "object") ? query : undefined), { ...(options ?? query), "method": "POST" }),
+		"put": (url, query?, options?) => fido.fetch(url, options ?? (query && Object.values(query).every((v) => typeof v !== "object") ? query : undefined), { ...(options ?? query), "method": "PUT" }),
+		"patch": (url, query?, options?) => fido.fetch(url, options ?? (query && Object.values(query).every((v) => typeof v !== "object") ? query : undefined), { ...(options ?? query), "method": "PATCH" }),
+		"delete": (url, query?, options?) => fido.fetch(url, options ?? (query && Object.values(query).every((v) => typeof v !== "object") ? query : undefined), { ...(options ?? query), "method": "DELETE" }),
 		"limit": function(amount) {
-			const limiter = new Bottleneck({
-				"reservoir": amount,
-				"reservoirRefreshAmount": amount,
-				"reservoirRefreshInterval": 60_000
-			});
+			if (defaultOptions["limiter"] !== false) {
+				const limiter = new Bottleneck(typeof amount === "number" ? {
+					"reservoir": amount,
+					"reservoirRefreshAmount": amount,
+					"reservoirRefreshInterval": 60_000
+				} : amount);
 
-			options["limiter"] = limiter;
+				defaultOptions["limiter"] = defaultOptions["limiter"] instanceof Bottleneck ? defaultOptions["limiter"].chain(limiter) : limiter;
+			}
 
-			return {
-				"get": fetchFactory("get", baseUrl, options),
-				"post": fetchFactory("post", baseUrl, options),
-				"put": fetchFactory("put", baseUrl, options),
-				"del": fetchFactory("delete", baseUrl, options)
-			};
+			return withDefaults(baseUrl, defaultOptions)
 		}
 	};
+
+	return fido;
 }
+
+export const fido = {
+	"fetch": (url, query?, options?) => (fido.fetch = fetchFactory())(url, query, options),
+	"get": (url, query?, options?) => fido.fetch(url, options ?? (query && Object.values(query).every((v) => typeof v !== "object") ? query : undefined), { ...(options ?? query), "method": "GET" }),
+	"post": (url, query?, options?) => fido.fetch(url, options ?? (query && Object.values(query).every((v) => typeof v !== "object") ? query : undefined), { ...(options ?? query), "method": "POST" }),
+	"put": (url, query?, options?) => fido.fetch(url, options ?? (query && Object.values(query).every((v) => typeof v !== "object") ? query : undefined), { ...(options ?? query), "method": "PUT" }),
+	"patch": (url, query?, options?) => fido.fetch(url, options ?? (query && Object.values(query).every((v) => typeof v !== "object") ? query : undefined), { ...(options ?? query), "method": "PATCH" }),
+	"delete": (url, query?, options?) => fido.fetch(url, options ?? (query && Object.values(query).every((v) => typeof v !== "object") ? query : undefined), { ...(options ?? query), "method": "DELETE" }),
+};

@@ -131,7 +131,7 @@ async function fetchFactory(baseUrl?, defaultOptions = {}) {
 			"resolveDir": __root,
 			"sourcefile": "fetch.ts",
 			"contents": [
-				"import * as fido from \"./util/fido\";",
+				"import { fido } from \"./util/fido\";",
 				contents.substring(contents.indexOf("{", contents.indexOf(")") + 1) + 1, contents.lastIndexOf("}"))
 			].join("\n")
 		},
@@ -201,6 +201,7 @@ async function fetchFactory(baseUrl?, defaultOptions = {}) {
 	};
 }
 
+// TODO: Review
 export const fido = {
 	"get": async function(page, url, query?, options?) {
 		this["_fido"] ??= await fetchFactory();
@@ -217,10 +218,10 @@ export const fido = {
 
 		return this["_fido"](page, "put", url, query, options);
 	},
-	"del": async function(page, url, query?, options?) {
+	"delete": async function(page, url, query?, options?) {
 		this["_fido"] ??= await fetchFactory();
 
-		return this["_fido"](page, "del", url, query, options);
+		return this["_fido"](page, "delete", url, query, options);
 	}
 };
 

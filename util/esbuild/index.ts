@@ -29,7 +29,7 @@ export function esbuildOptions(overrides: BuildOptions = {}) {
 export async function esbuild(config: BuildOptions) {
 	config["assetNames"] ??= "assets/[name]";
 	config["chunkNames"] ??= "assets/[name]-[hash]";
-	config["entryNames"] ??= "[dir]/[name]";
+	config["entryNames"] ??= "[name]";
 
 	const result = await build({
 		"bundle": true,

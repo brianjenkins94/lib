@@ -99,7 +99,7 @@ export async function getUniqueFieldValues(client: Client, { index, range = unde
             {
                 "terms": {
                     "field": fields + ".keyword",
-                    "order": "desc",
+                    "order": "asc",
                     "size": TERMS_LIMIT
                 }
             }
@@ -157,7 +157,7 @@ export async function getUniqueFieldValues(client: Client, { index, range = unde
                                     [field]: {
                                         "terms": {
                                             "field": field + ".keyword",
-                                            "order": "desc"
+                                            "order": "asc"
                                         }
                                     }
                                 }
@@ -222,7 +222,7 @@ export async function getUniqueFieldCombinations(client: Client, { index, range 
                                 [fields]: {
                                     "terms": {
                                         "field": fields + ".keyword",
-                                        "order": "desc"
+                                        "order": "asc"
                                     }
                                 }
                             };
