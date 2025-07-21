@@ -62,7 +62,7 @@ for (const workspace of workspaces) {
                 });
 
                 stream.on("end", function() {
-                    files[header.name] = Buffer.concat(chunks).toString();
+                    files["./" + header.name] = Buffer.concat(chunks).toString();
 
                     next();
                 });
@@ -77,23 +77,16 @@ for (const workspace of workspaces) {
             input.pipe(createGunzip()).pipe(extract);
         });
 
-        if (JSON.parse(existingFiles["./package.json"])?.["version"] !== undefined) {
-            const [major, minor] = JSON.parse(existingFiles["./package.json"])["version"].split(".")
+        const packageJson = JSON.parse(existingFiles["./package.json"] ?? "{}")
 
-            version = [major, parseInt(minor) + 1, 0].join(".")
+        if (packageJson["version"] !== undefined) {
+            version = packageJson["version"] ?? version;
         }
     }
 
-    files["./package.json"] = JSON.stringify({
-        ...packageJson,
-        "version": version,
-        "files": Object.keys(files),
-        "exports": Object.fromEntries(Object.keys(files).map((key) => [key, key]))
-    }, undefined, 2)
-
     // Ensure a release exists for this package.
-    const isDraft = () => new Promise(function(resolve, reject) {
-        const gh = spawn("gh", ["release", "view", workspace + "@" + version, "--json", "isDraft", "--jq", ".isDraft"]);
+    const draftExists: boolean | Record<string, string> = !isCI || await new Promise(function(resolve, reject) {
+        const gh = spawn("gh", ["release", "list", "--json", "name,isDraft", "--jq", `.[] | select(.isDraft) | .name`]);
 
         const chunks = [];
 
@@ -102,21 +95,51 @@ for (const workspace of workspaces) {
         });
 
         gh.on("close", function(code) {
-            resolve(code === 0 && Buffer.concat(chunks).toString().trim() === "true");
+            const output = Buffer.concat(chunks).toString().trim();
+
+            resolve(code === 0 && output.includes(workspace + "@" + version) || {
+                "expected": workspace + "@" + version,
+                "actual": output
+            });
         });
     });
 
-    if (isCI && !(await isDraft())) {
-        console.error(`❌ Skipping ${workspace}: no GitHub release exists`);
+    if (typeof draftExists === "object") {
+        if (draftExists["expected"].split(".").map(Number).reduce((result, a, index) => result || a - draftExists["actual"].split(".").map(Number)[index], 0) > 0) {
+            const code = await new Promise(function(resolve, reject) {
+                const gh = spawn("gh", ["release", "edit", workspace + "@" + version, "--title", workspace + "@" + draftExists["expected"]]);
 
-        continue;
+                gh.on("close", function(code) {
+                    resolve(code);
+                });
+            });
+
+            if (code !== 0) {
+                console.error(`❌ Skipping ${workspace}: expected: ${draftExists["existing"]}, actual: ${draftExists["actual"]}`);
+
+                continue;
+            }
+
+            version = draftExists["actual"];
+        } else {
+            console.error(`❌ Skipping ${workspace}: no GitHub release exists`);
+
+            continue;
+        }
     }
     // </>
+
+    files["./package.json"] = JSON.stringify({
+        ...packageJson,
+        "version": version,
+        "files": Object.keys(files),
+        "exports": Object.fromEntries(Object.keys(files).map((key) => [key, key]))
+    }, undefined, 2)
 
     const pack = tarStream.pack();
 
     for (const [fileName, contents] of Object.entries(files)) {
-        pack.entry({ "name": fileName }, contents);
+        pack.entry({ "name": path.join("package", fileName).replace(/\\/gu, "/") }, contents);
     }
 
     pack.finalize();
@@ -127,11 +150,11 @@ for (const workspace of workspaces) {
 
     const output = fs.createWriteStream(path.join(outputDirectory, path.basename(workspace) + "@" + version + ".tgz"));
 
-    output.on("finish", async function() {
-        if (!isCI) {
+    if (!isCI) {
+        output.on("finish", async function() {
             await fs.copyFile(path.join(outputDirectory, path.basename(workspace) + "@" + version + ".tgz"), path.join(outputDirectory, path.basename(workspace) + "@latest.tgz"))
-        }
-    });
+        });
+    }
 
     pack.pipe(createGzip()).pipe(output);
 }
