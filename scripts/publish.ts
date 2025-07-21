@@ -85,8 +85,8 @@ for (const workspace of workspaces) {
     }
 
     // Ensure a release exists for this package.
-    const draftExists: boolean | Record<string, string> = !isCI || await new Promise(function(resolve, reject) {
-        const gh = spawn("gh", ["release", "list", "--json", "name,isDraft", "--jq", `.[] | select(.isDraft) | .name`]);
+    const isDraft = () => new Promise(function(resolve, reject) {
+        const gh = spawn("gh", ["release", "view", workspace + "@" + version, "--json", "isDraft", "--jq", ".isDraft"]);
 
         const chunks = [];
 
@@ -95,37 +95,14 @@ for (const workspace of workspaces) {
         });
 
         gh.on("close", function(code) {
-            const output = Buffer.concat(chunks).toString().trim();
-
-            resolve(code === 0 && output.includes(workspace + "@" + version) || {
-                "expected": workspace + "@" + version,
-                "actual": output
-            });
+            resolve(code === 0 && Buffer.concat(chunks).toString().trim() === "true");
         });
     });
 
-    if (typeof draftExists === "object") {
-        if (draftExists["expected"].split(".").map(Number).reduce((result, a, index) => result || a - draftExists["actual"].split(".").map(Number)[index], 0) > 0) {
-            const code = await new Promise(function(resolve, reject) {
-                const gh = spawn("gh", ["release", "edit", workspace + "@" + version, "--title", workspace + "@" + draftExists["expected"]]);
+    if (isCI && !(await isDraft())) {
+        console.error(`❌ Skipping ${workspace}: no GitHub release exists`);
 
-                gh.on("close", function(code) {
-                    resolve(code);
-                });
-            });
-
-            if (code !== 0) {
-                console.error(`❌ Skipping ${workspace}: expected: ${draftExists["existing"]}, actual: ${draftExists["actual"]}`);
-
-                continue;
-            }
-
-            version = draftExists["actual"];
-        } else {
-            console.error(`❌ Skipping ${workspace}: no GitHub release exists`);
-
-            continue;
-        }
+        continue;
     }
     // </>
 

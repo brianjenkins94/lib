@@ -66,7 +66,7 @@
           "env": {
             "GH_TOKEN": "${{ secrets.PAT }}"
           },
-          "run": "for TAG in $(gh release list --limit 100 --json tagName,isDraft --jq '.[] | select(.isDraft) | .tagName'); do gh release delete -y \"$TAG\"; done"
+          "run": "for TAG in $(gh release list --json tagName,isDraft --jq '.[] | select(.isDraft) | .tagName'); do gh release delete -y \"$TAG\"; done"
         },
 
         {
@@ -75,7 +75,7 @@
             "GH_TOKEN": "${{ secrets.PAT }}"
           },
           "working-directory": "${{ matrix.package }}",
-          "run": "PACKAGE=\"${{ matrix.package }}\"; TAG_NAME=$(jq --raw-output 'select(.version != null and .version != \"\") | \"\\(.name)@\\(.version)\"' package.json || true); if [[ -z \"$TAG_NAME\" ]] || gh release list --json tagName --jq '.[].tagName' | grep -qx \"$TAG_NAME\"; then BASE_VERSION=$(gh release list --json tagName --jq \"([.[] | select(.tagName | startswith(\\\"${PACKAGE}@\\\")) | .tagName] | map(sub(\\\"${PACKAGE}@\\\"; \\\"\\\")) | map(split(\\\".\\\") | map(tonumber)) | sort | last | if . == null then \\\"0.0.0\\\" else (map(tostring) | join(\\\".\\\")) end)\"); TAG_NAME=\"${PACKAGE}@$(npx -y semver $BASE_VERSION -i minor)\"; fi; echo \"TAG_NAME=$TAG_NAME\" >> \"$GITHUB_OUTPUT\""
+          "run": "PACKAGE=\"${{ matrix.package }}\"; PACKAGE_VERSION=$(jq --raw-output '.version // empty' \"$PACKAGE/package.json\"); NAME=$(jq --raw-output '.name' \"$PACKAGE/package.json\"); VERSION=\"0.1.0\"; LATEST_ARCHIVE=\"docs/${NAME}@latest.tgz\"; if [[ -f \"$LATEST_ARCHIVE\" ]]; then ARCHIVE_VERSION=$(tar -xOzf \"$LATEST_ARCHIVE\" ./package.json | jq -r '.version // empty'); if [[ -n \"$ARCHIVE_VERSION\" ]]; then VERSION=\"$ARCHIVE_VERSION\"; fi; fi; if [[ -n \"$PACKAGE_VERSION\" ]] && npx -y semver \"$PACKAGE_VERSION\" -r \">$VERSION\" > /dev/null; then VERSION=\"$PACKAGE_VERSION\"; fi; TAG_NAME=\"$NAME@$VERSION\"; if [[ \"$(gh release list --json tagName --jq \"any(.tagName == \\\"$TAG_NAME\\\")\")\" == \"true\" ]]; then VERSION=$(npx -y semver \"$VERSION\" -i minor); TAG_NAME=\"$NAME@$VERSION\"; fi; echo \"TAG_NAME=$TAG_NAME\" >> \"$GITHUB_OUTPUT\""
         },
         {
           "uses": "softprops/action-gh-release@v2",
