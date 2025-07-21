@@ -1,7 +1,7 @@
 {
   "name": "cd",
   "on": {
-    "workflow_call": null
+    "workflow_dispatch": null
   },
   "concurrency": {
     "group": "${{ github.workflow }}-${{ github.ref }}",

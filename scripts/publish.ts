@@ -1,4 +1,4 @@
-import { __root } from "../util/env";
+import { __root, isCI } from "../util/env";
 import { esbuild } from "../util/esbuild"
 import { build } from "./build";
 import { glob } from "../util/fs";
@@ -7,6 +7,7 @@ import * as fs from "../util/fs";
 import { createGunzip, createGzip } from "zlib";
 import tarStream from "tar-stream";
 import { spawn } from "child_process";
+//import * as JSON from "../util/json";
 
 const distDirectory = path.join(__root, "docs");
 
@@ -37,43 +38,61 @@ for (const workspace of workspaces) {
         continue;
     }
 
-    const files = Object.fromEntries(result.outputFiles.map(({ "path": filePath, text }) => [path.relative(__root, filePath).replace(/\\/gu, "/"), text]));
+    const files = Object.fromEntries(result.outputFiles.map(({ "path": filePath, text }) => ["./" + path.relative(workspace, filePath).replace(/\\/gu, "/"), text]));
 
     let version = "0.1.0";
 
     const tarFile = path.join(distDirectory, workspace + "@latest.tgz")
 
+    let existingFiles;
+
     if (fs.existsSync(tarFile)) {
-        const extract = tarStream.extract();
+        existingFiles = await new Promise(function(resolve, reject) {
+            const extract = tarStream.extract();
 
-        const input = fs.createReadStream(tarFile);
+            const input = fs.createReadStream(tarFile);
 
-        input.pipe(createGunzip()).pipe(extract);
+            const files = {};
 
-        extract.on("entry", function(header, stream, next) {
-            //const chunks = [];
+            extract.on("entry", function(header, stream, next) {
+                const chunks = [];
 
-            stream.on("data", function(chunk) {
-                //chunks.push(chunk);
+                stream.on("data", function(chunk) {
+                    chunks.push(chunk);
+                });
+
+                stream.on("end", function() {
+                    files[header.name] = Buffer.concat(chunks).toString();
+
+                    next();
+                });
+
+                stream.resume();
             });
 
-            stream.on("end", function() {
-                next();
+            extract.on("finish", function() {
+                resolve(files);
             });
 
-            stream.resume();
+            input.pipe(createGunzip()).pipe(extract);
         });
+
+        if (JSON.parse(existingFiles["./package.json"])?.["version"] !== undefined) {
+            const [major, minor] = JSON.parse(existingFiles["./package.json"])["version"].split(".")
+
+            version = [major, parseInt(minor) + 1, 0].join(".")
+        }
     }
 
-    files["package.json"] = JSON.stringify({
+    files["./package.json"] = JSON.stringify({
         ...packageJson,
         "version": version,
-        "files": files,
-        "exports": []
-    })
+        "files": Object.keys(files),
+        "exports": Object.fromEntries(Object.keys(files).map((key) => [key, key]))
+    }, undefined, 2)
 
     // Ensure a release exists for this package.
-    const isDraft = await new Promise(function(resolve, reject) {
+    const isDraft = () => new Promise(function(resolve, reject) {
         const gh = spawn("gh", ["release", "view", workspace + "@" + version, "--json", "isDraft", "--jq", ".isDraft"]);
 
         const chunks = [];
@@ -87,7 +106,7 @@ for (const workspace of workspaces) {
         });
     });
 
-    if (!isDraft) {
+    if (isCI && !(await isDraft())) {
         console.error(`❌ Skipping ${workspace}: no GitHub release exists`);
 
         continue;
@@ -108,9 +127,11 @@ for (const workspace of workspaces) {
 
     const output = fs.createWriteStream(path.join(outputDirectory, path.basename(workspace) + "@" + version + ".tgz"));
 
-    pack.pipe(createGzip()).pipe(output);
-
     output.on("finish", async function() {
-        await fs.copyFile(path.join(outputDirectory, path.basename(workspace) + "@" + version + ".tgz"), path.join(outputDirectory, path.basename(workspace) + "@latest.tgz"))
+        if (!isCI) {
+            await fs.copyFile(path.join(outputDirectory, path.basename(workspace) + "@" + version + ".tgz"), path.join(outputDirectory, path.basename(workspace) + "@latest.tgz"))
+        }
     });
+
+    pack.pipe(createGzip()).pipe(output);
 }
