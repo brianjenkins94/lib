@@ -38,7 +38,7 @@ for (const workspace of workspaces) {
         continue;
     }
 
-    const files = Object.fromEntries(result.outputFiles.map(({ "path": filePath, text }) => ["./" + path.relative(workspace, filePath).replace(/\\/gu, "/"), text]));
+    const files = Object.fromEntries(result.outputFiles.map(({ "path": filePath, text }) => [path.join(workspace, filePath).replace(/\\/gu, "/"), text]));
 
     let version = "0.1.0";
 
@@ -62,7 +62,9 @@ for (const workspace of workspaces) {
                 });
 
                 stream.on("end", function() {
-                    files["./" + header.name] = Buffer.concat(chunks).toString();
+                    if (path.resolve(path.dirname(tarFile), header.name).startsWith(path.dirname(tarFile))) {
+                        files[header.name] = Buffer.concat(chunks).toString();
+                    }
 
                     next();
                 });
@@ -77,7 +79,7 @@ for (const workspace of workspaces) {
             input.pipe(createGunzip()).pipe(extract);
         });
 
-        const packageJson = JSON.parse(existingFiles["./package.json"] ?? "{}")
+        const packageJson = JSON.parse(existingFiles["package/package.json"] ?? "{}")
 
         if (packageJson["version"] !== undefined) {
             version = packageJson["version"] ?? version;
@@ -106,7 +108,7 @@ for (const workspace of workspaces) {
     }
     // </>
 
-    files["./package.json"] = JSON.stringify({
+    files["package.json"] = JSON.stringify({
         ...packageJson,
         "version": version,
         "files": Object.keys(files),
