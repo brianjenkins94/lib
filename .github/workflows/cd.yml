@@ -19,11 +19,11 @@
         { "uses": "pnpm/action-setup@v4", "with": { "version": "latest", "run_install": false } },
         {
           "id": "enumerate",
-          "run": "echo PACKAGES=\"$(git ls-files */package.json */*/package.json --exclude=.* --exclude=**/node_modules/* | jq --compact-output --raw-input --slurp 'split(\"\\n\")[:-1] | map(sub(\"/package.json$\"; \"\")) | reduce .[] as $key ({}; .[$key] = \"\\($key)/**\")')\" >> $GITHUB_OUTPUT"
+          "run": "echo \"PACKAGES=$(git ls-files */package.json */*/package.json --exclude=.* --exclude=**/node_modules/* | jq --compact-output --raw-input --slurp 'split(\"\\n\")[:-1] | map(sub(\"/package.json$\"; \"\")) | reduce .[] as $key ({}; .[$key] = \"\\($key)/**\")')\" >> \"$GITHUB_OUTPUT\""
         },
         {
           "id": "base",
-          "run": "RUN_ID=$(gh run list --workflow=cd.yml --branch=main --json databaseId,status,headSha,conclusion --jq '[.[] | select(.status == \"completed\" and .conclusion == \"success\")][0].headSha'); echo \"BASE_SHA=$RUN_ID\" >> $GITHUB_OUTPUT",
+          "run": "echo \"TAG_NAME=$(gh run list --workflow=cd.yml --branch=main --json databaseId,status,headSha,conclusion --jq '[.[] | select(.status == \\\"completed\\\" and .conclusion == \\\"success\\\")][0].headSha')\" >> \"$GITHUB_OUTPUT\""
           "env": {
             "GH_TOKEN": "${{ secrets.GITHUB_TOKEN }}"
           }
@@ -80,7 +80,7 @@
           "env": {
             "GH_TOKEN": "${{ secrets.PAT }}"
           },
-          "run": ".github/workflows/scripts/tag.sh \"${{ matrix.package }}\""
+          "run": "echo \"TAG_NAME=$(.github/workflows/scripts/tag.sh \\\"${{ matrix.package }}\\\")\" >> \"$GITHUB_OUTPUT\""
         },
         {
           "uses": "softprops/action-gh-release@v2",
