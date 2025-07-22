@@ -23,7 +23,7 @@
         },
         {
           "id": "base",
-          "run": "echo \"TAG_NAME=$(gh run list --workflow=cd.yml --branch=main --json databaseId,status,headSha,conclusion --jq '[.[] | select(.status == \\\"completed\\\" and .conclusion == \\\"success\\\")][0].headSha')\" >> \"$GITHUB_OUTPUT\"",
+          "run": "echo \"TAG_NAME=$(gh run list --workflow=cd.yml --branch=main --json databaseId,status,headSha,conclusion --jq '[.[] | select(.status == \"completed\" and .conclusion == \"success\")][0].headSha')\" >> \"$GITHUB_OUTPUT\"",
           "env": {
             "GH_TOKEN": "${{ secrets.GITHUB_TOKEN }}"
           }
