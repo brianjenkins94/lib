@@ -80,7 +80,7 @@
           "env": {
             "GH_TOKEN": "${{ secrets.PAT }}"
           },
-          "run": "echo \"TAG_NAME=$(.github/workflows/scripts/tag.sh \\\"${{ matrix.package }}\\\")\" >> \"$GITHUB_OUTPUT\""
+          "run": "echo \"TAG_NAME=$(.github/workflows/scripts/tag.sh \"${{ matrix.package }}\")\" >> \"$GITHUB_OUTPUT\""
         },
         {
           "uses": "softprops/action-gh-release@v2",
