@@ -28,8 +28,6 @@ export async function build(workspaces?) {
             });
 
             subprocess.on("close", function(code) {
-                subprocess.unref()
-
                 resolve([workspace, code]);
             });
         });

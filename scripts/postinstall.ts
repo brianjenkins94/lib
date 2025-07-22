@@ -19,18 +19,19 @@ const workspaces = (await new Promise<string[]>(function(resolve, reject) {
 
 await mapAsync(workspaces, function(workspace) {
     return new Promise(function(resolve, reject) {
-        // TODO: Use pnpm if it exists.
-        // FROM: https://github.com/vercel/turborepo/blob/1ae620cdf454d0258a162a96976e3064433391a2/packages/turbo/bin/turbo#L29
-        const subprocess = spawn("npm", ["install", "--loglevel=error", "--prefer-offline", "--no-audit", "--progress=false"], {
-            "cwd": workspace,
-            "shell": true,
-            //"stdio": "inherit"
-        });
+        const subprocess = spawn("pnpm", ["install"]);
 
         subprocess.on("close", function(code) {
-            subprocess.unref()
+            // FROM: https://github.com/vercel/turborepo/blob/1ae620cdf454d0258a162a96976e3064433391a2/packages/turbo/bin/turbo#L29
+            const subprocess = spawn("npm", ["install", "--loglevel=error", "--prefer-offline", "--no-audit", "--progress=false"], {
+                "cwd": workspace,
+                "shell": true,
+                //"stdio": "inherit"
+            });
 
-            resolve(code);
+            subprocess.on("close", function(code) {
+                resolve(code);
+            });
         })
     })
 });
