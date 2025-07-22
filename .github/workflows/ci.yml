@@ -18,6 +18,9 @@
         }
       },
       "steps": [
+        { "run": |
+          echo "test"
+        },
         { "uses": "actions/checkout@v4" },
         { "uses": "actions/setup-node@v4", "with": { "node-version": 22 } },
         { "run": "npm install" }, #{ "uses": "bahmutov/npm-install@v1", "with": { "useLockFile": false } },
