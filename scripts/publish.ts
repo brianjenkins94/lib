@@ -38,16 +38,16 @@ for (const workspace of workspaces) {
         continue;
     }
 
-    const files = Object.fromEntries(result.outputFiles.map(({ "path": filePath, text }) => [path.join(workspace, filePath).replace(/\\/gu, "/"), text]));
+    const files = Object.fromEntries(result.outputFiles.map(({ "path": filePath, text }) => [filePath.substring("/".length).replace(/\\/gu, "/"), text]));
 
     let version = "0.1.0";
 
     const tarFile = path.join(distDirectory, workspace + "@latest.tgz")
 
-    let existingFiles;
+    let archiveFiles;
 
     if (fs.existsSync(tarFile)) {
-        existingFiles = await new Promise(function(resolve, reject) {
+        archiveFiles = await new Promise(function(resolve, reject) {
             const extract = tarStream.extract();
 
             const input = fs.createReadStream(tarFile);
@@ -63,7 +63,7 @@ for (const workspace of workspaces) {
 
                 stream.on("end", function() {
                     if (path.resolve(path.dirname(tarFile), header.name).startsWith(path.dirname(tarFile))) {
-                        files[header.name] = Buffer.concat(chunks).toString();
+                        files[header.name.substring("package/".length)] = Buffer.concat(chunks).toString();
                     }
 
                     next();
@@ -79,7 +79,7 @@ for (const workspace of workspaces) {
             input.pipe(createGunzip()).pipe(extract);
         });
 
-        const packageJson = JSON.parse(existingFiles["package/package.json"] ?? "{}")
+        const packageJson = JSON.parse(archiveFiles["package.json"] ?? "{}")
 
         if (packageJson["version"] !== undefined) {
             version = packageJson["version"];
@@ -115,10 +115,15 @@ for (const workspace of workspaces) {
         "exports": Object.fromEntries(Object.keys(files).map((key) => [key, key]))
     }, undefined, 2)
 
+    // Compare files
+    if (Object.keys(files).length === Object.keys(archiveFiles).length && Object.entries(files).every(([key, value]) => archiveFiles[key] === value)) {
+        continue;
+    }
+
     const pack = tarStream.pack();
 
     for (const [fileName, contents] of Object.entries(files)) {
-        pack.entry({ "name": path.join("package", fileName).replace(/\\/gu, "/") }, contents);
+        pack.entry({ "name": fileName.replace(/\\/gu, "/") }, contents);
     }
 
     pack.finalize();
@@ -129,7 +134,7 @@ for (const workspace of workspaces) {
 
     const output = fs.createWriteStream(path.join(outputDirectory, path.basename(workspace) + "@" + version + ".tgz"));
 
-    if (!isCI) {
+    if (isCI) {
         output.on("finish", async function() {
             await fs.copyFile(path.join(outputDirectory, path.basename(workspace) + "@" + version + ".tgz"), path.join(outputDirectory, path.basename(workspace) + "@latest.tgz"))
         });
