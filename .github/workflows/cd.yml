@@ -112,7 +112,7 @@
           "env": {
             "GH_TOKEN": "${{ secrets.PAT }}"
           },
-          "run": "gh run download --name github-pages; tar -xvf artifact.tar --keep-old-files --directory docs/ || true"
+          "run": "(gh run download --name github-pages && tar -xvf artifact.tar --keep-old-files --directory docs/) || true"
         },
         { "run": "pnpm install" },
         {
