@@ -30,7 +30,7 @@
           }
         },
         { "run": "pnpm install" },
-        { "run": "pnpm run ${{ matrix.script }} --if-present" }
+        { "run": "pnpm run --if-present ${{ matrix.script }} " }
       ],
       "timeout-minutes": 15
     },

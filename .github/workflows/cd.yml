@@ -67,7 +67,7 @@
         { "run": "pnpm install" },
         {
           "working-directory": "${{ matrix.package }}",
-          "run": "pnpm run build --if-present"
+          "run": "pnpm run --if-present build"
         },
         {
           "env": {
