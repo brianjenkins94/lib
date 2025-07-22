@@ -82,7 +82,7 @@ for (const workspace of workspaces) {
         const packageJson = JSON.parse(existingFiles["package/package.json"] ?? "{}")
 
         if (packageJson["version"] !== undefined) {
-            version = packageJson["version"] ?? version;
+            version = packageJson["version"];
         }
     }
 
