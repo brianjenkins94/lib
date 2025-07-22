@@ -18,13 +18,19 @@
         }
       },
       "steps": [
-        { "run": |
-          echo "test"
-        },
         { "uses": "actions/checkout@v4" },
         { "uses": "actions/setup-node@v4", "with": { "node-version": 22 } },
-        { "run": "npm install" }, #{ "uses": "bahmutov/npm-install@v1", "with": { "useLockFile": false } },
-        { "run": "npm run ${{ matrix.script }} --if-present" }
+        { "uses": "pnpm/action-setup@v4", "with": { "version": "latest", "run_install": false } },
+        {
+          "uses": "actions/cache@v4",
+          "with": {
+            "path": "~/.pnpm-store",
+            "key": "pnpm-store-${{ runner.os }}-${{ hashFiles('**/pnpm-lock.yaml') }}",
+            "restore-keys": "pnpm-store-${{ runner.os }}-"
+          }
+        },
+        { "run": "pnpm install --frozen-lockfile" },
+        { "run": "pnpm run ${{ matrix.script }} --if-present" }
       ],
       "timeout-minutes": 15
     },

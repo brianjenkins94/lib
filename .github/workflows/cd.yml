@@ -4,7 +4,7 @@
     "workflow_dispatch": null
   },
   "concurrency": {
-    "group": "${{ github.workflow }}-${{ github.ref }}",
+    "group": "${{ github.workflow }}-${{ github.ref }}"
   },
   "permissions": {
     "contents": "read",
@@ -16,6 +16,7 @@
       "runs-on": "ubuntu-latest",
       "steps": [
         { "uses": "actions/checkout@v4" },
+        { "uses": "pnpm/action-setup@v4", "with": { "version": "latest", "run_install": false } },
         {
           "id": "enumerate",
           "run": "echo PACKAGES=\"$(git ls-files */package.json */*/package.json --exclude=.* --exclude=**/node_modules/* | jq --compact-output --raw-input --slurp 'split(\"\\n\")[:-1] | map(sub(\"/package.json$\"; \"\")) | reduce .[] as $key ({}; .[$key] = \"\\($key)/**\")')\" >> $GITHUB_OUTPUT"
@@ -32,8 +33,6 @@
           "uses": "dorny/paths-filter@v3",
           "id": "filter",
           "with": {
-            #"base": "${{ steps.base.outputs.BASE_SHA }}",
-            #"ref": "${{ github.sha }}",
             "filters": "${{ steps.enumerate.outputs.PACKAGES }}"
           }
         }
@@ -56,25 +55,32 @@
       "steps": [
         { "uses": "actions/checkout@v4" },
         { "uses": "actions/setup-node@v4", "with": { "node-version": 22 } },
-        { "run": "npm install" }, #{ "uses": "bahmutov/npm-install@v1", "with": { "useLockFile": false } },
+        { "uses": "pnpm/action-setup@v4", "with": { "version": "latest", "run_install": false } },
+        {
+          "uses": "actions/cache@v4",
+          "with": {
+            "path": "~/.pnpm-store",
+            "key": "pnpm-store-${{ runner.os }}-${{ hashFiles('**/pnpm-lock.yaml') }}",
+            "restore-keys": "pnpm-store-${{ runner.os }}-"
+          }
+        },
+        { "run": "pnpm install --frozen-lockfile" },
         {
           "working-directory": "${{ matrix.package }}",
-          "run": "npm run build --if-present"
+          "run": "pnpm run build --if-present"
         },
-
         {
           "env": {
             "GH_TOKEN": "${{ secrets.PAT }}"
           },
           "run": "for TAG in $(gh release list --json tagName,isDraft --jq '.[] | select(.isDraft) | .tagName'); do gh release delete -y \"$TAG\"; done"
         },
-
         {
           "id": "tag",
           "env": {
             "GH_TOKEN": "${{ secrets.PAT }}"
           },
-          "run": "PACKAGE=\"${{ matrix.package }}\"; VERSION=\"0.0.0\"; [[ -f docs/$PACKAGE@latest.tgz ]] && VERSION=$(tar -xOzf docs/$PACKAGE@latest.tgz ./package.json | jq --raw-output '.version // \"0.0.0\"'); PACKAGE_VERSION=$(jq --raw-output '.version // empty' \"$PACKAGE/package.json\"); if [[ -n \"$PACKAGE_VERSION\" ]]; then VERSION=\"$PACKAGE_VERSION\"; fi; RELEASE_VERSION=$(gh release list --limit 100 --json tagName --jq \"[.[] | select(.tagName | startswith(\\\"$PACKAGE@\\\")) | .tagName | sub(\\\"$PACKAGE@\\\"; \\\"\\\") | split(\\\".\\\") | map(tonumber)] | sort | last | if . == null or . == \\\"\\\" then \\\"\\\" else map(tostring) | join(\\\".\\\") end\"); if [[ -n \"$RELEASE_VERSION\" ]] && npx -y semver \"$RELEASE_VERSION\" -r \">$VERSION\" > /dev/null; then VERSION=\"$RELEASE_VERSION\"; fi; VERSION=${VERSION:-0.0.0}; BUMPED_VERSION=$(npx -y semver \"$VERSION\" -i minor); BUMPED_VERSION=${BUMPED_VERSION:-0.1.0}; echo \"TAG_NAME=$PACKAGE@$BUMPED_VERSION\" >> \"$GITHUB_OUTPUT\""
+          "run": ".github/workflows/scripts/tag.sh \"${{ matrix.package }}\""
         },
         {
           "uses": "softprops/action-gh-release@v2",
@@ -93,23 +99,28 @@
       "steps": [
         { "uses": "actions/checkout@v4" },
         { "uses": "actions/setup-node@v4", "with": { "node-version": 22 } },
-
+        { "uses": "pnpm/action-setup@v4", "with": { "version": "latest", "run_install": false } },
+        {
+          "uses": "actions/cache@v4",
+          "with": {
+            "path": "~/.pnpm-store",
+            "key": "pnpm-store-${{ runner.os }}-${{ hashFiles('**/pnpm-lock.yaml') }}",
+            "restore-keys": "pnpm-store-${{ runner.os }}-"
+          }
+        },
         {
           "env": {
             "GH_TOKEN": "${{ secrets.PAT }}"
           },
           "run": "gh run download --name github-pages; tar -xvf artifact.tar --keep-old-files --directory docs/ || true"
         },
-
-        { "run": "npm install" }, #{ "uses": "bahmutov/npm-install@v1", "with": { "useLockFile": false } },
-
+        { "run": "pnpm install --frozen-lockfile" },
         {
           "env": {
             "GH_TOKEN": "${{ secrets.PAT }}"
           },
-          "run": "for PACKAGE in $(jq --raw-output '.[]' <<< '[\"components/monaco-vscode-api\",\"util\"]'); do TAG_NAME=$(jq --raw-output 'select(.version != null and .version != \"\") | \"\\(.name)@\\(.version)\"' \"$PACKAGE/package.json\" || true); if [[ -z \"$TAG_NAME\" ]] || gh release list --json tagName --jq '.[].tagName' | grep -qx \"$TAG_NAME\"; then BASE_VERSION=$(gh release list --json tagName --jq \"([.[] | select(.tagName | startswith(\\\"$PACKAGE@\\\")) | .tagName | sub(\\\"$PACKAGE@\\\"; \\\"\\\") | select(length > 0) | split(\\\".\\\") | map(tonumber)] | sort | last | if . == null then \\\"0.1.0\\\" else (map(tostring) | join(\\\".\\\")) end)\"); TAG_NAME=$PACKAGE@$BASE_VERSION; fi; ARCHIVE=docs/${TAG_NAME}.tgz; echo \"📦 Publishing $PACKAGE as $TAG_NAME\"; if npm run publish; then [[ -f \"$ARCHIVE\" ]] || { echo \"❌ Archive $ARCHIVE not found\"; exit 1; }; echo \"✅ Marking release $TAG_NAME as published\"; gh release edit \"$TAG_NAME\" --draft=false; else echo \"❌ Failed to publish $PACKAGE\"; gh release delete \"$TAG_NAME\" --yes || true; git push origin \":refs/tags/$TAG_NAME\" || true; exit 1; fi; done"
+          "run": "for PACKAGE in $(jq --raw-output '.[]' <<< \"$PACKAGES\"); do .github/workflows/scripts/publish.sh \"$PACKAGE\"; done"
         },
-
         {
           "uses": "actions/upload-pages-artifact@v3",
           "with": {
