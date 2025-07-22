@@ -18,12 +18,12 @@ RELEASE_VERSION=$(gh release list --limit 100 --json tagName --jq \
   "[.[] | select(.tagName | startswith(\"$PACKAGE@\")) | .tagName | sub(\"$PACKAGE@\"; \"\") | split(\".\") | map(tonumber)] | sort | last | if . == null or . == \"\" then \"\" else map(tostring) | join(\".\") end"
 )
 
-if [[ -n "$RELEASE_VERSION" ]] && npx -y semver "$RELEASE_VERSION" -r ">$VERSION" > /dev/null; then
+if [[ -n "$RELEASE_VERSION" ]] && pnpm exec semver "$RELEASE_VERSION" -r ">$VERSION" > /dev/null; then
   VERSION="$RELEASE_VERSION"
 fi
 
 VERSION=${VERSION:-0.0.0}
-BUMPED_VERSION=$(npx -y semver "$VERSION" -i minor)
+BUMPED_VERSION=$(pnpm exec semver "$VERSION" -i minor)
 BUMPED_VERSION=${BUMPED_VERSION:-0.1.0}
 
 echo "TAG_NAME=$PACKAGE@$BUMPED_VERSION" >> "$GITHUB_OUTPUT"
