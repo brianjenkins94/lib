@@ -1,0 +1,14 @@
+{
+  "name": "private-repo-file-explorer",
+  "author": "Brian Jenkins",
+  "license": "MIT",
+  "type": "module",
+  "scripts": {
+    "build": "#"
+  },
+  "engines": {
+    "node": ">=18.0.0",
+    "npm": ">=8.0.0"
+  },
+  "sideEffects": true
+}
