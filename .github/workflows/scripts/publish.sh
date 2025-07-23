@@ -1,14 +1,13 @@
 #!/usr/bin/env bash
 
 PACKAGES=("$@")
-RELEASES=$(gh release list --json tagName)
 
 pnpm run publish
 
 for PACKAGE in "${PACKAGES[@]}"; do
   TAG_NAME=$(jq --raw-output 'select(.version != null and .version != "") | "\(.name)@\(.version)"' "$PACKAGE/package.json" || true)
 
-  if [[ -z "$TAG_NAME" ]] || jq --raw-output '.[].tagName' <<< "$RELEASES" | grep -qx "$TAG_NAME"; then
+  if [[ -z "$TAG_NAME" ]] || jq --raw-output '.[].tagName' <<< "$(gh release list --json tagName)" | grep -qx "$TAG_NAME"; then
     TAG_NAME="${PACKAGE}@$(jq --raw-output '([.[] | select(.tagName | startswith("'"$PACKAGE"'@")) | .tagName | sub("'"$PACKAGE"'@";"") | select(length > 0) | split(".") | map(tonumber)] | sort | last | if . == null or . == [] then [0,1,0] else . end | map(tostring) | join("."))' <<< "$RELEASES")"
   fi
 
