@@ -66,7 +66,7 @@
             "restore-keys": "pnpm-store-${{ runner.os }}-"
           }
         },
-        { "run": "pnpm install" },
+        { "run": "pnpm install --allow-build=esbuild" },
         {
           "working-directory": "${{ matrix.package }}",
           "run": "pnpm run --if-present build"
@@ -116,12 +116,12 @@
           },
           "run": "(gh run download --name github-pages && tar -xvf artifact.tar --keep-old-files --directory docs/) || true"
         },
-        { "run": "pnpm install" },
+        { "run": "pnpm install --allow-build=esbuild" },
         {
           "env": {
             "GH_TOKEN": "${{ secrets.PAT }}"
           },
-          "run": "for PACKAGE in $(jq --raw-output '.[]' <<< '${{ needs.changes.outputs.packages }}'); do .github/workflows/scripts/publish.sh \"$PACKAGE\"; done"
+          "run": ".github/workflows/scripts/publish.sh $(jq --raw-output '.[]' <<< '${{ needs.changes.outputs.packages }}')"
         },
         {
           "uses": "actions/upload-pages-artifact@v3",
