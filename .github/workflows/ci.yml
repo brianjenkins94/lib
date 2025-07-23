@@ -29,7 +29,7 @@
             "restore-keys": "pnpm-store-${{ runner.os }}-"
           }
         },
-        { "run": "pnpm install --dangerously-allow-all-builds" },
+        { "run": "pnpm install" },
         { "run": "pnpm run --if-present ${{ matrix.script }} " }
       ],
       "timeout-minutes": 15

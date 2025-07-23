@@ -4,6 +4,8 @@ PACKAGES=("$@")
 
 pnpm run publish
 
+EXIT_CODE=0
+
 for PACKAGE in "${PACKAGES[@]}"; do
   TAG_NAME=$(jq --raw-output 'select(.version != null and .version != "") | "\(.name)@\(.version)"' "$PACKAGE/package.json" || true)
 
@@ -18,7 +20,7 @@ for PACKAGE in "${PACKAGES[@]}"; do
   #if pnpm run publish "$PACKAGE"; then
     if [[ ! -f "docs/${TAG_NAME}.tgz" ]]; then
       echo "❌ Archive $TAG_NAME not found"
-      exit 1
+      EXIT_CODE=1
     fi
 
     echo "✅ Marking release $TAG_NAME as published"
@@ -33,3 +35,4 @@ for PACKAGE in "${PACKAGES[@]}"; do
   #fi
 done
 
+exit $EXIT_CODE
