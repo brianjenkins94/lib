@@ -86,6 +86,12 @@ for (const workspace of workspaces) {
         }
     }
 
+    if (packageJson["version"] === version) {
+        const [major, minor] = version.split('.');
+
+        version = [major, parseInt(minor) + 1, 0].join('.');
+    }
+
     // Ensure a release exists for this package.
     const isDraft = () => new Promise(function(resolve, reject) {
         const gh = spawn("gh", ["release", "view", workspace + "@" + version, "--json", "isDraft", "--jq", ".isDraft"]);
@@ -110,9 +116,9 @@ for (const workspace of workspaces) {
 
     files["package.json"] = JSON.stringify({
         ...packageJson,
-        "version": version,
+        "exports": Object.fromEntries(Object.keys(files).map((key) => [key, key])),
         "files": Object.keys(files),
-        "exports": Object.fromEntries(Object.keys(files).map((key) => [key, key]))
+        "version": version
     }, undefined, 2)
 
     // Compare files
