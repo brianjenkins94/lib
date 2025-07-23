@@ -33,8 +33,8 @@
           "uses": "dorny/paths-filter@v3",
           "id": "filter",
           "with": {
-            #"base": "${{ steps.base.outputs.BASE_SHA }}",
-            #"ref": "${{ github.sha }}",
+            "base": "${{ steps.base.outputs.BASE_SHA }}",
+            "ref": "${{ github.sha }}",
             "filters": "${{ steps.enumerate.outputs.PACKAGES }}"
           }
         }
@@ -71,6 +71,7 @@
           "working-directory": "${{ matrix.package }}",
           "run": "pnpm run --if-present build"
         },
+        # TODO: Move this to a cleanup job
         {
           "env": {
             "GH_TOKEN": "${{ secrets.PAT }}"
