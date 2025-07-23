@@ -80,20 +80,23 @@ for (const workspace of workspaces) {
         });
 
         const packageJson = JSON.parse(archiveFiles["package.json"] ?? "{}")
-
         archiveVersion = packageJson["version"];
+        console.log("archiveVersion for", workspace, ":", archiveVersion);
     }
 
     let version = packageJson["version"] ?? "0.1.0"
+    console.log("Current version for", workspace, ":", version);
 
     if (version === archiveVersion) {
         const [major, minor] = archiveVersion.split('.');
 
         version = [major, parseInt(minor) + 1, 0].join('.');
+        console.log("Bumping version for", workspace, ":", version);
     }
 
     // Ensure a release exists for this package.
     const isDraft = () => new Promise(function(resolve, reject) {
+        console.log("Checking if release draft exists for", workspace + "@" + version);
         const gh = spawn("gh", ["release", "view", workspace + "@" + version, "--json", "isDraft", "--jq", ".isDraft"]);
 
         const chunks = [];
@@ -103,13 +106,13 @@ for (const workspace of workspaces) {
         });
 
         gh.on("close", function(code) {
+            console.log("gh release view exit code for", workspace, ":", code, "output:", Buffer.concat(chunks).toString());
             resolve(code === 0 && Buffer.concat(chunks).toString().trim() === "true");
         });
     });
 
     if (isCI && !(await isDraft())) {
         console.error(`❌ Skipping ${workspace}: no GitHub release exists`);
-
         continue;
     }
     // </>
@@ -120,9 +123,12 @@ for (const workspace of workspaces) {
         "files": Object.keys(files),
         "version": version
     }, undefined, 2)
+    console.log("Added package.json to files for", workspace);
 
     // Compare files
+    console.log("Comparing files for", workspace);
     if (Object.keys(files).length === Object.keys(archiveFiles).length && Object.entries(files).every(([key, value]) => archiveFiles[key] === value)) {
+        console.log("No file changes for", workspace, "- skipping package creation");
         continue;
     }
 
@@ -139,10 +145,12 @@ for (const workspace of workspaces) {
     await fs.mkdir(outputDirectory, { "recursive": true })
 
     const output = fs.createWriteStream(path.join(outputDirectory, path.basename(workspace) + "@" + version + ".tgz"));
+    console.log("Writing tar to:", path.join(outputDirectory, path.basename(workspace) + "@" + version + ".tgz"));
 
     if (isCI) {
         output.on("finish", async function() {
             await fs.copyFile(path.join(outputDirectory, path.basename(workspace) + "@" + version + ".tgz"), path.join(outputDirectory, path.basename(workspace) + "@latest.tgz"))
+            console.log("Copied to latest for", workspace);
         });
     }
 
