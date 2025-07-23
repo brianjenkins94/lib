@@ -40,7 +40,7 @@ for (const workspace of workspaces) {
 
     const files = Object.fromEntries(result.outputFiles.map(({ "path": filePath, text }) => [filePath.substring("/".length).replace(/\\/gu, "/"), text]));
 
-    let version = "0.1.0";
+    let archiveVersion;
 
     const tarFile = path.join(distDirectory, workspace + "@latest.tgz")
 
@@ -81,13 +81,13 @@ for (const workspace of workspaces) {
 
         const packageJson = JSON.parse(archiveFiles["package.json"] ?? "{}")
 
-        if (packageJson["version"] !== undefined) {
-            version = packageJson["version"];
-        }
+        archiveVersion = packageJson["version"];
     }
 
-    if (packageJson["version"] === version) {
-        const [major, minor] = version.split('.');
+    let version = packageJson["version"] ?? "0.1.0"
+
+    if (version === archiveVersion) {
+        const [major, minor] = archiveVersion.split('.');
 
         version = [major, parseInt(minor) + 1, 0].join('.');
     }
