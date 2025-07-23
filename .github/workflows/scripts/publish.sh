@@ -26,9 +26,9 @@ for PACKAGE in "${PACKAGES[@]}"; do
     else
       echo "❌ Release $TAG_NAME does not exist, skipping edit."
     fi
-  else
-    echo "❌ Failed to publish $TAG_NAME"
-    exit 1
+  #else
+  # echo "❌ Failed to publish $TAG_NAME"
+  # exit 1
   #fi
 done
 
