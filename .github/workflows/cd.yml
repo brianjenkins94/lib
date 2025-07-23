@@ -121,7 +121,7 @@
           "env": {
             "GH_TOKEN": "${{ secrets.PAT }}"
           },
-          "run": ".github/workflows/scripts/publish.sh $(jq --raw-output '.[]' <<< '${{ needs.changes.outputs.packages }}')"
+          "run": "for PACKAGE in $(jq --raw-output '.[]' <<< '${{ needs.changes.outputs.packages }}'); do .github/workflows/scripts/publish.sh \"$PACKAGE\"; done"
         },
         {
           "uses": "actions/upload-pages-artifact@v3",
