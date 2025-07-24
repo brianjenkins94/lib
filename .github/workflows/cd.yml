@@ -71,13 +71,6 @@
           "working-directory": "${{ matrix.package }}",
           "run": "pnpm run --if-present build"
         },
-        # TODO: Move this to a cleanup job
-        {
-          "env": {
-            "GH_TOKEN": "${{ secrets.PAT }}"
-          },
-          "run": "for TAG in $(gh release list --json tagName,isDraft --jq '.[] | select(.isDraft) | .tagName'); do gh release delete -y \"$TAG\"; done"
-        },
         {
           "id": "tag",
           "env": {
