@@ -3,13 +3,11 @@ import type { OAuth2Client, OAuth2Token } from "@badgateway/oauth2-client";
 import * as fs from "../fs";
 import { __root } from "../env";
 import { createServer } from "../server";
-import { attach, launch } from "../playwright";
-import { waitForNavigation } from "../playwright/wait";
 
 export function fetchWrapper(oauth2Client: OAuth2Client, { redirectUri = "http://localhost:3000/callback", scopes = [] }) {
 	const fetchWrapper = new OAuth2Fetch({
 		"client": oauth2Client,
-		"getNewToken": async () => {
+		"getNewToken": async function() {
 			// WORKAROUND: https://github.com/badgateway/oauth2-client/issues/110
 			if (fetchWrapper["activeGetStoredToken"] !== null) {
 				await fetchWrapper["activeGetStoredToken"];
@@ -21,9 +19,7 @@ export function fetchWrapper(oauth2Client: OAuth2Client, { redirectUri = "http:/
 
 			let server;
 
-			return new Promise<OAuth2Token>(function(resolve, reject) {
-				let page;
-
+			const token = await new Promise<OAuth2Token>(function(resolve, reject) {
 				server = createServer();
 
 				server.get("/callback", function(request, response) {
@@ -34,15 +30,14 @@ export function fetchWrapper(oauth2Client: OAuth2Client, { redirectUri = "http:/
 						"redirectUri": redirectUri
 					}));
 
-					page.close();
-
 					return {
 						"statusCode": 200
 					};
 				});
 
-				server.listen(parseInt(new URL(redirectUri).port), async function() {
-					page = await attach(oauth2Client.settings.server + "?" + new URLSearchParams({
+				server.listen(parseInt(new URL(redirectUri).port), function() {
+					// TODO: Use open() instead.
+					console.log(oauth2Client.settings.server + "?" + new URLSearchParams({
 						"access_type": "offline",
 						"response_type": "code",
 						"scope": scopes.join(" "),
@@ -51,9 +46,11 @@ export function fetchWrapper(oauth2Client: OAuth2Client, { redirectUri = "http:/
 						"redirect_uri": redirectUri
 					}).toString());
 				});
-			}).then(function() {
-				server.close();
 			});
+
+			await server.close();
+
+			return token;
 		},
 		"storeToken": function(token) {
 			if (!fs.existsSync("token.json")) {

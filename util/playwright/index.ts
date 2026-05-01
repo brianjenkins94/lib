@@ -8,6 +8,7 @@ import * as fs from "../fs"
 import { __root, isWindows } from "../env";
 import { sleep } from "../sleep";
 import { series } from "../array";
+import { defaultConditionCallback } from "../fido";
 
 const browsers = {
 	"Brave": {
@@ -101,7 +102,7 @@ export async function launch(url, options?) {
 	return page;
 }
 
-const contents = async function({ method, url, query, options }) {
+const contents = async function({ url, query, options }) {
 	if (!globalThis.fetch.toString().includes("[native code]")) {
 		console.warn("`fetch` appears to have been overwritten.");
 
@@ -112,7 +113,7 @@ const contents = async function({ method, url, query, options }) {
 		globalThis.fetch = iframe.contentWindow.fetch;
 	}
 
-	const response = await fido[method](url, query, options);
+	const response = await fido[options["method"].toLowerCase()](url, query, options);
 }.toString();
 
 let esbuild;
@@ -186,11 +187,10 @@ async function fetchFactory(baseUrl?, defaultOptions = {}) {
 
 	const AsyncFunction = (async function() { }).constructor;
 
-	return async function(page, method, url, query?, options?) {
+	return async function(page, url, query?, options?) {
 		// @ts-expect-error
 		const body = await page.evaluate(new AsyncFunction(args, functionBody), {
-			"method": method,
-			"url": url,
+			"url": url instanceof Request ? url.url : url,
 			"query": query,
 			"options": options
 		});
@@ -201,28 +201,39 @@ async function fetchFactory(baseUrl?, defaultOptions = {}) {
 	};
 }
 
-// TODO: Review
 export const fido = {
-	"get": async function(page, url, query?, options?) {
-		this["_fido"] ??= await fetchFactory();
+	"fetch": async (page, url, query?, options?) => (fido.fetch = await fetchFactory())(page, url, query, options),
+	"get": (page, url, query?, options?) => fido.fetch(page, url, options === undefined && (query && Object.values(query).every((value) => typeof value !== "object") ? query : undefined), { ...(options ?? query), "method": "GET" }),
+	"post": (page, url, query?, options?) => fido.fetch(page, url, options === undefined && (query && Object.values(query).every((value) => typeof value !== "object") ? query : undefined), { ...(options ?? query), "method": "POST" }),
+	"put": (page, url, query?, options?) => fido.fetch(page, url, options === undefined && (query && Object.values(query).every((value) => typeof value !== "object") ? query : undefined), { ...(options ?? query), "method": "PUT" }),
+	"patch": (page, url, query?, options?) => fido.fetch(page, url, options === undefined && (query && Object.values(query).every((value) => typeof value !== "object") ? query : undefined), { ...(options ?? query), "method": "PATCH" }),
+	"delete": (page, url, query?, options?) => fido.fetch(page, url, options === undefined && (query && Object.values(query).every((value) => typeof value !== "object") ? query : undefined), { ...(options ?? query), "method": "DELETE" }),
+	"poll": (page, url, query?, options?) => (async function poll(page, url, query: Record<string, string> = {}, { conditionCallback = defaultConditionCallback, initialValue = [], ...options}) {
+		if (typeof url === "string") {
+			url = new URL(url);
+		}
 
-		return this["_fido"](page, "get", url, query, options);
-	},
-	"post": async function(page, url, query?, options?) {
-		this["_fido"] ??= await fetchFactory();
+		url.search = new URLSearchParams([
+			...new URLSearchParams(url.search),
+			...Object.entries(query)
+		]).toString();
 
-		return this["_fido"](page, "post", url, query, options);
-	},
-	"put": async function(page, url, query?, options?) {
-		this["_fido"] ??= await fetchFactory();
+		let currentValue = initialValue;
 
-		return this["_fido"](page, "put", url, query, options);
-	},
-	"delete": async function(page, url, query?, options?) {
-		this["_fido"] ??= await fetchFactory();
+		let request = new Request(url.toString(), {
+			"method": options["method"] ?? "GET",
+			"headers": options["headers"],
+			"body": options["body"]
+		});
 
-		return this["_fido"](page, "delete", url, query, options);
-	}
+		for (let callCount = 1; request instanceof Request; callCount++) {
+			const response = await fido[request.method.toLowerCase()](page, request);
+
+			request = await conditionCallback(currentValue, { request, response }, callCount);
+		}
+
+		return request;
+	})(page, url, options === undefined && (query && Object.values(query).every((value) => typeof value !== "object") ? query : undefined), { "method": "GET", ...(options ?? query) })
 };
 
 export function getHref(page) {

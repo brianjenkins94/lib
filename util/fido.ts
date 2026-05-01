@@ -271,11 +271,16 @@ async function attemptParse(response: Response): Promise<any> {
 }
 
 function extendedFetch(url, { cache, cacheKey, debug, fetch, limiter, retry, ...options }): Promise<Response> {
+	if (debug && url instanceof Request) {
+		options["body"] = url["body"];
+		options["headers"] = Object.fromEntries(url.headers);
+	}
+
 	return new Promise(function(resolve, reject) {
 		const requestBuffer = [];
 
 		if (debug) {
-			requestBuffer.push(options["method"].toUpperCase() + " " + url);
+			requestBuffer.push(options["method"].toUpperCase() + " " + (url instanceof Request ? url.url : url));
 		}
 
 		if (debug && options["headers"]?.["Content-Type"] !== undefined) {
@@ -327,7 +332,7 @@ function extendedFetch(url, { cache, cacheKey, debug, fetch, limiter, retry, ...
 
 							for (const header of ["Content-Length", "Content-Type", "Retry-After", "Server", "X-Powered-By", /Rate-Limit/ui]) {
 								if (header instanceof RegExp) {
-									for (const [key, value] of response.headers.entries()) {
+									for (const [key, value] of response.headers) {
 										if (header.test(key)) {
 											responseBuffer.push(key.replace(/(^\w|-\w)/gu, (match) => match.toUpperCase()) + ": " + value);
 										}
@@ -341,7 +346,7 @@ function extendedFetch(url, { cache, cacheKey, debug, fetch, limiter, retry, ...
 						if (response.status >= 400 && response.status < 500) {
 							responseBuffer.push("Request failed with " + (String(response.status) + " " + response.statusText).trim());
 
-							const body = await attemptParse(response);
+							const body = await attemptParse(response.clone());
 
 							if (debug && body !== undefined) {
 								responseBuffer.push(...util.inspect(body, { "compact": false }).split("\n"));
@@ -372,8 +377,8 @@ function extendedFetch(url, { cache, cacheKey, debug, fetch, limiter, retry, ...
 
 								throw error;
 							}
-						} else if (!(url instanceof Request)) {
-							const body = await attemptParse(response);
+						} else {
+							const body = await attemptParse(response.clone());
 
 							if (debug && body !== undefined) {
 								responseBuffer.push(...util.inspect(body, { "compact": false }).split("\n"));
@@ -449,7 +454,7 @@ function fetchFactory(baseUrl?, defaultOptions = {}) {
 				throw error;
 			}
 
-			let [header, reset] = response.headers.entries().find(([header]) => /Rate-Limit-(After|Reset)/ui.test(header)) ?? [];
+			let [header, reset] = response.headers.find(([header]) => /Rate-Limit-(After|Reset)/ui.test(header)) ?? [];
 
 			reset = reset * 1000;
 
@@ -473,7 +478,7 @@ function fetchFactory(baseUrl?, defaultOptions = {}) {
 		}
 
 		query = {
-			...Object.fromEntries(new URLSearchParams(url.search)),
+			...new URLSearchParams(url.search),
 			...query
 		};
 
@@ -511,14 +516,68 @@ function fetchFactory(baseUrl?, defaultOptions = {}) {
 	};
 }
 
+export async function defaultConditionCallback(accumulator, { request, response }, callCount) {
+	const url = new URL(request.url);
+
+	const query = {
+		"page": callCount + 1
+	}
+
+	url.search = new URLSearchParams({
+		...new URLSearchParams(url.search),
+		...query
+	}).toString();
+
+	const body = await response.json();
+
+	accumulator.push(...body["items"]);
+
+	if (accumulator.length < body["totalCount"]) {
+		return new Request(url.toString(), {
+			"headers": request["headers"],
+			"body": request["body"]
+		});
+	}
+
+	return accumulator;
+}
+
+async function poll(url, query, { conditionCallback = defaultConditionCallback, initialValue = [], ...options}, ) {
+	if (typeof url === "string") {
+		url = new URL(url);
+	}
+
+	url.search = new URLSearchParams([
+		...new URLSearchParams(url.search),
+		...Object.entries(query)
+	]).toString();
+
+	let currentValue = initialValue;
+
+	let request = new Request(url.toString(), {
+		"method": options["method"] ?? "GET",
+		"headers": options["headers"],
+		"body": options["body"]
+	});
+
+	for (let callCount = 1; request instanceof Request; callCount++) {
+		const response = await this[request.method.toLowerCase()](request);
+
+		request = await conditionCallback(currentValue, { request, response }, callCount);
+	}
+
+	return request;
+}
+
 export function withDefaults(baseUrl, defaultOptions = {}) {
 	const fido = {
 		"fetch": (url, query?, options?) => (fido.fetch = fetchFactory(baseUrl, defaultOptions))(url, query, options),
-		"get": (url, query?, options?) => fido.fetch(url, options ?? (query && Object.values(query).every((v) => typeof v !== "object") ? query : undefined), { ...(options ?? query), "method": "GET" }),
-		"post": (url, query?, options?) => fido.fetch(url, options ?? (query && Object.values(query).every((v) => typeof v !== "object") ? query : undefined), { ...(options ?? query), "method": "POST" }),
-		"put": (url, query?, options?) => fido.fetch(url, options ?? (query && Object.values(query).every((v) => typeof v !== "object") ? query : undefined), { ...(options ?? query), "method": "PUT" }),
-		"patch": (url, query?, options?) => fido.fetch(url, options ?? (query && Object.values(query).every((v) => typeof v !== "object") ? query : undefined), { ...(options ?? query), "method": "PATCH" }),
-		"delete": (url, query?, options?) => fido.fetch(url, options ?? (query && Object.values(query).every((v) => typeof v !== "object") ? query : undefined), { ...(options ?? query), "method": "DELETE" }),
+		"get": (url, query?, options?) => fido.fetch(url, options === undefined && (query && Object.values(query).every((value) => typeof value !== "object") ? query : undefined), { ...(options ?? query), "method": "GET" }),
+		"post": (url, query?, options?) => fido.fetch(url, options === undefined && (query && Object.values(query).every((value) => typeof value !== "object") ? query : undefined), { ...(options ?? query), "method": "POST" }),
+		"put": (url, query?, options?) => fido.fetch(url, options === undefined && (query && Object.values(query).every((value) => typeof value !== "object") ? query : undefined), { ...(options ?? query), "method": "PUT" }),
+		"patch": (url, query?, options?) => fido.fetch(url, options === undefined && (query && Object.values(query).every((value) => typeof value !== "object") ? query : undefined), { ...(options ?? query), "method": "PATCH" }),
+		"delete": (url, query?, options?) => fido.fetch(url, options === undefined && (query && Object.values(query).every((value) => typeof value !== "object") ? query : undefined), { ...(options ?? query), "method": "DELETE" }),
+		"poll": (url, query?, options?) => (fido.poll = (url, query?, options?) => (poll.bind(fido))(url, options === undefined && (query && Object.values(query).every((value) => typeof value !== "object") ? query : undefined), { "method": "GET", ...(options ?? query) }))(url, query, options),
 		"limit": function(amount) {
 			if (defaultOptions["limiter"] !== false) {
 				const limiter = new Bottleneck(typeof amount === "number" ? {
@@ -539,9 +598,10 @@ export function withDefaults(baseUrl, defaultOptions = {}) {
 
 export const fido = {
 	"fetch": (url, query?, options?) => (fido.fetch = fetchFactory())(url, query, options),
-	"get": (url, query?, options?) => fido.fetch(url, options ?? (query && Object.values(query).every((v) => typeof v !== "object") ? query : undefined), { ...(options ?? query), "method": "GET" }),
-	"post": (url, query?, options?) => fido.fetch(url, options ?? (query && Object.values(query).every((v) => typeof v !== "object") ? query : undefined), { ...(options ?? query), "method": "POST" }),
-	"put": (url, query?, options?) => fido.fetch(url, options ?? (query && Object.values(query).every((v) => typeof v !== "object") ? query : undefined), { ...(options ?? query), "method": "PUT" }),
-	"patch": (url, query?, options?) => fido.fetch(url, options ?? (query && Object.values(query).every((v) => typeof v !== "object") ? query : undefined), { ...(options ?? query), "method": "PATCH" }),
-	"delete": (url, query?, options?) => fido.fetch(url, options ?? (query && Object.values(query).every((v) => typeof v !== "object") ? query : undefined), { ...(options ?? query), "method": "DELETE" }),
+	"get": (url, query?, options?) => fido.fetch(url, options === undefined && (query && Object.values(query).every((value) => typeof value !== "object") ? query : undefined), { ...(options ?? query), "method": "GET" }),
+	"post": (url, query?, options?) => fido.fetch(url, options === undefined && (query && Object.values(query).every((value) => typeof value !== "object") ? query : undefined), { ...(options ?? query), "method": "POST" }),
+	"put": (url, query?, options?) => fido.fetch(url, options === undefined && (query && Object.values(query).every((value) => typeof value !== "object") ? query : undefined), { ...(options ?? query), "method": "PUT" }),
+	"patch": (url, query?, options?) => fido.fetch(url, options === undefined && (query && Object.values(query).every((value) => typeof value !== "object") ? query : undefined), { ...(options ?? query), "method": "PATCH" }),
+	"delete": (url, query?, options?) => fido.fetch(url, options === undefined && (query && Object.values(query).every((value) => typeof value !== "object") ? query : undefined), { ...(options ?? query), "method": "DELETE" }),
+	"poll": (url, query?, options?) => (fido.poll = (url, query?, options?) => (poll.bind(fido))(url, options === undefined && (query && Object.values(query).every((value) => typeof value !== "object") ? query : undefined), { "method": "GET", ...(options ?? query) }))(url, query, options)
 };

@@ -1,5 +1,5 @@
 {
-  "name": "monaco-vscode-api-esbuild",
+  "name": "monaco-vscode-api",
   "author": "Brian Jenkins",
   "license": "MIT",
   "type": "module",
@@ -15,7 +15,6 @@
     "import-meta-resolve": "latest",
     "json5": "latest",
     "node-stdlib-browser": "latest",
-    "tsup": "latest",
     "typescript": "latest",
     "vscode-languageclient": "latest",
     "vscode-languageserver": "latest",

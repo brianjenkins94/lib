@@ -1,5 +1,4 @@
 import { __root, isCI } from "../util/env";
-import { esbuild } from "../util/esbuild"
 import { build } from "./build";
 import { glob } from "../util/fs";
 import * as path from "path";

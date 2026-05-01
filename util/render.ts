@@ -1,8 +1,11 @@
 import * as ejs from "ejs";
 import * as fs from "./fs";
 import { mapEntries } from "./array";
+import * as path from "path";
 
-export async function render(template, data = {}, options = {}) {
+let vite;
+
+export async function render(template, data = {}, { useVite = false, __dirname = undefined, ...options } = {}) {
 	// Convert the object values to strings
 	data = mapEntries(data, function([key, value]) {
 		if (typeof value !== "function" && typeof value === "object") {
@@ -25,7 +28,43 @@ export async function render(template, data = {}, options = {}) {
 
 	while (true) {
 		try {
-			return ejs.render(template, data, options);
+			let html = ejs.render(template, data, options);
+
+			if (useVite) {
+				vite ??= await import(import.meta.resolve("vite"));
+
+				const result = await vite.build({
+					"mode": "development",
+					"root": __dirname,
+					"plugins": [
+						{
+							"name": "vfs",
+							"enforce": "pre",
+							"resolveId": function(id) {
+								if (id === "/index.html") {
+									return path.join(__dirname, id);
+								}
+							},
+							"load": function(id) {
+								if (id === path.join(__dirname, "index.html")) {
+									return html;
+								}
+							}
+						}
+					],
+					"build": {
+						"outDir": "../dist",
+						"emptyOutDir": false,
+						"rollupOptions": { "input": "/index.html" },
+						"minify": false,
+						"modulePreload": { "polyfill": false }
+					}
+				});
+
+				html = result.output.find(({ fileName }) => fileName === "index.html").source;
+			}
+
+			return html;
 		} catch (error) {
 			const message = error.toString().split("\n").pop();
 
