@@ -28,7 +28,12 @@ for await (const file of fs.glob(path.join(__root, "util", "**", "*.ts"), {
                 return;
             }
 
-            const [packageName] = /(?<=').*(?=')/u.exec(Buffer.concat(buffer).toString())
+            const [packageName] = /(?<=').*?(?=')/u.exec(Buffer.concat(buffer).toString())
+
+            if (packageName.startsWith(".")) {
+                reject(new Error(`${file} has a broken relative import: ${packageName}`));
+                return;
+            }
 
             console.log(">", ["npm", "install", "--save-peer", packageName + "@latest"].join(" "))
             const subprocess = spawn("npm", ["install", "--save-peer", packageName + "@latest"], {

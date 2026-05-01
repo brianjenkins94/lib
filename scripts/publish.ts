@@ -130,7 +130,8 @@ for (const workspace of workspaces) {
 
     files["package.json"] = JSON.stringify({
         ...packageJson,
-        "exports": Object.fromEntries(Object.keys(files).map((key) => [key, key])),
+        "name": `@${process.env["GITHUB_REPOSITORY_OWNER"]}/${packageJson["name"]}`,
+        "exports": Object.fromEntries(Object.keys(files).filter((key) => key !== "package.json").map((key) => ["./" + path.join(path.dirname(key), path.basename(key, path.extname(key))).replace(/\\/gu, "/"), "./" + key])),
         "files": Object.keys(files),
         "version": version
     }, undefined, 2)

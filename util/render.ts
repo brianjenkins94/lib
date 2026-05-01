@@ -5,12 +5,54 @@ import * as path from "path";
 import { polyfillNode } from "./vite/plugins/polyfillNode";
 import { virtualFileSystem } from "./vite/plugins/virtualFileSystem";
 import { jsxToString } from "jsx-async-runtime";
-import { transform } from "./router";
-
 let vite;
 
 function isJsxAsyncRuntimeNode(object) {
 	return (object.type === "tag" && "tag" in object && object.props && typeof object.props === "object") || (object.type === "textNode" && "text" in object);
+}
+
+// TODO: Can this be eliminated?
+async function transform(root, route) {
+    const result = await vite.build({
+        "mode": "production",
+        "root": root,
+        "esbuild": {
+            "jsx": "automatic",
+            "jsxImportSource": "jsx-async-runtime"
+        },
+        "build": {
+            "emptyOutDir": false,
+            "rollupOptions": {
+                "external": function(id, parentId, isResolved) {
+                    const result = !(id.startsWith(".") || [path.join(root, route), route].some((external) => external === id));
+                    //console.log(id, result);
+                    return result;
+                },
+                "input": route,
+                "output": {
+                    "preserveModules": true
+                },
+                "preserveEntrySignatures": "exports-only",
+                "treeshake": false
+            },
+            "sourcemap": "inline",
+            "minify": false,
+            "modulePreload": { "polyfill": false },
+            //"write": false
+        },
+        "define": {
+            "import.meta.url": "location.pathname",
+            "process": "{ \"env\": {} }"
+        },
+        "plugins": [
+            virtualFileSystem({
+                [route]: await fs.readFile(path.join(root, route))
+            })
+        ],
+        "publicDir": false
+    });
+
+    return path.join(root, "dist", result.output[0].fileName);
 }
 
 export async function render(template, data = {}, { useVite = false, root = undefined, route = undefined, ...options } = {}) {

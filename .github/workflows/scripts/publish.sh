@@ -7,9 +7,10 @@ pnpm run publish
 EXIT_CODE=0
 
 for PACKAGE in "${PACKAGES[@]}"; do
-  TAG_NAME=$(tar -xOzf "docs/$PACKAGE@latest.tgz" ./package.json 2>/dev/null | jq --raw-output 'select(.version != null and .version != "") | "\(.name)@\(.version)"' || true)
+  VERSION=$(tar -xOzf "docs/$PACKAGE@latest.tgz" ./package.json 2>/dev/null | jq --raw-output '.version // empty' || true)
+  TAG_NAME="$PACKAGE@$VERSION"
 
-  if [[ -z "$TAG_NAME" ]]; then
+  if [[ -z "$VERSION" ]]; then
     echo "❌ Could not determine TAG_NAME for $PACKAGE (docs/$PACKAGE@latest.tgz missing or has no version)"
     EXIT_CODE=1
     continue

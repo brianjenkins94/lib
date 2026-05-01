@@ -1,11 +1,12 @@
 {
-    "name": "@brianjenkins94/util",
+    "name": "util",
     "author": "Brian Jenkins",
     "license": "MIT",
     "type": "module",
     "peerDependencies": {
         "@badgateway/oauth2-client": "latest",
         "@clack/prompts": "latest",
+        "@opensearch-project/opensearch": "latest",
         "ejs": "latest",
         "gatsby-source-google-docs": "latest",
         "googleapis": "latest",
@@ -16,7 +17,6 @@
         "mime": "latest",
         "node-schedule": "latest",
         "node-stdlib-browser": "latest",
-        "opensearch-project/opensearch-js": "latest",
         "papaparse": "latest",
         "path-to-regexp": "latest",
         "playwright": "latest",

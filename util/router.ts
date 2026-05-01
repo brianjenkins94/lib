@@ -1,6 +1,6 @@
 import * as path from "path";
 import * as url from "url";
-import { promises as fs, existsSync } from "fs";
+import * as fs from "./fs";
 import { mapAsync } from "./array";
 import * as vite from "vite";
 
@@ -9,7 +9,7 @@ let routeModules = new Map();
 
 // TODO: Improve
 export async function findParentPackageJson(directory) {
-	if (existsSync(path.join(directory, "package.json"))) {
+	if (fs.existsSync(path.join(directory, "package.json"))) {
 		return path.join(directory, "package.json");
 	} else if (path.dirname(directory) === directory) {
 		throw new Error("Unable to find parent package.json for " + directory);
