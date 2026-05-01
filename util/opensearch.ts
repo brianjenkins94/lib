@@ -1,11 +1,10 @@
 import { Client } from '@opensearch-project/opensearch';
-import { nDaysAgo, today } from '../util/date';
 
-export async function _search(client: Client, { index = undefined, aggs = undefined, range = undefined, filters = undefined, query = {}, scroll = undefined, size = undefined, sort = undefined, search_after = undefined, ...options } = {}) {
+export async function _search(client: Client, { index = undefined, aggs = undefined, range = undefined, filters = undefined, query = {}, scroll = undefined, size = undefined, sort = undefined, search_after = undefined, _source = undefined, filter_path = undefined, ...options } = {}) {
     range ??= {
         "@timestamp": {
-            "gte": nDaysAgo(90).toISOString(),
-            "lte": new Date(today().setMinutes(0, 0, -1)).toISOString()
+            "gte": new Date(Date.UTC(new Date().getUTCFullYear(), new Date().getUTCMonth(), new Date().getUTCDate() - 90)).toISOString(),
+            "lt": new Date(Date.UTC(new Date().getUTCFullYear(), new Date().getUTCMonth(), new Date().getUTCDate() + 1)).toISOString(),
         }
     };
 
@@ -17,6 +16,11 @@ export async function _search(client: Client, { index = undefined, aggs = undefi
                 return {
                     "bool": {
                         "should": [
+                            {
+                                "term": {
+                                    [key + ".keyword"]: value
+                                },
+                            },
                             {
                                 "match_phrase": {
                                     [key]: value
@@ -45,7 +49,10 @@ export async function _search(client: Client, { index = undefined, aggs = undefi
 
     const response = await client.search({
         "index": index,
+        "_source": _source,
+        "filter_path": filter_path,
         "body": {
+            ...options,
             "aggs": aggs,
             "query": {
                 "bool": filters
@@ -54,44 +61,53 @@ export async function _search(client: Client, { index = undefined, aggs = undefi
             "size": aggs !== undefined ? 0 : size,
             "sort": sort
         },
-        "scroll": scroll
+        "scroll": scroll,
+        // Debug
+        "allow_partial_search_results": false,
+        "track_total_hits": true
     });
 
     const aggregations = response.body.aggregations?.["composite_terms"] ?? response.body.aggregations;
+    const hits = response.body["hits"]?.["hits"] ?? [];
 
     if (aggregations !== undefined) {
-        console.log(`Received ${(aggregations["buckets"] && aggregations["buckets"].length) || response.body.hits.hits.length} buckets in ${(response.body["took"] / 1000).toFixed(3)}s.`);
+        console.info(`Received ${(aggregations["buckets"] && aggregations["buckets"].length) || hits.length} buckets in ${(response.body["took"] / 1000).toFixed(3)}s.`);
     }
 
     return {
         "response": response,
-        "body": response["body"],
-        "hits": response["body"]["hits"]["hits"]
+        "body": response.body,
+        "hits": hits
     };
 }
 
-// Returns all of the unique values for each field.
-export async function getUniqueFieldValues(client: Client, { index, range = undefined, filter = undefined, fields = undefined, size = 1000 }) {
+function transformFields({ filters, fields }) {
     const TERMS_LIMIT = 10000;
 
-    const filters = {
+    filters = {
         //"filter": filters,
         "should": [],
         "must": [],
         "must_not": []
     };
 
-    fields = Object.fromEntries(fields.flatMap(function(fields) {
-        if (typeof fields === "object") {
-            return Object.entries(fields).flatMap(function([key, value]) {
+    fields = Object.fromEntries(fields.flatMap(function(field) {
+        if (typeof field === "object") {
+            return Object.entries(field).flatMap(function([key, value]) {
                 if (Array.isArray(value)) {
-                    filters["must"].push(...Object.entries(fields).map(function([field, value]) {
-                        return {
-                            "terms": {
-                                [field + ".keyword"]: value
-                            }
-                        };
-                    }));
+                    filters["must"].push({
+                        "bool": {
+                            "should": [
+                                {
+                                    "terms": {
+                                        [`${key}.keyword`]: value
+                                    }
+                                },
+                                ...value.map(value => ({ "match_phrase": { [key]: value } }))
+                            ],
+                            "minimum_should_match": 1
+                        }
+                    });
 
                     return [];
                 } else if (typeof value === "object") {
@@ -105,12 +121,24 @@ export async function getUniqueFieldValues(client: Client, { index, range = unde
                         return [];
                     }
 
-                    throw new Error("Not yet implemented.");
+                    return [
+                        [key, value]
+                    ];
                 } else if (typeof value === "string") {
-                    filters["must"].push(...Object.entries(fields).map(function([field, value]) {
+                    filters["must"].push(...Object.entries(field).map(function([key, value]) {
                         return {
-                            "term": {
-                                [field + ".keyword"]: value
+                            "bool": {
+                                "should": [
+                                    {
+                                        "term": {
+                                            [key + ".keyword"]: value
+                                        }
+                                    },
+                                    {
+                                        "match_phrase": { [key]: value }
+                                    }
+                                ],
+                                "minimum_should_match": 1
                             }
                         };
                     }));
@@ -119,8 +147,18 @@ export async function getUniqueFieldValues(client: Client, { index, range = unde
                 }
 
                 filters["must"].push({
-                    "term": {
-                        [key + ".keyword"]: value
+                    "bool": {
+                        "should": [
+                            {
+                                "term": {
+                                    [key + ".keyword"]: value
+                                }
+                            },
+                            {
+                                "match_phrase": { [key]: value }
+                            }
+                        ],
+                        "minimum_should_match": 1
                     }
                 });
 
@@ -137,147 +175,157 @@ export async function getUniqueFieldValues(client: Client, { index, range = unde
         }
 
         return [
-            [fields, {
+            [field, {
                 "terms": {
-                    "field": fields + ".keyword",
-                    "order": { "_key": "asc" },
-                    "size": TERMS_LIMIT
+                    "field": field + ".keyword",
+                    "order": "asc", //{ "_key": "asc" },
+                    //"size": TERMS_LIMIT
                 }
             }]
         ];
     }));
 
-    const { "body": { aggregations } } = await _search(client, {
-        "index": index,
-        "aggs": {
-            ...fields,
-        },
-        "filters": filters,
-        "range": range && {
-            "@timestamp": range
-        }
-    });
+    // <Claude>
 
-    // Return early if there's only one field and it's under the limit
-    if (Object.keys(fields).length === 1) {
-        if (aggregations[Object.keys(fields)[0]]?.["buckets"] === undefined) {
-            return aggregations[Object.keys(fields)[0]];
-        }
+    // Detect numeric fields from range filters and strip .keyword suffix
+    const numericFields = new Set(
+        filters["must"]
+            .filter((f) => f.range)
+            .flatMap((f) => Object.entries(f.range)
+                .filter(([, v]) => Object.values(v).some((n) => typeof n === "number"))
+                .map(([k]) => k)
+            )
+    );
 
-        const { buckets } = aggregations[Object.keys(fields)[0]];
-
-        if (buckets.length < TERMS_LIMIT) {
-            return {
-                [Object.keys(fields)[0]]: Object.fromEntries(buckets.map(({ key, doc_count  }) => [key, doc_count]))
-            };
+    for (const [key, value] of Object.entries(fields)) {
+        if (numericFields.has(key) && value?.terms?.field?.endsWith(".keyword")) {
+            value.terms.field = key;
         }
     }
 
-    // TODO: Replace with `mapEntries()`
-    const results = await Promise.all(Object.keys(fields).map(async function(field) {
-        let { buckets } = aggregations[field];
+    // </Claude>
 
-        const values = [];
-
-        let afterKey;
-
-        do {
-            const { body } = await _search(client, {
-                "index": index,
-                "aggs": {
-                    "composite_terms": {
-                        //"filter": filter,
-                        "composite": {
-                            "size": size,
-                            "sources": [
-                                {
-                                    [field]: {
-                                        "terms": {
-                                            "field": field + ".keyword",
-                                            "order": "asc"
-                                        }
-                                    }
-                                }
-                            ],
-                            ...(afterKey ? { "after": afterKey } : {})
-                        }
-                    }
-                },
-                "filters": filters,
-                "range": range && {
-                    "@timestamp": range
-                },
-                "size": size
-            });
-
-            ({ "aggregations": { "composite_terms": { buckets, "after_key": afterKey } } } = body);
-
-            values.push(...buckets.map(({ "key": { [field]: key }, doc_count }) => [key, doc_count]));
-        } while (afterKey !== undefined);
-
-        return [field, Object.fromEntries(values)];
-    }));
-
-    return Object.fromEntries(results);
+    return {
+        "filters": filters,
+        "fields": fields
+    }
 }
 
-// Returns the results that match ALL fields
-export async function getUniqueFieldCombinations(client: Client, { index, range = undefined, filter = undefined, fields = undefined, size = 1000 }) {
-    const results = [];
-
-    let afterKey;
+// Yields pages of [key, count] entries for a single field
+async function* streamFieldBuckets(client: Client, { index, field, value, filters, range, size = 1000, ...options }) {
+    let afterKey, buckets;
 
     do {
-        let buckets;
-
-        const filters = {
-            //"filter": filters,
-            "should": [],
-            "must": [],
-            "must_not": []
-        };
-
         const { body } = await _search(client, {
+            ...options,
             "index": index,
             "aggs": {
                 "composite_terms": {
                     //"filter": filter,
                     "composite": {
                         "size": size,
-                        "sources": fields.map(function recurse(fields) {
-                            if (typeof fields === "object") {
-                                filters["must"].push(...Object.entries(fields).map(function([field, value]) {
-                                    if (typeof value === "object") {
-                                        if (Object.keys(value).some((key) => key.startsWith("gt") || key.startsWith("lt"))) {
-                                            return {
-                                                "range": {
-                                                    [field]: value
-                                                }
-                                            };
-                                        }
-
-                                        throw new Error("Not yet implemented.")
-                                    }
-
-                                    return {
-                                        "term": {
-                                            [field + ".keyword"]: value
-                                        }
-                                    }
-                                }));
-
-                                return Object.keys(fields).map((key) => recurse(key));
+                        "sources": [
+                            {
+                                [field]: value
                             }
+                        ],
+                        ...(afterKey ? { "after": afterKey } : {})
+                    }
+                }
+            },
+            "filters": filters,
+            "range": range && {
+                "@timestamp": range
+            }
+        });
 
-                            return {
-                                [fields]: {
-                                    "terms": {
-                                        "field": fields + ".keyword",
-                                        "order": "asc"
-                                    }
-                                }
-                            };
-                        }).flat(),
+        ({ "aggregations": { "composite_terms": { buckets, "after_key": afterKey } } } = body);
+
+        yield Object.fromEntries(buckets.map(({ key: { [field]: k }, doc_count }) => [k, doc_count]));
+  } while (afterKey !== undefined);
+}
+
+export async function* streamUniqueFieldValues(client: Client, { index, range = undefined, /* filters = undefined, filter = undefined, */ fields = undefined, size = 1000, ...options }) {
+    let filters;
+
+    ({ filters, fields } = transformFields({ filters, fields }));
+
+    // For each field, yield tagged pages as they arrive
+    for (const [field, value] of Object.entries(fields)) {
+        for await (const page of streamFieldBuckets(client, {
+            "index": index,
+            "field": field,
+            "value": value,
+            "filters": filters,
+            "range": range,
+            "size": size,
+            ...options
+        })) {
+            yield { field, page };
+        }
+    }
+}
+
+// Returns all of the unique values for each field.
+export async function getUniqueFieldValues(client: Client, { index, range = undefined, /* filters = undefined, filter = undefined, */ fields = undefined, size = 1000, ...options }) {
+    let filters;
+
+    ({ filters, fields } = transformFields({ filters, fields }));
+
+    // TODO: Replace with `mapEntries()`
+    const results = await Promise.all(Object.entries(fields).map(async function([field, value]) {
+        const accumulated: Record<string, number> = {};
+
+        for await (const page of streamFieldBuckets(client, {
+            "index": index,
+            "field": field,
+            "value": value,
+            "filters": filters,
+            "range": range,
+            "size": size,
+            ...options,
+        })) {
+            for (const key in page) {
+                accumulated[key] = (accumulated[key] ?? 0) + page[key];
+            }
+        }
+
+        return [field, accumulated];
+    }));
+
+    return Object.fromEntries(results);
+}
+
+// Returns the results that match ALL fields
+export async function getUniqueFieldCombinations(client: Client, { index, range = undefined, /* filters = undefined, filter = undefined, */ fields = undefined, size = 1000, ...options }) {
+    const results = [];
+
+    let filters, afterKey;
+
+    ({ filters, fields } = transformFields({ filters: undefined, fields }));
+
+    // Convert transformFields output to composite sources format
+    const sources = Object.entries(fields).map(([key, value]) => ({
+        [key]: {
+            "terms": {
+                "field": value.terms.field, // Previously: key
+                "order": "asc"
+            }
+        }
+    }));
+
+    do {
+        let buckets;
+
+        const { body } = await _search(client, {
+            ...options,
+            "index": index,
+            "aggs": {
+                "composite_terms": {
+                    //"filter": filter,
+                    "composite": {
+                        "size": size,
+                        "sources": sources,
                         ...(afterKey ? { "after": afterKey } : {})
                     }
                 }
@@ -296,41 +344,138 @@ export async function getUniqueFieldCombinations(client: Client, { index, range 
     return results;
 }
 
-export async function scrollSearch(client: Client, { index = undefined, aggs = undefined, range = undefined, filters = undefined, query = undefined, scroll = "1m", size = 10000, ...options } = {}) {
-    let { "body": { "_scroll_id": scrollId, "hits": { hits } } } = await _search(client, {
-        index,
-        aggs,
-        range,
-        filters,
-        query,
-        "scroll": scroll,
-        "size": size,
-        ...options
+export async function* streamSearch(client: Client, { index = undefined, range = undefined, /* filters = undefined, */ fields = undefined, size = 1000, ...options } = {}) {
+    let filters;
+
+    ({ filters, fields } = transformFields({ filters, fields }));
+
+    const sort = [{ "@timestamp": "asc" }];
+
+    let search_after;
+
+    do {
+        const { body, hits } = await _search(client, {
+            ...options,
+            "index": index,
+            "filters": filters,
+            "range": range && {
+                "@timestamp": range
+            },
+            "sort": sort,
+            "search_after": search_after,
+            "_source": Object.keys(fields),
+            "filter_path": ["took", "hits.hits.sort", ...Object.keys(fields).map((field) => "hits.hits._source." + field)],
+            "size": size
+        });
+
+        if (hits.length === 0) {
+            break;
+        }
+
+        console.info(`Received ${hits.length} buckets in ${(body["took"] / 1000).toFixed(3)}s.`);
+
+        yield hits;
+
+        search_after = hits.at(-1).sort;
+    } while (true);
+}
+
+export async function* streamScrollSearch(client: Client, { index = undefined, range = undefined, /* filters = undefined, */ fields = undefined, scroll = "2m", size = 1000, ...options } = {}) {
+    let filters;
+
+    ({ filters, fields } = transformFields({ filters, fields }));
+
+    // Preflight
+
+    const preflight = await _search(client, {
+        ...options,
+        "index": index,
+        "filters": filters,
+        "range": range && {
+            "@timestamp": range
+        },
+        "size": 1
     });
 
-    const results = [...hits];
+    if (preflight.body["hits"]["hits"].length === 0) {
+        return;
+    }
+
+    let { "body": { "_scroll_id": scrollId, "took": took }, hits } = await _search(client, {
+        ...options,
+        "index": index,
+        "filters": filters,
+        "range": range && {
+            "@timestamp": range
+        },
+        "sort": [
+            { "_doc": 'asc' }
+        ],
+        "_source": Object.keys(fields),
+        "filter_path": ["_scroll_id", "took", ...Object.keys(fields).map((field) => "hits.hits._source." + field)],
+        "scroll": scroll,
+        "size": size
+    });
+
+    if (hits.length > 0) {
+        console.info(`Received ${hits.length} buckets in ${(took / 1000).toFixed(3)}s.`);
+
+        yield hits;
+    }
 
     while (hits.length > 0) {
         const response = await client.transport.request({
             "method": "POST",
             "path": "/_search/scroll",
+            "querystring": 'filter_path=_scroll_id,took,' + Object.keys(fields).map((field) => "hits.hits._source." + field).join(","),
             "body": {
                 "scroll": scroll,
                 "scroll_id": scrollId
             }
         });
 
-        ({ "body": { "_scroll_id": scrollId, "hits": { hits } } } = response);
+        scrollId = response.body["_scroll_id"];
+        hits = response.body["hits"]?.["hits"] ?? [];
 
-        console.log(`Received ${Object.values(response.body?.aggregations ?? {}).reduce((count, { buckets }) => count + buckets.length, 0) || response.body.hits.hits.length} buckets in ${(response.body["took"] / 1000).toFixed(3)}s.`);
+        console.info(`Received ${Object.values(response.body?.aggregations ?? {}).reduce((count, { buckets }) => count + buckets.length, 0) || hits.length} buckets in ${(response.body["took"] / 1000).toFixed(3)}s.`);
 
+        if (hits.length > 0) {
+            yield hits;
+        }
+    }
+
+    try {
+        await client.transport.request({
+            "method": 'DELETE',
+            "path": '/_search/scroll',
+            "body": {
+                "scroll_id": scrollId
+            }
+        });
+    } catch (error) {
+        console.warn(error["name"] + ": " + error["message"]);
+    }
+}
+
+export async function scrollSearch(client: Client, { index = undefined, range = undefined, /* filters = undefined, */ fields = undefined, scroll = "2m", size = 1000, ...options } = {}) {
+    const results = [];
+
+    for await (const hits of streamScrollSearch(client, {
+        index,
+        range,
+        /* filters = undefined, */
+        fields,
+        scroll,
+        size,
+        ...options
+    })) {
         results.push(...hits);
     }
 
     return results;
 }
 
-export async function poll(client: Client, { index = undefined, filters = undefined, query = undefined }) {
+export async function poll(client: Client, { index = undefined, /* filters = undefined, */ ...options }) {
     let lastSort;
 
     async function tick() {
@@ -339,10 +484,10 @@ export async function poll(client: Client, { index = undefined, filters = undefi
         };
 
         const { hits } = await _search(client, {
+            ...options,
             "index": index,
+            //"filters": filters,
             "range": range,
-            filters,
-            query,
             "sort": [
                 { "@timestamp": "asc" },
                 { "_id": "asc" }

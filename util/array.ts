@@ -1,6 +1,6 @@
-export function partition(promises: (() => Promise<any>)[], callback) {
-	return promises.reduce(function(result, element, index) {
-		if (callback(element, index, promises)) {
+export function partition(array: (() => Promise<any>)[], callback) {
+	return array.reduce(function(result, element, index) {
+		if (callback(element, index, array)) {
 			result[0].push(element);
 		} else {
 			result[1].push(element);
@@ -18,12 +18,12 @@ export async function mapAsync(array, callback = (promise) => promise(), filter?
 	}
 }
 
-export async function filterAsync(promises: (() => Promise<any>)[], callback) {
-	const results = await mapAsync(promises, function(element) {
+export async function filterAsync(array: (() => Promise<any>)[], callback) {
+	const results = await mapAsync(array, function(element) {
 		return callback(element);
 	});
 
-	return promises.filter(function(_, index) {
+	return array.filter(function(_, index) {
 		return results[index];
 	});
 }
@@ -34,9 +34,9 @@ export function series(promises: (() => Promise<any>)[]) {
 	}, Promise.resolve());
 }
 
-export function mapSeries(array: (() => Promise<any>)[], callback) {
+export function mapSeries(array: (() => Promise<any>)[], callback?) {
 	return array.reduce(async function(previous, next) {
-		return [...(await previous), await callback(next)];
+		return [...(await previous), await (callback !== undefined ? callback(await next()) : next())];
 	}, Promise.resolve([]));
 }
 
@@ -47,21 +47,21 @@ export function reduceAsync(promises: ((...args: any[]) => Promise<unknown>)[], 
 }
 
 async function mapEntriesAsync(object, callback, filter?) {
-	if (filter !== undefined) {
-		return Object.fromEntries((await mapAsync(Array.isArray(object) ? object : Object.entries(object), callback, filter)));
-	} else {
-		return Object.fromEntries(await mapAsync(Array.isArray(object) ? object : Object.entries(object), callback));
-	}
+	const entries = Array.isArray(object) ? object : Object.entries(object);
+
+	return Object.fromEntries(await mapAsync(entries, callback, filter));
 }
 
-export function mapEntries(object: [string, any][] | object, callback, filter?) {
+export function mapEntries(object: [string, any][] | object, callback: () => [string, any], filter?) {
 	if (callback.constructor.name === "AsyncFunction") {
 		return mapEntriesAsync(object, callback, filter);
 	}
 
+	let entries = (Array.isArray(object) ? object : Object.entries(object)).map(callback);
+
 	if (filter !== undefined) {
-		return Object.fromEntries<[string, any][]>((Array.isArray(object) ? object : Object.entries(object)).map(callback).filter(filter));
-	} else {
-		return Object.fromEntries<[string, any][]>((Array.isArray(object) ? object : Object.entries(object)).map(callback));
+		entries = entries.filter(filter);
 	}
+
+	return Object.fromEntries<[string, any][]>(entries);
 }

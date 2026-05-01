@@ -110,7 +110,7 @@ export function initHyperFormula(data) {
 					}
 
 					if (changes.every((change) => !Array.isArray(change) && typeof change === "object")) {
-						changes = CSV.parse([headers, ...changes]);
+						changes = CSV.toArray(headers, changes);
 					}
 				}
 
@@ -127,7 +127,7 @@ export function initHyperFormula(data) {
 				}
 
 				if (Array.isArray(changes)) {
-					changes = CSV.parse([headers, ...changes]);
+					changes = CSV.toArray(headers, changes);
 				}
 
 				const { start, end } = this.range;

@@ -1,3 +1,4 @@
+import vite from "vite";
 import { __root, isCI } from "../util/env";
 import { build } from "./build";
 import { glob } from "../util/fs";
@@ -25,19 +26,30 @@ for (const workspace of workspaces) {
     let result;
 
     try {
-        result = await esbuild({
-            "bundle": false,
-            "entryPoints": entryPoints,
-            "format": "esm",
-            "outdir": "/",
-            "platform": "node",
-            "absWorkingDir": path.join(__root, workspace).replace(/\\/gu, "/")
+        result = await vite.build({
+            "mode": "production",
+            "root": path.join(__root, workspace).replace(/\\/gu, "/"),
+            "build": {
+                "rollupOptions": {
+                    "input": entryPoints,
+                    "external": (id) => !id.startsWith(".") && !path.isAbsolute(id),
+                    "output": {
+                        "preserveModules": true,
+                        "preserveModulesRoot": path.join(__root, workspace).replace(/\\/gu, "/"),
+                        "entryFileNames": "[name].js"
+                    }
+                },
+                "minify": false,
+                "modulePreload": { "polyfill": false },
+                "write": false
+            }
         });
     } catch (error) {
         continue;
     }
 
-    const files = Object.fromEntries(result.outputFiles.map(({ "path": filePath, text }) => [filePath.substring("/".length).replace(/\\/gu, "/"), text]));
+    const { output } = Array.isArray(result) ? result[0] : result as any;
+    const files = Object.fromEntries(output.filter(({ type }) => type === "chunk").map(({ fileName, code }) => [fileName, code]));
 
     let archiveVersion;
 
@@ -126,7 +138,7 @@ for (const workspace of workspaces) {
 
     // Compare files
     console.log("Comparing files for", workspace);
-    if (Object.keys(files).length === Object.keys(archiveFiles).length && Object.entries(files).every(([key, value]) => archiveFiles[key] === value)) {
+    if (archiveFiles && Object.keys(files).length === Object.keys(archiveFiles).length && Object.entries(files).every(([key, value]) => archiveFiles[key] === value)) {
         console.log("No file changes for", workspace, "- skipping package creation");
         continue;
     }

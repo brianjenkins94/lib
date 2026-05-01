@@ -39,6 +39,7 @@ export function fetchWrapper(oauth2Client: OAuth2Client, { redirectUri = "http:/
 					// TODO: Use open() instead.
 					console.log(oauth2Client.settings.server + "?" + new URLSearchParams({
 						"access_type": "offline",
+						"prompt": "consent",
 						"response_type": "code",
 						"scope": scopes.join(" "),
 						"client_id": oauth2Client.settings.clientId,
@@ -53,9 +54,7 @@ export function fetchWrapper(oauth2Client: OAuth2Client, { redirectUri = "http:/
 			return token;
 		},
 		"storeToken": function(token) {
-			if (!fs.existsSync("token.json")) {
-				fs.writeFileSync("token.json", JSON.stringify(token, undefined, "\t") + "\n");
-			}
+			fs.writeFileSync("token.json", JSON.stringify(token, undefined, "\t") + "\n");
 		},
 		"getStoredToken": async function() {
 			if (fs.existsSync("token.json")) {

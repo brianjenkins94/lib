@@ -2,13 +2,14 @@ import { chromium } from "playwright";
 import type { Browser, BrowserContext, Page } from "playwright";
 import { spawn } from "child_process";
 import * as path from "path";
-import stdLibBrowser from "node-stdlib-browser";
 import * as fs from "../fs"
 
 import { __root, isWindows } from "../env";
 import { sleep } from "../sleep";
-import { series } from "../array";
+import { mapSeries } from "../array";
 import { defaultConditionCallback } from "../fido";
+import { polyfillNode } from "../vite/plugins/polyfillNode";
+import { virtualFileSystem } from "../vite/plugins/virtualFileSystem";
 
 const browsers = {
 	"Brave": {
@@ -67,7 +68,8 @@ export async function attach(endpointURL = "http://localhost:9222") {
 
 	return {
 		"browser": browser,
-		"contexts": browser.contexts()
+		"contexts": browser.contexts(),
+		[Symbol.asyncDispose]: async () => { await browser.close(); },
 	};
 }
 
@@ -92,10 +94,10 @@ export async function launch(url, options?) {
 	const originalClose = page.close.bind(page);
 
 	page.close = function(options?) {
-		return series([
-			originalClose(options),
-			context.close(),
-			browser.close()
+		return mapSeries([
+			() => originalClose(options),
+			() => context.close(),
+			() => browser.close()
 		]);
 	};
 
@@ -116,73 +118,48 @@ const contents = async function({ url, query, options }) {
 	const response = await fido[options["method"].toLowerCase()](url, query, options);
 }.toString();
 
-let esbuild;
+let vite;
 
 try {
-	esbuild = await import("esbuild");
+	vite = await import("vite");
 } catch (error) {}
 
 let bundle;
 
 async function fetchFactory(baseUrl?, defaultOptions = {}) {
-	bundle ??= (await esbuild.build({
-		"bundle": true,
-		"format": "esm",
-		"stdin": {
-			"resolveDir": __root,
-			"sourcefile": "fetch.ts",
-			"contents": [
-				"import { fido } from \"./util/fido\";",
-				contents.substring(contents.indexOf("{", contents.indexOf(")") + 1) + 1, contents.lastIndexOf("}"))
-			].join("\n")
+	bundle ??= (await vite.build({
+		"mode": "production",
+		"root": __root,
+		"build": {
+			"rolldownOptions": {
+				"input": "index.ts",
+				"treeshake": false,
+				"external": ["saxes"]
+			},
+			"minify": false,
+			"modulePreload": { "polyfill": false },
+			"write": false
 		},
-		"write": false,
-		//"inject": [url.fileURLToPath(import.meta.resolve("node-stdlib-browser/helpers/esbuild/shim", import.meta.url))],
 		"define": {
 			"import.meta.url": "location.pathname",
 			"process": "{ \"env\": {} }"
 		},
 		"plugins": [
-			{
-				"name": "node-stdlib-browser-alias",
-				"setup": function(build) {
-					const builtinsMap = Object.fromEntries(Object.keys(stdLibBrowser).map(function(libName) {
-						return [libName, stdLibBrowser[libName]];
-					}))
-
-					const filter = new RegExp(`^(${["fs", "path", "url"].join("|")})(/.*)?$`)
-
-					build.onResolve({ "filter": filter }, function(args) {
-						if (Object.keys(builtinsMap).some((builtin) => args.path.startsWith(builtin))) {
-							return {
-								"path": args.path,
-								"namespace": "external-global",
-								"pluginData": args
-							};
-						}
-					});
-
-					build.onLoad({ "filter": /.*/, "namespace": "external-global" }, async function({ "pluginData": { importer }, ...args }) {
-						//const [match] = new RegExp(`(?<=^import ).+?(?= from (?:"|')${args["path"]}(?:"|');?$)`, "mu").exec(await fs.readFile(importer)) || [];
-
-						const matches = Object.entries(await import(args["path"])).map(function([key, value]) {
-							return `export ${key === "default" ? "default" : `const ${key} =`} ${(typeof value === "function" ? "() => {}" : undefined)};`;
-						}).join("\n");
-
-						return {
-							"contents": matches,
-							"loader": "js"
-						};
-					});
-				}
-			}
+			polyfillNode(["fs", "path", "url"]),
+			virtualFileSystem({
+				"index.ts": [
+					"import { fido } from \"./util/fido\";",
+					contents.substring(contents.indexOf("{", contents.indexOf(")") + 1) + 1, contents.lastIndexOf("}"))
+						.replace(/const response ?= ?await/u, "globalThis.__response = await")
+				].join("\n")
+			})
 		]
-	})).outputFiles[0].text;
+	})).output[0].code;
 
 	const args = contents.substring(contents.indexOf("(") + 1, contents.indexOf(")"));
 	const functionBody = bundle + `
 		// Must be [serializable](https://playwright.dev/docs/evaluating#evaluation-argument).
-		return Array.from(new Uint8Array(await response.arrayBuffer()));
+		return Array.from(new Uint8Array(await globalThis.__response.arrayBuffer()));
 	`;
 
 	const AsyncFunction = (async function() { }).constructor;
@@ -214,7 +191,7 @@ export const fido = {
 		}
 
 		url.search = new URLSearchParams([
-			...new URLSearchParams(url.search),
+			...new URLSearchParams(url.search).entries(),
 			...Object.entries(query)
 		]).toString();
 

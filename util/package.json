@@ -1,5 +1,5 @@
 {
-    "name": "util",
+    "name": "@brianjenkins94/util",
     "author": "Brian Jenkins",
     "license": "MIT",
     "type": "module",
@@ -9,14 +9,18 @@
         "ejs": "latest",
         "gatsby-source-google-docs": "latest",
         "googleapis": "latest",
-        "http-proxy": "latest",
+        "http-proxy-3": "latest",
         "hyperformula": "latest",
         "jsonc-parser": "latest",
+        "jsx-async-runtime": "latest",
         "mime": "latest",
         "node-schedule": "latest",
+        "node-stdlib-browser": "latest",
+        "opensearch-project/opensearch-js": "latest",
         "papaparse": "latest",
         "path-to-regexp": "latest",
-        "playwright": "latest"
+        "playwright": "latest",
+        "vite": "latest"
     },
     "engines": {
         "node": ">=22.0.0",

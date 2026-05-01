@@ -4,6 +4,8 @@ import {  } from "googleapis-common";
 import { fetchWrapper } from "./auth";
 import { OAuth2Client } from "@badgateway/oauth2-client";
 import { OAuth2Client as GoogleOAuth2Client } from "googleapis-common";
+import { ClientSettings } from "@badgateway/oauth2-client/dist/client";
+import { mapAsync } from "../array";
 
 class Sheet {
 	private readonly sheetsApi;
@@ -18,7 +20,47 @@ class Sheet {
 		this.spreadSheetId = spreadSheetId;
 	}
 
+	private parseCell(cell) {
+		if (typeof cell === "string" && /^[{\[].*[}\]]$/.test(cell.trim())) {
+			try {
+				return JSON.parse(cell);
+			} catch {}
+		}
+
+		return cell;
+	};
+
+	private normalizeRows(rows = []) {
+		return rows.map((row) => {
+			return (Array.isArray(row) ? row : [row]).map((cell) => this.parseCell(cell))
+		});
+	}
+
 	public async get(range: string, options = { "valueRenderOption": "FORMATTED_VALUE" }) {
+		let ranges = range.split(";")
+
+		if (ranges.length > 1) {
+			ranges = await mapAsync(ranges, async (range) => {
+				if (/\d$/.test(range)) {
+					return range;
+				}
+
+				const [, sheet, start, end] = range.match(/^([^!]+)!(\w+):(\w+)$/u);
+
+				// TODO: Memoize
+				return sheet + "!" + start + ":" + end + (await this.getMaxRange(sheet)).rowCount;
+			})
+
+			const rows = (await this.sheetsApi.spreadsheets.values.batchGet({
+				...options,
+				"spreadsheetId": this.spreadSheetId,
+				"ranges": ranges,
+				"fields": "valueRanges(values)"
+			} as SheetsApi.Params$Resource$Spreadsheets$Values$Batchget))["data"]?.["valueRanges"] ?? [];
+
+			return rows.flatMap(({ values }) => this.normalizeRows(values));
+		}
+
 		const rows = (await this.sheetsApi.spreadsheets.values.get({
 			...options,
 			"spreadsheetId": this.spreadSheetId,
@@ -26,15 +68,7 @@ class Sheet {
 			"fields": "values"
 		} as SheetsApi.Params$Resource$Spreadsheets$Values$Get))["data"]?.["values"] ?? [];
 
-		return rows.map((row) => (Array.isArray(row) ? row : [row]).map(function(cell) {
-			if (typeof cell === "string" && /^[{\[].*[}\]]$/.test(cell.trim())) {
-				try {
-					return JSON.parse(cell);
-				} catch (error) {}
-			}
-
-			return cell;
-		}));
+		return this.normalizeRows(rows);
 	}
 
 	public async getMaxRange(sheetName: string) {
@@ -52,7 +86,7 @@ class Sheet {
 		return this.sheetsApi.spreadsheets.values.update({
 			"spreadsheetId": this.spreadSheetId,
 			"range": range,
-			"valueInputOption": "RAW",
+			"valueInputOption": "USER_ENTERED",
 			"resource": {
 				"values": data // [[key, parseInt(await get("Sheet1!B" + index), 10) + value]]
 			}
@@ -67,7 +101,7 @@ class Sheet {
 		return this.sheetsApi.spreadsheets.values.append({
 			"spreadsheetId": this.spreadSheetId,
 			"range": range,
-			"valueInputOption": "RAW",
+			"valueInputOption": "USER_ENTERED",
 			"resource": {
 				"values": data // [[key, value]]
 			}
@@ -85,7 +119,7 @@ class Sheet {
 	}
 }
 
-export async function initSheets(oauth2ClientOptions, spreadsheetId) {
+export async function initSheets({ sheetId, ...oauth2ClientOptions }: Partial<ClientSettings> & { sheetId: string }) {
 	const client = new OAuth2Client({
 		"authorizationEndpoint": "./auth",
 		"tokenEndpoint": "./token",
@@ -113,5 +147,5 @@ export async function initSheets(oauth2ClientOptions, spreadsheetId) {
 		"refresh_token": refreshToken
 	});
 
-	return new Sheet(googleOAuth2Client, spreadsheetId);
+	return new Sheet(googleOAuth2Client, sheetId);
 }
