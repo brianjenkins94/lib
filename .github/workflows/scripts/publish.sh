@@ -4,7 +4,8 @@ PACKAGES=("$@")
 
 pnpm run publish
 
-EXIT_CODE=0
+FAILURES=0
+SUCCESSES=0
 
 for PACKAGE in "${PACKAGES[@]}"; do
   VERSION=$(tar -xOzf "docs/$PACKAGE@latest.tgz" package.json 2>/dev/null | jq --raw-output '.version // empty' || true)
@@ -12,7 +13,7 @@ for PACKAGE in "${PACKAGES[@]}"; do
 
   if [[ -z "$VERSION" ]]; then
     echo "❌ Could not determine TAG_NAME for $PACKAGE (docs/$PACKAGE@latest.tgz missing or has no version)"
-    EXIT_CODE=1
+    FAILURES=$((FAILURES + 1))
     continue
   fi
 
@@ -21,9 +22,16 @@ for PACKAGE in "${PACKAGES[@]}"; do
   if gh release view "$TAG_NAME" > /dev/null 2>&1; then
     gh release edit "$TAG_NAME" --draft=false
     echo "✅ Release $TAG_NAME marked as published"
+    SUCCESSES=$((SUCCESSES + 1))
   else
     echo "⚠️  No draft release found for $TAG_NAME — skipping"
+    FAILURES=$((FAILURES + 1))
   fi
 done
 
-exit $EXIT_CODE
+if [[ $SUCCESSES -eq 0 ]]; then
+  echo "❌ No packages were successfully published"
+  exit 1
+fi
+
+exit 0
