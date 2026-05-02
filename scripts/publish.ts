@@ -1,4 +1,4 @@
-import vite from "vite";
+import * as vite from "vite";
 import { __root, isCI } from "../util/env";
 import { build } from "./build";
 import { glob } from "../util/fs";
