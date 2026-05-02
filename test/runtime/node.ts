@@ -1,6 +1,6 @@
 import * as fs from "../../util/fs";
 import * as path from "path";
-import { __root, isCI } from "../../util/env";
+import { __root } from "../../util/env";
 import { spawn } from "child_process";
 
 for await (const file of fs.glob(path.join(__root, "util", "**", "*.ts"), {
@@ -35,8 +35,8 @@ for await (const file of fs.glob(path.join(__root, "util", "**", "*.ts"), {
                 return;
             }
 
-            console.log(">", ["npm", "install", isCI ? "--legacy-peer-deps" : "--save-peer", packageName + "@latest"].join(" "))
-            const subprocess = spawn("npm", ["install", isCI ? "--legacy-peer-deps" : "--save-peer", packageName + "@latest"], {
+            console.log(">", ["npm", "install", "--save-peer", "--legacy-peer-deps", packageName + "@latest"].join(" "))
+            const subprocess = spawn("npm", ["install", "--save-peer", "--legacy-peer-deps", packageName + "@latest"], {
                 "cwd": path.join(__root, "util"),
                 "shell": true,
                 "stdio": "inherit"
