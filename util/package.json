@@ -8,7 +8,6 @@
         "@clack/prompts": "latest",
         "@opensearch-project/opensearch": "latest",
         "ejs": "latest",
-        "gatsby-source-google-docs": "latest",
         "googleapis": "latest",
         "http-proxy-3": "latest",
         "hyperformula": "latest",

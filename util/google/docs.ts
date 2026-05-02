@@ -1,7 +1,7 @@
 import { docs as docsApi } from "googleapis/build/src/apis/docs";
 import type { docs_v1 as DocsApis } from "googleapis/build/src/apis/docs";
 import { OAuth2Client } from "googleapis-common";
-import { GoogleDocument } from "gatsby-source-google-docs/utils/google-document";
+//import { GoogleDocument } from "gatsby-source-google-docs/utils/google-document";
 
 export class Doc {
 	private readonly docsApi;
@@ -66,7 +66,7 @@ export class Doc {
 	}
 
 	public async getAsMarkdown() {
-		return new GoogleDocument({ "document": await this.get() }).toMarkdown();
+		//return new GoogleDocument({ "document": await this.get() }).toMarkdown();
 	}
 
 	// InsertTextRequest (https://developers.google.com/docs/api/reference/rest/v1/documents/request#InsertTextRequest)
