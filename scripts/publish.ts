@@ -156,15 +156,15 @@ for (const workspace of workspaces) {
 
     await fs.mkdir(outputDirectory, { "recursive": true })
 
-    const output = fs.createWriteStream(path.join(outputDirectory, path.basename(workspace) + "@" + version + ".tgz"));
+    const writeStream = fs.createWriteStream(path.join(outputDirectory, path.basename(workspace) + "@" + version + ".tgz"));
     console.log("Writing tar to:", path.join(outputDirectory, path.basename(workspace) + "@" + version + ".tgz"));
 
     if (isCI) {
-        output.on("finish", async function() {
+        writeStream.on("finish", async function() {
             await fs.copyFile(path.join(outputDirectory, path.basename(workspace) + "@" + version + ".tgz"), path.join(outputDirectory, path.basename(workspace) + "@latest.tgz"))
             console.log("Copied to latest for", workspace);
         });
     }
 
-    pack.pipe(createGzip()).pipe(output);
+    pack.pipe(createGzip()).pipe(writeStream);
 }
