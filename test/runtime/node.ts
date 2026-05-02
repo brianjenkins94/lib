@@ -3,13 +3,21 @@ import * as path from "path";
 import { __root } from "../../util/env";
 import { spawn } from "child_process";
 
-for await (const file of fs.glob(path.join(__root, "util", "**", "*.ts"), {
+const packages = process.argv.slice(2);
+
+const items = packages.length > 0 ? packages : fs.glob(path.join(__root, "util", "**", "*.ts"), {
     "exclude": function(fileName) {
-        return /node_modules/ui.test(fileName)
+        return /node_modules/ui.test(fileName);
     }
-})) {
-    console.log(">", ["npx", "tsx", file].join(" "))
-    let process = spawn("npx", ["tsx", file], {
+});
+
+for await (const item of items) {
+    const command = packages.length > 0
+        ? ["node", "--input-type=module", "--eval", `import "${item}";`]
+        : ["npx", "tsx", item];
+
+    console.log(">", command.join(" "))
+    let process = spawn(command[0], command.slice(1), {
         "shell": true,
         //"stdio": "inherit"
     });
@@ -31,7 +39,7 @@ for await (const file of fs.glob(path.join(__root, "util", "**", "*.ts"), {
             const [packageName] = /(?<=').*?(?=')/u.exec(Buffer.concat(buffer).toString())
 
             if (packageName.startsWith(".")) {
-                reject(new Error(`${file} has a broken relative import: ${packageName}`));
+                reject(new Error(`${item} has a broken relative import: ${packageName}`));
                 return;
             }
 
@@ -46,8 +54,8 @@ for await (const file of fs.glob(path.join(__root, "util", "**", "*.ts"), {
                 subprocess.on("close", resolve);
             });
 
-            console.log(">", ["npx", "tsx", file].join(" "))
-            process = spawn("npx", ["tsx", file], {
+            console.log(">", command.join(" "))
+            process = spawn(command[0], command.slice(1), {
                 "shell": true,
                 //"stdio": "inherit"
             });
