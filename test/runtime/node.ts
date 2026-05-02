@@ -35,8 +35,8 @@ for await (const file of fs.glob(path.join(__root, "util", "**", "*.ts"), {
                 return;
             }
 
-            console.log(">", ["npm", "install", "--save-peer", "--force", "--no-package-lock", "--verbose", packageName + "@latest"].join(" "))
-            const subprocess = spawn("npm", ["install", "--save-peer", "--force", "--no-package-lock", "--verbose", packageName + "@latest"], {
+            console.log(">", ["npm", "install", "--save-peer", packageName + "@latest"].join(" "))
+            const subprocess = spawn("npm", ["install", "--save-peer", packageName + "@latest"], {
                 "cwd": path.join(__root, "util"),
                 "shell": true,
                 "stdio": "inherit"
