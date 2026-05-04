@@ -147,7 +147,7 @@ for (const workspace of workspaces) {
     const pack = tarStream.pack();
 
     for (const [fileName, contents] of Object.entries(files)) {
-        pack.entry({ "name": fileName.replace(/\\/gu, "/") }, contents);
+        pack.entry({ "name": "package/" + fileName.replace(/\\/gu, "/") }, contents);
     }
 
     pack.finalize();

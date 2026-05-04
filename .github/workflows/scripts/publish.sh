@@ -8,7 +8,7 @@ FAILURES=0
 SUCCESSES=0
 
 for PACKAGE in "${PACKAGES[@]}"; do
-  VERSION=$(tar -xOzf "docs/$PACKAGE@latest.tgz" package.json 2>/dev/null | jq --raw-output '.version // empty' || true)
+  VERSION=$(tar -xOzf "docs/$PACKAGE@latest.tgz" package/package.json 2>/dev/null | jq --raw-output '.version // empty' || true)
   TAG_NAME="$PACKAGE@$VERSION"
 
   if [[ -z "$VERSION" ]]; then

@@ -4,7 +4,7 @@ PACKAGE="$1"
 ARCHIVE_VERSION="0.0.0"
 
 if [[ -f docs/$PACKAGE@latest.tgz ]]; then
-  ARCHIVE_VERSION=$(tar -xOzf docs/"$PACKAGE"@latest.tgz package.json | jq --raw-output '.version // "0.0.0"')
+  ARCHIVE_VERSION=$(tar -xOzf docs/"$PACKAGE"@latest.tgz package/package.json | jq --raw-output '.version // "0.0.0"')
 fi
 
 VERSION="$ARCHIVE_VERSION"
