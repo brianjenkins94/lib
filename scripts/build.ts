@@ -21,7 +21,7 @@ export async function build(workspaces?) {
 
     return Object.fromEntries(await mapAsync(workspaces, function(workspace) {
         return new Promise(function(resolve, reject) {
-            const subprocess = spawn("npm", ["--ignore-workspace", "run", "--if-present", "build"], {
+            const subprocess = spawn("pnpm", ["--ignore-workspace", "run", "--if-present", "build"], {
                 "cwd": workspace,
                 "shell": true,
                 //"stdio": "inherit"
