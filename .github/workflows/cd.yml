@@ -45,6 +45,7 @@
             "restore-keys": "pnpm-store-${{ runner.os }}-"
           }
         },
+        { "run": "pnpm config set --location=project --json allowBuilds \"{ \"esbuild\": true }\"" },
         { "run": "pnpm install" },
         {
           "working-directory": "${{ matrix.package }}",
@@ -89,6 +90,7 @@
           },
           "run": "(gh run download --name github-pages && tar -xvf artifact.tar --keep-old-files --directory docs/) || true"
         },
+        { "run": "pnpm config set --location=project --json allowBuilds \"{ \"esbuild\": true }\"" },
         { "run": "pnpm install" },
         {
           "env": {
@@ -125,6 +127,7 @@
         { "uses": "actions/checkout@v4" },
         { "uses": "actions/setup-node@v4", "with": { "node-version": "lts/*" } },
         { "uses": "pnpm/action-setup@v4", "with": { "version": "latest", "run_install": false } },
+        { "run": "pnpm config set --location=project --json allowBuilds \"{ \"esbuild\": true }\"" },
         { "run": "pnpm install" },
         { "run": ".github/workflows/scripts/smoke.sh $(jq --raw-output '.[]' <<< '${{ needs.changes.outputs.packages }}')" }
       ],
