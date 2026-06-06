@@ -1,5 +1,5 @@
-import { __root, isCI } from "../util/env";
-import { mapAsync, mapSeries } from "../util/array"
+import { __root } from "../util/env";
+import { mapAsync } from "../util/array"
 import { spawn } from "child_process";
 import * as path from "path";
 import * as url from "url";
@@ -19,7 +19,7 @@ export async function build(workspaces?) {
         })
     })).map(path.dirname);
 
-    return Object.fromEntries(await (isCI ? mapSeries : mapAsync)(workspaces, function(workspace) {
+    return Object.fromEntries(await mapAsync(workspaces, function(workspace) {
         return new Promise(function(resolve, reject) {
             const subprocess = spawn("npm", ["run", "--if-present", "build"], {
                 "cwd": workspace,

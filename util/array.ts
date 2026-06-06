@@ -34,9 +34,9 @@ export function series(promises: (() => Promise<any>)[]) {
 	}, Promise.resolve());
 }
 
-export function mapSeries(array: (() => Promise<any>)[], callback?) {
+export function mapSeries(array, callback?) {
 	return array.reduce(async function(previous, next) {
-		return [...(await previous), await (callback !== undefined ? callback(await next()) : next())];
+		return [...(await previous), await (callback !== undefined ? callback(next) : next)];
 	}, Promise.resolve([]));
 }
 
