@@ -17,19 +17,19 @@ fi
 
 RELEASE=$(gh release list --limit 100 --json tagName --jq '[.[] | select(.tagName | startswith("'"$PACKAGE"'@")) | .tagName | sub("'"$PACKAGE"'@";"") | split(".") | map(tonumber)] | sort | last | if . == null then "" else map(tostring) | join(".") end')
 
-if [[ -n "$RELEASE" ]] && pnpm exec semver "$RELEASE" --range ">$VERSION" >/dev/null; then
+if [[ -n "$RELEASE" ]] && pnpx semver "$RELEASE" --range ">$VERSION" >/dev/null; then
   VERSION="$RELEASE"
 fi
 
 # Only auto-increment if no explicit version bump was made
 if [[ "$VERSION" == "$ARCHIVE_VERSION" ]]; then
-  VERSION=$(pnpm exec semver "$VERSION" --increment minor 2>/dev/null)
+  VERSION=$(pnpx semver "$VERSION" --increment minor)
 fi
 
 # If this version is already published (not a draft), increment to avoid collision
 IS_DRAFT=$(gh release view "$PACKAGE@$VERSION" --json isDraft --jq '.isDraft' 2>/dev/null || echo "")
 if [[ "$IS_DRAFT" == "false" ]]; then
-  VERSION=$(pnpm exec semver "$VERSION" --increment minor 2>/dev/null)
+  VERSION=$(pnpx semver "$VERSION" --increment minor)
 fi
 
 echo "$PACKAGE@$VERSION"
