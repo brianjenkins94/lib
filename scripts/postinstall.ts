@@ -22,7 +22,7 @@ await mapAsync(workspaces, function(workspace) {
         const subprocess = spawn("pnpm", ["install"], {
                 "cwd": workspace,
                 "shell": true,
-                //"stdio": "inherit"
+                "stdio": "inherit"
             });
 
         subprocess.on("close", function(code) {

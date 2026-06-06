@@ -24,7 +24,7 @@ export async function build(workspaces?) {
             const subprocess = spawn("npm", ["run", "--if-present", "build"], {
                 "cwd": workspace,
                 "shell": true,
-                "stdio": "inherit"
+                //"stdio": "inherit"
             });
 
             subprocess.on("close", function(code) {
