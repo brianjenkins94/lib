@@ -2,7 +2,7 @@ import { __root } from "../util/env";
 import { mapAsync } from "../util/array"
 import { spawn } from "child_process";
 import * as path from "path";
-
+console.log("POSTINSTALL");
 const gitLs = spawn("sh", ["-c", "git ls-files */package.json */*/package.json"]);
 
 const workspaces = (await new Promise<string[]>(function(resolve, reject) {
@@ -19,10 +19,10 @@ const workspaces = (await new Promise<string[]>(function(resolve, reject) {
 
 await mapAsync(workspaces, function(workspace) {
     return new Promise(function(resolve, reject) {
-        const subprocess = spawn("pnpm", ["install"], {
+        const subprocess = spawn("pnpm", ["install", "--ignore-scripts"], {
                 "cwd": workspace,
                 "shell": true,
-                "stdio": "inherit"
+                //"stdio": "inherit"
             });
 
         subprocess.on("close", function(code) {
