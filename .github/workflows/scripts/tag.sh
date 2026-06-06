@@ -23,13 +23,13 @@ fi
 
 # Only auto-increment if no explicit version bump was made
 if [[ "$VERSION" == "$ARCHIVE_VERSION" ]]; then
-  VERSION=$(pnpm exec semver "$VERSION" --increment minor)
+  VERSION=$(pnpm exec semver "$VERSION" --increment minor 2>/dev/null)
 fi
 
 # If this version is already published (not a draft), increment to avoid collision
 IS_DRAFT=$(gh release view "$PACKAGE@$VERSION" --json isDraft --jq '.isDraft' 2>/dev/null || echo "")
 if [[ "$IS_DRAFT" == "false" ]]; then
-  VERSION=$(pnpm exec semver "$VERSION" --increment minor)
+  VERSION=$(pnpm exec semver "$VERSION" --increment minor 2>/dev/null)
 fi
 
 echo "$PACKAGE@$VERSION"
