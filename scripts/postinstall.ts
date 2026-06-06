@@ -19,7 +19,7 @@ const workspaces = (await new Promise<string[]>(function(resolve, reject) {
 
 await mapAsync(workspaces, function(workspace) {
     return new Promise(function(resolve, reject) {
-        const subprocess = spawn("pnpm", ["install"], {
+        const subprocess = spawn("pnpm", ["install", "--allow-build=esbuild"], {
                 "cwd": workspace,
                 "shell": true,
                 //"stdio": "inherit"
