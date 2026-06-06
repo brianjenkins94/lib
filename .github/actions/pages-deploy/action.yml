@@ -1,0 +1,30 @@
+{
+  "name": "pages-deploy",
+  "description": "Upload a directory as the GitHub Pages artifact and deploy it. Caller job must set permissions (pages: write, id-token: write) and an environment.",
+  "inputs": {
+    "path": {
+      "description": "Directory to publish.",
+      "required": false,
+      "default": "docs"
+    }
+  },
+  "outputs": {
+    "page_url": {
+      "description": "Deployed GitHub Pages URL.",
+      "value": "${{ steps.deployment.outputs.page_url }}"
+    }
+  },
+  "runs": {
+    "using": "composite",
+    "steps": [
+      {
+        "uses": "actions/upload-pages-artifact@v3",
+        "with": { "path": "${{ inputs.path }}" }
+      },
+      {
+        "id": "deployment",
+        "uses": "actions/deploy-pages@v4"
+      }
+    ]
+  }
+}
