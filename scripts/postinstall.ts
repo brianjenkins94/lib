@@ -19,7 +19,7 @@ const workspaces = (await new Promise<string[]>(function(resolve, reject) {
 
 await mapSeries(workspaces, function(workspace) {
     return new Promise(function(resolve, reject) {
-        const subprocess = spawn("pnpm", ["install"], {
+        const subprocess = spawn("pnpm", ["--ignore-workspace", "install"], {
                 "cwd": workspace,
                 "shell": true,
                 "stdio": "inherit"
