@@ -20,10 +20,5 @@
         "path-to-regexp": "latest",
         "playwright": "latest",
         "vite": "latest"
-    },
-    "engines": {
-        "node": ">=22.0.0",
-        "npm": ">=10.0.0"
-    },
-    "sideEffects": false
+    }
 }
