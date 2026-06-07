@@ -95,13 +95,30 @@ for (const workspace of workspaces) {
         console.log("archiveVersion for", workspace, ":", archiveVersion);
     }
 
-    let version = packageJson["version"] ?? "0.1.0"
-    console.log("Current version for", workspace, ":", version);
+    const buildPackageJson = (version) => JSON.stringify({
+        ...packageJson,
+        "name": `@${process.env["GITHUB_REPOSITORY_OWNER"]}/${packageJson["name"]}`,
+        "exports": Object.fromEntries(Object.keys(files).filter((key) => key !== "package.json").map((key) => ["./" + path.join(path.dirname(key), path.basename(key, path.extname(key))).replace(/\\/gu, "/"), "./" + key])),
+        "files": Object.keys(files).filter((key) => key !== "package.json"),
+        "version": version
+    }, undefined, 2);
 
-    if (version === archiveVersion) {
+    // Build with the currently-published version so an unchanged package compares equal (no version churn).
+    let version = archiveVersion ?? packageJson["version"] ?? "0.1.0";
+    files["package.json"] = buildPackageJson(version);
+
+    // Build every run; publish only when the emitted artifact differs from the last published one.
+    if (archiveFiles && Object.keys(files).length === Object.keys(archiveFiles).length && Object.entries(files).every(([key, value]) => archiveFiles[key] === value)) {
+        console.log("No changes for", workspace, "- skipping release");
+        continue;
+    }
+
+    // Changed (or first publish): bump the version off the published one and rebuild package.json.
+    if (archiveVersion) {
         const [major, minor] = archiveVersion.split('.');
 
         version = [major, parseInt(minor) + 1, 0].join('.');
+        files["package.json"] = buildPackageJson(version);
         console.log("Bumping version for", workspace, ":", version);
     }
 
@@ -127,22 +144,6 @@ for (const workspace of workspaces) {
         continue;
     }
     // </>
-
-    files["package.json"] = JSON.stringify({
-        ...packageJson,
-        "name": `@${process.env["GITHUB_REPOSITORY_OWNER"]}/${packageJson["name"]}`,
-        "exports": Object.fromEntries(Object.keys(files).filter((key) => key !== "package.json").map((key) => ["./" + path.join(path.dirname(key), path.basename(key, path.extname(key))).replace(/\\/gu, "/"), "./" + key])),
-        "files": Object.keys(files),
-        "version": version
-    }, undefined, 2)
-    console.log("Added package.json to files for", workspace);
-
-    // Compare files
-    console.log("Comparing files for", workspace);
-    if (archiveFiles && Object.keys(files).length === Object.keys(archiveFiles).length && Object.entries(files).every(([key, value]) => archiveFiles[key] === value)) {
-        console.log("No file changes for", workspace, "- skipping package creation");
-        continue;
-    }
 
     const pack = tarStream.pack();
 
