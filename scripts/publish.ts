@@ -33,6 +33,7 @@ for (const workspace of workspaces) {
                 "rollupOptions": {
                     "input": entryPoints,
                     "external": (id) => !id.startsWith(".") && !path.isAbsolute(id),
+                    "preserveEntrySignatures": "strict",
                     "output": {
                         "preserveModules": true,
                         "preserveModulesRoot": path.join(__root, workspace).replace(/\\/gu, "/"),
