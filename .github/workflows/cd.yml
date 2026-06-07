@@ -12,7 +12,18 @@
     "id-token": "write"
   },
   "jobs": {
-    "changes": {
+    #"changes": {
+    #   "runs-on": "ubuntu-latest",
+    #   "steps": [
+    #     { "uses": "actions/checkout@v4" },
+    #     { "uses": "./.github/actions/detect-changes", "id": "changes" }
+    #   ],
+    #   "outputs": {
+    #     "packages": "${{ steps.changes.outputs.packages }}"
+    #   },
+    #   "timeout-minutes": 15
+    #},
+    "list-packages": {
       "runs-on": "ubuntu-latest",
       "steps": [
         { "uses": "actions/checkout@v4" },
