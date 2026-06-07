@@ -1,5 +1,5 @@
 import { __root } from "../util/env";
-import { mapSeries } from "../util/array"
+import { mapAsync } from "../util/array"
 import { spawn } from "child_process";
 import * as path from "path";
 
@@ -17,7 +17,7 @@ const workspaces = (await new Promise<string[]>(function(resolve, reject) {
     })
 })).map(path.dirname);
 
-await mapSeries(workspaces, function(workspace) {
+await mapAsync(workspaces, function(workspace) {
     return new Promise(function(resolve, reject) {
         const subprocess = spawn("pnpm", ["--ignore-workspace", "install"], {
             "cwd": workspace,
