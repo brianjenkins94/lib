@@ -21,7 +21,7 @@ for (const workspace of workspaces) {
 
     const packageJson = JSON.parse(await fs.readFile(path.join(workspace, "package.json")));
 
-    const entryPoints = packageJson["exports"] ?? (await Array.fromAsync(glob(path.join(workspace, "**", "*.ts"), { "exclude": ["**/node_modules/*"] }))).map((path) => path.replace(/\\/gu, "/"));
+    const entryPoints = packageJson["exports"] ?? (await Array.fromAsync(glob(path.join(workspace, "**", "*.ts"), { "exclude": ["**/node_modules/*"] }))).map((entry) => path.join(__root, entry).replace(/\\/gu, "/"));
 
     let result;
 
