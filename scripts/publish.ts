@@ -11,6 +11,24 @@ import { spawn } from "child_process";
 
 const distDirectory = path.join(__root, "docs");
 
+// Highest-versioned draft GitHub release for a workspace, e.g. "0.4.0", or undefined if none.
+const latestDraftVersion = (workspace) => new Promise<string | undefined>(function(resolve, reject) {
+    const gh = spawn("gh", ["release", "list", "--limit", "100", "--json", "tagName,isDraft", "--jq",
+        `[.[] | select(.isDraft and (.tagName | startswith("${workspace}@"))) | .tagName | sub("${workspace}@"; "") | split(".") | map(tonumber)] | sort | last | if . == null then "" else map(tostring) | join(".") end`]);
+
+    const chunks = [];
+
+    gh.stdout.on("data", function(chunk) {
+        chunks.push(chunk);
+    });
+
+    gh.on("close", function() {
+        const output = Buffer.concat(chunks).toString().trim();
+
+        resolve(output === "" ? undefined : output);
+    });
+});
+
 const workspaces = Object.entries(await build(process.argv.length > 2 ? process.argv.slice(2) : undefined)).filter(([key, value]) => value === 0).map(([key]) => key);
 
 // TODO: Parallelize
@@ -55,6 +73,25 @@ for (const workspace of workspaces) {
     let archiveVersion;
 
     const tarFile = path.join(distDirectory, workspace + "@latest.tgz")
+
+    // The gitignored docs/*.tgz aren't checked out, and the github-pages build artifact
+    // they're otherwise restored from only has 1-day retention. The live Pages site is the
+    // durable copy of the last publish, so pull the previous archive from there for change
+    // detection when it isn't already present.
+    if (!fs.existsSync(tarFile)) {
+        const [, repository] = (process.env["GITHUB_REPOSITORY"] ?? "/").split("/");
+        const url = `https://${process.env["GITHUB_REPOSITORY_OWNER"]}.github.io/${repository}/${workspace}@latest.tgz`;
+
+        const response = await fetch(url);
+
+        if (response.ok) {
+            await fs.mkdir(path.dirname(tarFile), { "recursive": true });
+            await fs.writeFile(tarFile, Buffer.from(await response.arrayBuffer()));
+            console.log("Fetched prior archive for", workspace, "from", url);
+        } else {
+            console.log("No prior archive for", workspace, "at", url, "(", response.status, ")");
+        }
+    }
 
     let archiveFiles;
 
@@ -114,36 +151,20 @@ for (const workspace of workspaces) {
         continue;
     }
 
-    // Changed (or first publish): bump the version off the published one and rebuild package.json.
-    if (archiveVersion) {
-        const [major, minor] = archiveVersion.split('.');
+    // The `release` job (tag.sh) already chose the target version and created a draft
+    // release for it. Discover and use that version rather than re-deriving it here, so
+    // both jobs agree (publish.sh un-drafts `workspace@version`).
+    const draftVersion = await latestDraftVersion(workspace);
 
-        version = [major, parseInt(minor) + 1, 0].join('.');
-        files["package.json"] = buildPackageJson(version);
-        console.log("Bumping version for", workspace, ":", version);
-    }
-
-    // Ensure a release exists for this package.
-    const isDraft = () => new Promise(function(resolve, reject) {
-        console.log("Checking if release draft exists for", workspace + "@" + version);
-        const gh = spawn("gh", ["release", "view", workspace + "@" + version, "--json", "isDraft", "--jq", ".isDraft"]);
-
-        const chunks = [];
-
-        gh.stdout.on("data", function(chunk) {
-            chunks.push(chunk);
-        });
-
-        gh.on("close", function(code) {
-            console.log("gh release view exit code for", workspace, ":", code, "output:", Buffer.concat(chunks).toString());
-            resolve(code === 0 && Buffer.concat(chunks).toString().trim() === "true");
-        });
-    });
-
-    if (isCI && !(await isDraft())) {
-        console.error(`❌ Skipping ${workspace}: no GitHub release exists`);
+    if (!draftVersion) {
+        console.error(`❌ Skipping ${workspace}: no draft release exists`);
         continue;
     }
+
+    version = draftVersion;
+    files["package.json"] = buildPackageJson(version);
+    console.log("Publishing", workspace, "at draft version", version);
+
     // </>
 
     const pack = tarStream.pack();
