@@ -99,14 +99,9 @@
             "restore-keys": "pnpm-store-${{ runner.os }}-"
           }
         },
-        {
-          "env": {
-            "GH_TOKEN": "${{ secrets.PAT }}"
-          },
-          "run": "(gh run download --name github-pages && tar -xvf artifact.tar --keep-old-files --directory docs/) || true"
-        },
         { "run": "pnpm config set --location=project --json allowBuilds \"{ \\\"esbuild\\\": true }\"" },
         { "run": "pnpm install" },
+        { "run": "jq -r '.[]' <<< '${{ needs.list-packages.outputs.packages }}' | while read -r pkg; do curl --location --fail --show-error --silent --create-dirs --output \"docs/$pkg@latest.tgz\" \"https://${GITHUB_REPOSITORY_OWNER}.github.io/${GITHUB_REPOSITORY#*/}/$pkg@latest.tgz\" || rm -f \"docs/$pkg@latest.tgz\"; done" },
         {
           "env": {
             "GH_TOKEN": "${{ secrets.PAT }}"
