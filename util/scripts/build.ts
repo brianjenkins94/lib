@@ -1,9 +1,13 @@
-import { __root } from "../util/env";
-import { mapAsync } from "../util/array"
+import { mapAsync, partition } from "../array";
 import { spawn } from "child_process";
 import * as path from "path";
 import * as url from "url";
 
+/**
+ * Build every git-tracked workspace by running its own `build` script. Library packages under
+ * `packages/` build to completion first, so dependents (apps) can consume their built dist.
+ * Returns a `{ workspace: exitCode }` map.
+ */
 export async function build(workspaces?) {
     workspaces ??= (await new Promise<string[]>(function(resolve, reject) {
         const gitLs = spawn("sh", ["-c", "git ls-files */package.json */*/package.json"]);
@@ -19,7 +23,7 @@ export async function build(workspaces?) {
         })
     })).map(path.dirname);
 
-    return Object.fromEntries(await mapAsync(workspaces, function(workspace) {
+    function buildOne(workspace) {
         return new Promise(function(resolve, reject) {
             const subprocess = spawn("pnpm", ["--ignore-workspace", "run", "--if-present", "build"], {
                 "cwd": workspace,
@@ -31,7 +35,14 @@ export async function build(workspaces?) {
                 resolve([workspace, code]);
             });
         });
-    }));
+    }
+
+    const [packages, rest] = partition(workspaces, (workspace) => workspace.split("/")[0] === "packages");
+
+    const packageResults = await mapAsync(packages, buildOne);
+    const restResults = await mapAsync(rest, buildOne);
+
+    return Object.fromEntries([...packageResults, ...restResults]);
 }
 
 if (import.meta.url === url.pathToFileURL(process.argv[1]).toString()) {

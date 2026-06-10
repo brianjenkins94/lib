@@ -1,6 +1,6 @@
 import * as vite from "vite";
 import { __root, isCI } from "../util/env";
-import { build } from "./build";
+import { build } from "../util/scripts/build";
 import { glob } from "../util/fs";
 import * as path from "path";
 import * as fs from "../util/fs";
