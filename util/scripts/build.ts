@@ -45,6 +45,8 @@ export async function build(workspaces?) {
     return Object.fromEntries([...packageResults, ...restResults]);
 }
 
-if (import.meta.url === url.pathToFileURL(process.argv[1]).toString()) {
+// Run build() only when executed directly. Guard against a missing argv[1] (e.g. `node -e`)
+// so importing this module never throws.
+if (process.argv[1] !== undefined && import.meta.url === url.pathToFileURL(process.argv[1]).toString()) {
 	await build();
 }

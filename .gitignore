@@ -571,3 +571,6 @@ deno.lock
 
 # npm lockfile
 package-lock.json
+
+# pnpm lockfile
+pnpm-lock.yaml
