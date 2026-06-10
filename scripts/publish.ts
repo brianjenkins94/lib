@@ -49,8 +49,17 @@ for (const workspace of workspaces) {
         continue;
     }
 
+    // Files directly under scripts/ are runnable CLIs: they get a shebang (Node strips it on
+    // import, so they stay importable too) and a bin entry (see buildPackageJson).
+    const isBin = (fileName: string) => /^scripts\/[^/]+\.js$/u.test(fileName);
+
     const { output } = Array.isArray(result) ? result[0] : result as any;
-    const files = Object.fromEntries(output.filter(({ type }) => type === "chunk").map(({ fileName, code }) => [fileName, code]));
+    
+    const files = Object.fromEntries(output
+        .filter(({ type }) => type === "chunk")
+        .map(({ fileName, code }) => [fileName, isBin(fileName) ? "#!/usr/bin/env node\n" + code : code]));
+
+    const binFiles = Object.keys(files).filter(isBin);
 
     let archiveVersion;
 
@@ -101,6 +110,7 @@ for (const workspace of workspaces) {
         "name": `@${process.env["GITHUB_REPOSITORY_OWNER"]}/${packageJson["name"]}`,
         "exports": Object.fromEntries(Object.keys(files).filter((key) => key !== "package.json").map((key) => ["./" + path.join(path.dirname(key), path.basename(key, path.extname(key))).replace(/\\/gu, "/"), "./" + key])),
         "files": Object.keys(files).filter((key) => key !== "package.json"),
+        ...(binFiles.length > 0 ? { "bin": Object.fromEntries(binFiles.map((key) => [`${packageJson["name"]}-${path.basename(key, ".js")}`, "./" + key])) } : {}),
         "version": version
     }, undefined, 2);
 

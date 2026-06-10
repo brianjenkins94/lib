@@ -1,5 +1,6 @@
 import { mapAsync } from "../array";
 import { spawn } from "child_process";
+import { realpathSync } from "fs";
 import * as path from "path";
 import * as url from "url";
 
@@ -50,8 +51,6 @@ export async function postinstall(workspaces?) {
     });
 }
 
-// Run only when executed directly. Guard against a missing argv[1] (e.g. `node -e`) so
-// importing this module never throws.
-if (process.argv[1] && import.meta.url === url.pathToFileURL(process.argv[1]).toString()) {
+if (process.argv[1] !== undefined && import.meta.url === url.pathToFileURL(realpathSync(process.argv[1])).toString()) {
     await postinstall();
 }
