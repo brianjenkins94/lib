@@ -4,7 +4,7 @@ CWD=$(pwd)
 
 rm -rf demo/ monaco-vscode-api/
 
-git clone --no-checkout --depth 1 --filter=tree:0 --sparse https://github.com/CodinGame/monaco-vscode-api.git
+git clone --no-checkout --depth 1 --filter=tree:0 --sparse https://github.com/CodinGame/monaco-vscode-api.git || exit 1
 
 cd monaco-vscode-api/
 
