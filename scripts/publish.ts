@@ -29,6 +29,9 @@ for (const workspace of workspaces) {
         result = await vite.build({
             "mode": "production",
             "root": path.join(__root, workspace).replace(/\\/gu, "/"),
+            "define": {
+                "process.env.NODE_ENV": "process.env.NODE_ENV"
+            },
             "build": {
                 "rollupOptions": {
                     "input": entryPoints,
@@ -54,7 +57,7 @@ for (const workspace of workspaces) {
     const isBin = (fileName: string) => /^scripts\/[^/]+\.js$/u.test(fileName);
 
     const { output } = Array.isArray(result) ? result[0] : result as any;
-    
+
     const files = Object.fromEntries(output
         .filter(({ type }) => type === "chunk")
         .map(({ fileName, code }) => [fileName, isBin(fileName) ? "#!/usr/bin/env node\n" + code : code]));

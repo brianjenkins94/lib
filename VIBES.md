@@ -6,3 +6,6 @@ A list of files produced in part by Claude that are below the repository's quali
 - `.github/workflows/scripts/smoke.sh`
 - `.github/workflows/scripts/tag.sh`
 - `scripts/publish.ts`
+- `util/csv.ts`
+- `util/scripts/build.ts`
+- `util/scripts/postinstall.ts`
