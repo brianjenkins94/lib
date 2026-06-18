@@ -7,7 +7,7 @@ const packages = process.argv.slice(2);
 
 const items = packages.length > 0 ? packages : fs.glob(path.join(__root, "util", "**", "*.ts"), {
     "exclude": function(fileName) {
-        return /[\\/]node_modules[\\/]/ui.test(fileName) || /[\\/]scripts[\\/]/u.test(fileName);
+        return /(^|[\\/])(node_modules|scripts)([\\/]|$)/u.test(fileName);
     }
 });
 
