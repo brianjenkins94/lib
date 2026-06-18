@@ -4,27 +4,22 @@
   "license": "MIT",
   "type": "module",
   "scripts": {
-    "build": "#tsup --format esm --treeshake --outDir docs/",
-    "postinstall": "chmod 755 ./install.sh && ./install.sh",
-    "serve": "npx http-server docs/",
-    "start": "npm run serve"
+    "build": "npx tsx ../../util/vite/build.ts",
+    "preinstall": "chmod 755 ./install.sh && ./install.sh"
   },
   "devDependencies": {
     "@tsconfig/node-lts": "latest",
     "@types/node": "latest",
-    "import-meta-resolve": "latest",
-    "json5": "latest",
-    "node-stdlib-browser": "latest",
-    "typescript": "latest",
-    "vscode-languageclient": "latest",
-    "vscode-languageserver": "latest",
-    "vscode-languageserver-textdocument": "latest"
+    "typescript": "latest"
   },
   "engines": {
     "node": ">=18.0.0",
     "npm": ">=8.0.0"
   },
   "exports": {
-    "./main": "./main.ts"
+    "./main": {
+      "types": "./main.ts",
+      "default": "./dist/main.js"
+    }
   }
 }

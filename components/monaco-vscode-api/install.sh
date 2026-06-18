@@ -36,3 +36,9 @@ npm pkg delete dependencies["ws"]
 npm install @codingame/monaco-vscode-api@latest vscode@npm:@codingame/monaco-vscode-extension-api@latest monaco-editor@npm:@codingame/monaco-vscode-editor-api@latest
 
 cd "$CWD"
+
+mkdir node_modules
+
+for pkg in "@codingame" "monaco-editor" "vscode" "ansi-colors"; do
+	ln -sfn "../demo/node_modules/$pkg" "node_modules/$pkg"
+done
