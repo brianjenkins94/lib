@@ -59,16 +59,19 @@ export async function buildApp(appRoot: string, repoRoot: string, options: Build
                 }
             }
         }, options.overrides ?? {}));
+        console.log(`built ${name} → docs/${name}/`);
     } else if (files.some((file) => /^vite\.config\.[mc]?[jt]s$/u.test(file))) {
         // Library with its own vite.config — build it directly so the file config is
         // authoritative. It inherits `defaults` itself (via mergeConfig) and may override
         // them (e.g. `minify`); buildPackage's inline config would otherwise win and clobber.
         await build({ "root": appRoot, "logLevel": "warn" });
-    } else {
-        await buildPackage(appRoot);
-    }
 
-    console.log(`built ${name}${isApp ? ` → docs/${name}/` : ""}`);
+        console.log(`built ${name}`);
+    } else {
+        // No `.html` and no vite.config — nothing buildable here (this is also what runs
+        // when the file is invoked from a non-package dir, e.g. the repo root).
+        console.log(`nothing to build in ${name}`);
+    }
 }
 
 // Run directly → build the package this was invoked from. repoRoot is two
