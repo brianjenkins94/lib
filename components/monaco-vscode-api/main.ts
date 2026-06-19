@@ -635,7 +635,7 @@ await initializeMonacoService(
 			shouldUseGlobalPicker: (_editor, isStandalone) => !isStandalone && isEditorPartVisible()
 		})
 	},
-	document.body,
+	(window as unknown as { vscodeContainer?: HTMLElement }).vscodeContainer ?? document.body,
 	constructOptions,
 	envOptions
 )
