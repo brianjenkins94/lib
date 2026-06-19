@@ -4,9 +4,9 @@ import {
 	LogLevel,
 	IEditorOverrideServices
 } from '@codingame/monaco-vscode-api'
-import getConfigurationServiceOverride, { IStoredWorkspace, initUserConfiguration } from '@codingame/monaco-vscode-configuration-service-override'
+import getConfigurationServiceOverride, { initUserConfiguration } from '@codingame/monaco-vscode-configuration-service-override'
 import getKeybindingsServiceOverride, { initUserKeybindings } from '@codingame/monaco-vscode-keybindings-service-override'
-import { RegisteredFileSystemProvider, RegisteredMemoryFile, RegisteredReadOnlyFile, createIndexedDBProviders, registerHTMLFileSystemProvider, registerFileSystemOverlay, initFile } from '@codingame/monaco-vscode-files-service-override'
+import { RegisteredFileSystemProvider, RegisteredMemoryFile, RegisteredReadOnlyFile, createIndexedDBProviders, registerFileSystemOverlay, initFile } from '@codingame/monaco-vscode-files-service-override'
 import * as monaco from 'monaco-editor'
 import * as vscode from 'vscode'
 import getModelServiceOverride from '@codingame/monaco-vscode-model-service-override'
@@ -40,13 +40,15 @@ import getWorkspaceTrustOverride from '@codingame/monaco-vscode-workspace-trust-
 import getLogServiceOverride from '@codingame/monaco-vscode-log-service-override'
 import getWorkingCopyServiceOverride from '@codingame/monaco-vscode-working-copy-service-override'
 import getTestingServiceOverride from '@codingame/monaco-vscode-testing-service-override'
-import getChatServiceOverride, { ChatEntitlement } from '@codingame/monaco-vscode-chat-service-override'
+// AI/chat disabled — re-enable when games configures it:
+// import getChatServiceOverride, { ChatEntitlement } from '@codingame/monaco-vscode-chat-service-override'
 import getNotebookServiceOverride from '@codingame/monaco-vscode-notebook-service-override'
 import getWelcomeServiceOverride from '@codingame/monaco-vscode-welcome-service-override'
 import getWalkThroughServiceOverride from '@codingame/monaco-vscode-walkthrough-service-override'
 import getUserDataSyncServiceOverride from '@codingame/monaco-vscode-user-data-sync-service-override'
 import getUserDataProfileServiceOverride from '@codingame/monaco-vscode-user-data-profile-service-override'
-import getAiServiceOverride from '@codingame/monaco-vscode-ai-service-override'
+// AI/chat disabled:
+// import getAiServiceOverride from '@codingame/monaco-vscode-ai-service-override'
 import getTaskServiceOverride from '@codingame/monaco-vscode-task-service-override'
 import getOutlineServiceOverride from '@codingame/monaco-vscode-outline-service-override'
 import getTimelineServiceOverride from '@codingame/monaco-vscode-timeline-service-override'
@@ -66,11 +68,12 @@ import getExplorerServiceOverride from '@codingame/monaco-vscode-explorer-servic
 import getLocalizationServiceOverride from '@codingame/monaco-vscode-localization-service-override'
 import getTreeSitterServiceOverride from '@codingame/monaco-vscode-treesitter-service-override'
 import getTelemetryServiceOverride from '@codingame/monaco-vscode-telemetry-service-override'
-import getMcpServiceOverride from '@codingame/monaco-vscode-mcp-service-override'
+// AI/chat disabled (MCP = Model Context Protocol, AI tooling):
+// import getMcpServiceOverride from '@codingame/monaco-vscode-mcp-service-override'
 import getProcessControllerServiceOverride from '@codingame/monaco-vscode-process-explorer-service-override'
 import getImageResizeServiceOverride from '@codingame/monaco-vscode-image-resize-service-override'
 import getAssignmentServiceOverride from '@codingame/monaco-vscode-assignment-service-override'
-import getViewsServiceOverride, { isEditorPartVisible, Parts, onPartVisibilityChange, isPartVisibile, attachPart, onDidChangeSideBarPosition } from '@codingame/monaco-vscode-views-service-override'
+import getViewsServiceOverride, { isEditorPartVisible, Parts, onPartVisibilityChange, isPartVisibile as isPartVisible, attachPart, onDidChangeSideBarPosition } from '@codingame/monaco-vscode-views-service-override'
 import getQuickAccessServiceOverride from '@codingame/monaco-vscode-quickaccess-service-override'
 import { registerExtension, ExtensionHostKind } from '@codingame/monaco-vscode-api/extensions'
 import { setUnexpectedErrorHandler } from '@codingame/monaco-vscode-api/monaco'
@@ -78,8 +81,6 @@ import { EnvironmentOverride } from '@codingame/monaco-vscode-api/workbench'
 import { openNewCodeEditor } from './demo/src/features/editor'
 import { Worker } from './demo/src/tools/fakeWorker'
 import { TerminalBackend } from './demo/src/features/terminal'
-import defaultKeybindings from './demo/src/user/keybindings.json'
-import defaultConfiguration from './demo/src/user/configuration.json'
 import 'vscode/localExtensionHost'
 
 // Default language / feature extensions (loaded for side effects)
@@ -131,183 +132,50 @@ import '@codingame/monaco-vscode-vb-default-extension'
 import '@codingame/monaco-vscode-xml-default-extension'
 import '@codingame/monaco-vscode-yaml-default-extension'
 
-const url = new URL(document.location.href)
-const params = url.searchParams
-const remoteAuthority = params.get('remoteAuthority') ?? undefined
-const connectionToken = params.get('connectionToken') ?? undefined
-const remotePath = remoteAuthority != null ? (params.get('remotePath') ?? undefined) : undefined
-const resetLayout = params.has('resetLayout')
-const useHtmlFileSystemProvider = params.has('htmlFileSystemProvider')
-params.delete('resetLayout')
-
-window.history.replaceState({}, document.title, url.href)
-
-let workspaceFile = monaco.Uri.file('/workspace.code-workspace')
-
-const userDataProvider = await createIndexedDBProviders()
-
-if (useHtmlFileSystemProvider) {
-	workspaceFile = monaco.Uri.from({ scheme: 'tmp', path: '/test.code-workspace' })
-	await initFile(
-		workspaceFile,
-		JSON.stringify(
-			<IStoredWorkspace>{
-				folders: []
-			},
-			null,
-			2
-		)
-	)
-
-	registerHTMLFileSystemProvider()
-} else {
-	const fileSystemProvider = new RegisteredFileSystemProvider(false)
-
-	fileSystemProvider.registerFile(
-		new RegisteredMemoryFile(
-			vscode.Uri.file('/workspace/test.js'),
-			`// import anotherfile
-let variable = 1
-function inc () {
-  variable++
+/** A file seeded into the workbench's in-memory workspace. */
+export interface WorkbenchFile {
+	/** Absolute in-workspace path, e.g. "/workspace/test.js". */
+	path: string
+	contents: string
+	/** Register as read-only (default false). */
+	readonly?: boolean
 }
 
-while (variable < 5000) {
-  inc()
-  console.log('Hello world', variable);
-}`
-		)
-	)
-
-	const content = new TextEncoder().encode('This is a readonly static file')
-	fileSystemProvider.registerFile(
-		new RegisteredReadOnlyFile(
-			vscode.Uri.file('/workspace/test_readonly.js'),
-			async () => content,
-			content.length
-		)
-	)
-
-	fileSystemProvider.registerFile(
-		new RegisteredMemoryFile(
-			vscode.Uri.file('/workspace/jsconfig.json'),
-			`{
-  "compilerOptions": {
-    "target": "es2020",
-    "module": "esnext",
-    "lib": [
-      "es2021",
-      "DOM"
-    ]
-  }
-}`
-		)
-	)
-
-	fileSystemProvider.registerFile(
-		new RegisteredMemoryFile(
-			vscode.Uri.file('/workspace/index.html'),
-			`
-<!DOCTYPE html>
-<html lang="en">
-  <head>
-    <meta charset="UTF-8" />
-    <title>monaco-vscode-api demo</title>
-    <link rel="stylesheet" href="test.css">
-  </head>
-  <body>
-    <style type="text/css">
-      h1 {
-        color: DeepSkyBlue;
-      }
-    </style>
-
-    <h1>Hello, world!</h1>
-  </body>
-</html>`
-		)
-	)
-
-	fileSystemProvider.registerFile(
-		new RegisteredMemoryFile(
-			vscode.Uri.file('/workspace/test.md'),
-			`
-***Hello World***
-
-Math block:
-$$
-\\displaystyle
-\\left( \\sum_{k=1}^n a_k b_k \\right)^2
-\\leq
-\\left( \\sum_{k=1}^n a_k^2 \\right)
-\\left( \\sum_{k=1}^n b_k^2 \\right)
-$$
-
-# Easy Math
-
-2 + 2 = 4 // this test will pass
-2 + 2 = 5 // this test will fail
-
-# Harder Math
-
-230230 + 5819123 = 6049353
-`
-		)
-	)
-
-	fileSystemProvider.registerFile(
-		new RegisteredMemoryFile(
-			vscode.Uri.file('/workspace/test.customeditor'),
-			`
-Custom Editor!`
-		)
-	)
-
-	fileSystemProvider.registerFile(
-		new RegisteredMemoryFile(
-			vscode.Uri.file('/workspace/test.css'),
-			`
-h1 {
-  color: DeepSkyBlue;
-}`
-		)
-	)
-
-	// Use a workspace file to be able to add another folder later (for the "Attach filesystem" button)
-	fileSystemProvider.registerFile(
-		new RegisteredMemoryFile(
-			workspaceFile,
-			JSON.stringify(
-				<IStoredWorkspace>{
-					folders: [
-						{
-							path: '/workspace'
-						}
-					]
-				},
-				null,
-				2
-			)
-		)
-	)
-
-	fileSystemProvider.registerFile(
-		new RegisteredMemoryFile(
-			monaco.Uri.file('/workspace/.vscode/extensions.json'),
-			JSON.stringify(
-				{
-					recommendations: ['vscodevim.vim']
-				},
-				null,
-				2
-			)
-		)
-	)
-
-	registerFileSystemOverlay(1, fileSystemProvider)
+/** The DOM containers the workbench parts attach into. The host (e.g. the games
+ *  `<Workbench/>` component) owns this markup/layout and passes the elements in. */
+export interface WorkbenchParts {
+	sidebar: HTMLElement
+	editors: HTMLElement
+	panel: HTMLElement
+	statusbar: HTMLElement
+	auxbar: HTMLElement
 }
 
-// Workers
+export interface BootOptions {
+	/** Containers the workbench parts attach into (assembled by the consumer). */
+	parts: WorkbenchParts
+	/** Where the workbench itself mounts. Default: document.body. */
+	container?: HTMLElement
+	/** Auto-trust the workspace, suppressing the trust prompt. Default: true. */
+	trusted?: boolean
+	/** Files seeded into the in-memory workspace. Default: none. */
+	files?: WorkbenchFile[]
+	/** Files (by path) opened on first layout, one editor column each. Default: none. */
+	openEditors?: string[]
+	/** VS Code user settings (the settings.json object). Default: {}. */
+	configuration?: Record<string, unknown>
+	/** Keybinding entries (the keybindings.json array). Default: []. */
+	keybindings?: unknown[]
+	/** Workspace folder root. Default: "/workspace". */
+	workspaceFolder?: string
+	/** Product name shown in the title bar / window indicator. Default: "monaco-vscode-api". */
+	productName?: string
+	/** Called when a document is saved, with its path and new contents — lets the consumer
+	 *  forward edits elsewhere (e.g. into an almostnode box's VirtualFS for a live preview). */
+	onSave?: (path: string, contents: string) => void
+}
+
+// Workers — static; referenced by MonacoEnvironment below.
 const workers: Partial<Record<string, Worker>> = {
 	editorWorkerService: new Worker(
 		new URL('monaco-editor/esm/vs/editor/editor.worker.js', import.meta.url),
@@ -351,90 +219,6 @@ window.MonacoEnvironment = {
 	}
 }
 
-// Set configuration before initializing service so it's directly available (especially for the theme, to prevent a flicker)
-await Promise.all([
-	initUserConfiguration(JSON.stringify(defaultConfiguration)),
-	initUserKeybindings(JSON.stringify(defaultKeybindings))
-])
-
-const constructOptions: IWorkbenchConstructionOptions = {
-	remoteAuthority,
-	enableWorkspaceTrust: true,
-	connectionToken,
-	windowIndicator: {
-		label: 'monaco-vscode-api',
-		tooltip: '',
-		command: ''
-	},
-	workspaceProvider: {
-		trusted: true,
-		async open() {
-			window.open(window.location.href)
-			return true
-		},
-		workspace:
-			remotePath == null
-				? {
-					workspaceUri: workspaceFile
-				}
-				: {
-					folderUri: monaco.Uri.from({
-						scheme: 'vscode-remote',
-						path: remotePath,
-						authority: remoteAuthority
-					})
-				}
-	},
-	developmentOptions: {
-		logLevel: LogLevel.Info // Default value
-	},
-	configurationDefaults: {
-		'window.title': 'Monaco-Vscode-Api${separator}${dirty}${activeEditorShort}'
-	},
-	defaultLayout: {
-		editors: useHtmlFileSystemProvider
-			? undefined
-			: [
-				{
-					uri: monaco.Uri.file('/workspace/test.js'),
-					viewColumn: 1
-				},
-				{
-					uri: monaco.Uri.file('/workspace/test.md'),
-					viewColumn: 2
-				}
-			],
-		layout: useHtmlFileSystemProvider
-			? undefined
-			: {
-				editors: {
-					orientation: 0,
-					groups: [{ size: 1 }, { size: 1 }]
-				}
-			},
-		views: [
-			{
-				id: 'custom-view'
-			}
-		],
-		force: resetLayout
-	},
-	welcomeBanner: {
-		message: 'Welcome in monaco-vscode-api demo'
-	},
-	productConfiguration: {
-		nameShort: 'monaco-vscode-api',
-		nameLong: 'monaco-vscode-api',
-		extensionsGallery: {
-			serviceUrl: 'https://open-vsx.org/vscode/gallery',
-			resourceUrlTemplate: 'https://open-vsx.org/vscode/unpkg/{publisher}/{name}/{version}/{path}',
-			extensionUrlTemplate: 'https://open-vsx.org/vscode/gallery/{publisher}/{name}/latest', // https://github.com/eclipse/openvsx/issues/1036#issuecomment-2476449435
-			controlUrl: '',
-			nlsBaseUrl: ''
-		}
-	}
-}
-
 const envOptions: EnvironmentOverride = {
 	// Otherwise, VSCode detect it as the first open workspace folder
 	// which make the search result extension fail as it's not able to know what was detected by VSCode
@@ -473,21 +257,8 @@ const commonServices: IEditorOverrideServices = {
 	...getLanguageDetectionWorkerServiceOverride(),
 	...getStorageServiceOverride({
 		fallbackOverride: {
-			'workbench.activity.showAccounts': false,
-			/**
-			 * VSCode stores in its storage the chat setup state
-			 * We need it to be configured out of the box, with is not supported by VSCode
-			 * Except if we set the desired state in its storage directly, then it will work as if the user had set it up already
-			 */
-			'chat.setupContext': {
-				entitlement: ChatEntitlement.Enterprise,
-				organisations: undefined,
-				sku: undefined,
-				copilotTrackingId: undefined,
-				registered: true,
-				completed: true,
-				installed: true
-			}
+			'workbench.activity.showAccounts': false
+			// AI/chat disabled — `chat.setupContext` seeding removed (was pre-enabling Copilot).
 		}
 	}),
 	...getRemoteAgentServiceOverride({ scanRemoteExtensions: true }),
@@ -497,33 +268,31 @@ const commonServices: IEditorOverrideServices = {
 	...getWorkingCopyServiceOverride(),
 	...getScmServiceOverride(),
 	...getTestingServiceOverride(),
-	...getChatServiceOverride({
-		defaultAccount: {
-			entitlementsData: {
-				access_type_sku: 'unused',
-				assigned_date: 'unused',
-				can_signup_for_limited: false,
-				copilot_plan: 'enterprise',
-				organization_login_list: [],
-				analytics_tracking_id: 'unused',
-				chat_enabled: true
-			},
-			accountName: 'unused',
-			authenticationProvider: {
-				id: 'unused',
-				name: 'unused',
-				enterprise: true
-			},
-			enterprise: true,
-			sessionId: 'unused'
-		}
-	}),
+	// AI/chat disabled — re-enable when games configures it:
+	// ...getChatServiceOverride({
+	// 	defaultAccount: {
+	// 		entitlementsData: {
+	// 			access_type_sku: 'unused',
+	// 			assigned_date: 'unused',
+	// 			can_signup_for_limited: false,
+	// 			copilot_plan: 'enterprise',
+	// 			organization_login_list: [],
+	// 			analytics_tracking_id: 'unused',
+	// 			chat_enabled: true
+	// 		},
+	// 		accountName: 'unused',
+	// 		authenticationProvider: { id: 'unused', name: 'unused', enterprise: true },
+	// 		enterprise: true,
+	// 		sessionId: 'unused'
+	// 	}
+	// }),
 	...getNotebookServiceOverride(),
 	...getWelcomeServiceOverride(),
 	...getWalkThroughServiceOverride(),
 	...getUserDataProfileServiceOverride(),
 	...getUserDataSyncServiceOverride(),
-	...getAiServiceOverride(),
+	// AI/chat disabled:
+	// ...getAiServiceOverride(),
 	...getTaskServiceOverride(),
 	...getCommentsServiceOverride(),
 	...getEditSessionsServiceOverride(),
@@ -550,132 +319,160 @@ const commonServices: IEditorOverrideServices = {
 			window.history.pushState(null, '', url.toString())
 		},
 		availableLanguages: [
-			{
-				locale: 'en',
-				languageName: 'English'
-			},
-			{
-				locale: 'cs',
-				languageName: 'Czech'
-			},
-			{
-				locale: 'de',
-				languageName: 'German'
-			},
-			{
-				locale: 'es',
-				languageName: 'Spanish'
-			},
-			{
-				locale: 'fr',
-				languageName: 'French'
-			},
-			{
-				locale: 'it',
-				languageName: 'Italian'
-			},
-			{
-				locale: 'ja',
-				languageName: 'Japanese'
-			},
-			{
-				locale: 'ko',
-				languageName: 'Korean'
-			},
-			{
-				locale: 'pl',
-				languageName: 'Polish'
-			},
-			{
-				locale: 'pt-br',
-				languageName: 'Portuguese (Brazil)'
-			},
-			{
-				locale: 'qps-ploc',
-				languageName: 'Pseudo Language'
-			},
-			{
-				locale: 'ru',
-				languageName: 'Russian'
-			},
-			{
-				locale: 'tr',
-				languageName: 'Turkish'
-			},
-			{
-				locale: 'zh-hans',
-				languageName: 'Chinese (Simplified)'
-			},
-			{
-				locale: 'zh-hant',
-				languageName: 'Chinese (Traditional)'
-			},
-			{
-				locale: 'en',
-				languageName: 'English'
-			}
+			{ locale: 'en', languageName: 'English' }
 		]
 	}),
 	...getSecretStorageServiceOverride(),
 	...getTelemetryServiceOverride(),
-	...getMcpServiceOverride(),
+	// AI/chat disabled (MCP = Model Context Protocol):
+	// ...getMcpServiceOverride(),
 	...getProcessControllerServiceOverride(),
 	...getImageResizeServiceOverride(),
 	...getAssignmentServiceOverride()
 }
 
-// Override services
-await initializeMonacoService(
-	{
-		...commonServices,
-		...getViewsServiceOverride(openNewCodeEditor, undefined),
+/**
+ * Boot the VS Code workbench into consumer-provided containers.
+ *
+ * The consumer owns the host markup/layout (the part containers + their arrangement) and the
+ * workspace contents (`files`/`openEditors`), so this component carries no demo specifics — it
+ * wires services, seeds the in-memory workspace, mounts the workbench, and attaches each part
+ * into `options.parts`. Workspace trust is auto-granted by default (`trusted`).
+ */
+export async function boot(options: BootOptions): Promise<void> {
+	const {
+		parts,
+		container = document.body,
+		trusted = true,
+		files = [],
+		openEditors = [],
+		configuration = {},
+		keybindings = [],
+		workspaceFolder = '/workspace',
+		productName = 'monaco-vscode-api',
+		onSave
+	} = options
 
-		...getQuickAccessServiceOverride({
-			isKeybindingConfigurationVisible: isEditorPartVisible,
-			shouldUseGlobalPicker: (_editor, isStandalone) => !isStandalone && isEditorPartVisible()
-		})
-	},
-	document.body,
-	constructOptions,
-	envOptions
-)
+	await createIndexedDBProviders()
 
-setUnexpectedErrorHandler((e) => {
-	console.info('Unexpected error', e)
-})
+	const fileSystemProvider = new RegisteredFileSystemProvider(false)
 
-for (const config of [
-	{ part: Parts.SIDEBAR_PART, element: '#sidebar', onDidElementChange: onDidChangeSideBarPosition },
-	{ part: Parts.PANEL_PART, element: '#console', onDidElementChange: undefined },
-	{ part: Parts.EDITOR_PART, element: '#editors', onDidElementChange: undefined },
-	{ part: Parts.STATUSBAR_PART, element: '#statusbar', onDidElementChange: undefined },
-	{ part: Parts.AUXILIARYBAR_PART, element: '#auxbar', onDidElementChange: onDidChangeSideBarPosition }
-]) {
-	attachPart(config.part, document.querySelector<HTMLDivElement>(config.element)!)
+	for (const file of files) {
+		const uri = vscode.Uri.file(file.path)
 
-	config.onDidElementChange?.(() => {
-		attachPart(config.part, document.querySelector<HTMLDivElement>(config.element)!)
-	})
-
-	if (!isPartVisibile(config.part)) {
-		document.querySelector<HTMLDivElement>(config.element)!.style.display = 'none'
+		if (file.readonly) {
+			const content = new TextEncoder().encode(file.contents)
+			fileSystemProvider.registerFile(new RegisteredReadOnlyFile(uri, async () => content, content.length))
+		} else {
+			fileSystemProvider.registerFile(new RegisteredMemoryFile(uri, file.contents))
+		}
 	}
 
-	onPartVisibilityChange(config.part, (visible) => {
-		document.querySelector<HTMLDivElement>(config.element)!.style.display = visible ? 'block' : 'none'
+	registerFileSystemOverlay(1, fileSystemProvider)
+
+	// Set configuration before initializing the service so it's directly available (especially
+	// the theme, to prevent a flicker).
+	await Promise.all([
+		initUserConfiguration(JSON.stringify(configuration)),
+		initUserKeybindings(JSON.stringify(keybindings))
+	])
+
+	const constructOptions: IWorkbenchConstructionOptions = {
+		// trusted → disable the workspace-trust feature entirely (no prompt).
+		enableWorkspaceTrust: !trusted,
+		windowIndicator: {
+			label: productName,
+			tooltip: '',
+			command: ''
+		},
+		workspaceProvider: {
+			trusted,
+			async open() {
+				window.open(window.location.href)
+				return true
+			},
+			workspace: {
+				// Single-folder workspace → the explorer shows just this folder by its basename
+				// (e.g. "war2") with its contents at the root, rather than a multi-root wrapper.
+				folderUri: monaco.Uri.file(workspaceFolder)
+			}
+		},
+		developmentOptions: {
+			logLevel: LogLevel.Info
+		},
+		configurationDefaults: {
+			'window.title': productName + '${separator}${dirty}${activeEditorShort}'
+		},
+		defaultLayout: {
+			editors: openEditors.map((path, index) => ({
+				uri: monaco.Uri.file(path),
+				viewColumn: index + 1
+			})),
+			layout: openEditors.length > 0
+				? { editors: { orientation: 0, groups: openEditors.map(() => ({ size: 1 })) } }
+				: undefined,
+			force: true
+		},
+		productConfiguration: {
+			nameShort: productName,
+			nameLong: productName,
+			extensionsGallery: {
+				serviceUrl: 'https://open-vsx.org/vscode/gallery',
+				resourceUrlTemplate: 'https://open-vsx.org/vscode/unpkg/{publisher}/{name}/{version}/{path}',
+				extensionUrlTemplate: 'https://open-vsx.org/vscode/gallery/{publisher}/{name}/latest', // https://github.com/eclipse/openvsx/issues/1036#issuecomment-2476449435
+				controlUrl: '',
+				nlsBaseUrl: ''
+			}
+		}
+	}
+
+	await initializeMonacoService(
+		{
+			...commonServices,
+			...getViewsServiceOverride(openNewCodeEditor, undefined),
+			...getQuickAccessServiceOverride({
+				isKeybindingConfigurationVisible: isEditorPartVisible,
+				shouldUseGlobalPicker: (_editor, isStandalone) => !isStandalone && isEditorPartVisible()
+			})
+		},
+		container,
+		constructOptions,
+		envOptions
+	)
+
+	setUnexpectedErrorHandler((e) => {
+		console.info('Unexpected error', e)
 	})
+
+	for (const config of [
+		{ part: Parts.SIDEBAR_PART, element: parts.sidebar, onDidElementChange: onDidChangeSideBarPosition },
+		{ part: Parts.PANEL_PART, element: parts.panel, onDidElementChange: undefined },
+		{ part: Parts.EDITOR_PART, element: parts.editors, onDidElementChange: undefined },
+		{ part: Parts.STATUSBAR_PART, element: parts.statusbar, onDidElementChange: undefined },
+		{ part: Parts.AUXILIARYBAR_PART, element: parts.auxbar, onDidElementChange: onDidChangeSideBarPosition }
+	]) {
+		attachPart(config.part, config.element)
+
+		config.onDidElementChange?.(() => {
+			attachPart(config.part, config.element)
+		})
+
+		if (!isPartVisible(config.part)) {
+			config.element.style.display = 'none'
+		}
+
+		onPartVisibilityChange(config.part, (visible) => {
+			config.element.style.display = visible ? 'block' : 'none'
+		})
+	}
+
+	if (onSave != null) {
+		vscode.workspace.onDidSaveTextDocument((document) => {
+			onSave(document.uri.path, document.getText())
+		})
+	}
 }
 
-await registerExtension(
-	{
-		name: 'demo',
-		publisher: 'codingame',
-		version: '1.0.0',
-		engines: {
-			vscode: '*'
-		}
-	},
-	ExtensionHostKind.LocalProcess
-).setAsDefaultApi()
-
+// Re-exported so the consumer (games) can register its own extension(s) and set the default API:
+//   registerExtension({ name, publisher, version, engines }, ExtensionHostKind.LocalProcess).setAsDefaultApi()
 export { ExtensionHostKind, registerExtension }
