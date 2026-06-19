@@ -6,6 +6,11 @@ import { defaults } from '../../util/vite/defaults'
 // self-contained, minified ES build under dist/, so consumers (e.g. @brianjenkins94/game)
 // import the finished artifact rather than raw source.
 export default mergeConfig(defaults, {
+  // Relative base so emitted asset URLs (e.g. the codicon font, `url(./codicon.ttf)`) resolve
+  // relative to wherever the bundle is served rather than the origin root. Consumers mount this
+  // under a sub-path (the games iframe serves it at `/__vscode__/`); with the default base `/`,
+  // `url(/codicon.ttf)` would escape that prefix and 404.
+  base: './',
   build: {
     // Minify with vite's own (oxc) minifier — fast and within the default node heap.
     minify: true,
