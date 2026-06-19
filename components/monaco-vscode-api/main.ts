@@ -475,4 +475,19 @@ export async function boot(options: BootOptions): Promise<void> {
 
 // Re-exported so the consumer (games) can register its own extension(s) and set the default API:
 //   registerExtension({ name, publisher, version, engines }, ExtensionHostKind.LocalProcess).setAsDefaultApi()
-export { ExtensionHostKind, registerExtension }
+export { ExtensionHostKind, registerExtension, registerFileSystemOverlay }
+
+// Filesystem primitives re-exported so consumers can build + register custom overlay providers
+// (e.g. games' CDN-backed node_modules resolver) without depending on @codingame packages directly.
+export {
+	FileType,
+	FileChangeType,
+	FileSystemProviderCapabilities,
+	FileSystemProviderError,
+	FileSystemProviderErrorCode
+} from '@codingame/monaco-vscode-files-service-override'
+export type {
+	IFileSystemProviderWithFileReadWriteCapability,
+	IStat,
+	IFileChange
+} from '@codingame/monaco-vscode-files-service-override'
