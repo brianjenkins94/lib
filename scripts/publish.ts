@@ -25,7 +25,7 @@ async function collectBuiltFiles(workspaceRoot: string, patterns: string[]): Pro
             if (entry.isFile()) {
                 const absolute = path.join(entry.parentPath, entry.name);
 
-                result[path.relative(workspaceRoot, absolute).replace(/\\/gu, "/")] = await fs.readFile(absolute);
+                result[path.relative(workspaceRoot, absolute).replace(/\\/gu, "/")] = await fs.readFile(absolute, { "encoding": null });
             }
         }
     }
