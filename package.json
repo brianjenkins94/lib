@@ -18,7 +18,6 @@
     "vite": "latest",
     "json5": "latest",
     "module-from-string": "latest",
-    "node-stdlib-browser": "latest",
     "react-dom": "latest",
     "semver": "latest",
     "tar-stream": "latest",
