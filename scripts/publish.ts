@@ -68,6 +68,7 @@ for (const workspace of workspaces) {
                     "process.env": "process.env"
                 },
                 "build": {
+                    "ssr": true,
                     "rollupOptions": {
                         "input": entryPoints,
                         "external": (id) => !id.startsWith(".") && !path.isAbsolute(id),
