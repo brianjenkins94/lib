@@ -134,10 +134,13 @@ async function fetchFactory(baseUrl?, defaultOptions = {}) {
 			"rolldownOptions": {
 				"input": "index.ts",
 				"treeshake": false,
-				"external": ["saxes"]
+				"external": ["saxes"],
+				"output": {
+					"format": "iife"
+				}
 			},
 			"minify": false,
-			"modulePreload": { "polyfill": false },
+			"modulePreload": false,
 			"write": false
 		},
 		"define": {

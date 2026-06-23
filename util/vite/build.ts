@@ -45,7 +45,6 @@ export async function buildApp(appRoot: string, repoRoot: string, options: Build
             "build": {
                 "outDir": resolve(repoRoot, "docs", name),
                 "assetsInlineLimit": 0,
-                "modulePreload": { "polyfill": false },
                 "rollupOptions": {
                     "input": input,
                     "output": {

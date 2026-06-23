@@ -80,7 +80,7 @@ for (const workspace of workspaces) {
                         }
                     },
                     "minify": false,
-                    "modulePreload": { "polyfill": false },
+                    "modulePreload": false,
                     "write": false
                 }
             });

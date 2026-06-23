@@ -37,7 +37,6 @@ async function transform(root, route) {
             },
             "sourcemap": "inline",
             "minify": false,
-            "modulePreload": { "polyfill": false },
             //"write": false
         },
         "define": {
@@ -88,7 +87,6 @@ export async function render(template, data = {}, { useVite = false, root = unde
 							"preserveEntrySignatures": "allow-extension"
 						},
 						"minify": false,
-						"modulePreload": { "polyfill": false },
 						"write": false
 					},
 					"plugins": [
@@ -147,8 +145,7 @@ export async function render(template, data = {}, { useVite = false, root = unde
 					"rollupOptions": {
 						"input": "index.html"
 					},
-					"minify": false,
-					"modulePreload": { "polyfill": false }
+					"minify": false
 				},
 				"define": {
 					"import.meta.url": "location.pathname",
