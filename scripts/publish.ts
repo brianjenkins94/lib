@@ -65,7 +65,8 @@ for (const workspace of workspaces) {
                 "mode": "production",
                 "root": path.join(__root, workspace).replace(/\\/gu, "/"),
                 "define": {
-                    "process.env.NODE_ENV": "process.env.NODE_ENV"
+                    "process.env": "process.env",
+                    "process.env.NODE_ENV": "process.env.NODE_ENV",
                 },
                 "build": {
                     "rollupOptions": {
