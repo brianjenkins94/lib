@@ -134,18 +134,16 @@ async function fetchFactory(baseUrl?, defaultOptions = {}) {
 			"rolldownOptions": {
 				"input": "index.ts",
 				"treeshake": false,
-				"external": ["saxes"],
-				"output": {
-					"format": "iife"
-				}
+				"external": ["saxes"]
 			},
 			"minify": false,
-			"modulePreload": false,
+			"modulePreload": { "polyfill": false },
 			"write": false
 		},
 		"define": {
 			"import.meta.url": "location.pathname",
-			"process": "{ \"env\": {} }"
+			"import.meta.resolve": "undefined",
+			"process.env": "process.env"
 		},
 		"plugins": [
 			polyfillNode(["fs", "path", "url"]),

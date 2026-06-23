@@ -12,7 +12,7 @@ export const defaults: InlineConfig = {
         "target": "esnext",
         "minify": false,
         "emptyOutDir": true,
-        "modulePreload": false,
+        "modulePreload": { "polyfill": false },
         "rollupOptions": {
             "output": {
                 "entryFileNames": "[name].js",
