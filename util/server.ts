@@ -68,15 +68,17 @@ export function createServer(router = {}) {
 					return JSON.parse(Buffer.concat(chunks).toString());
 				};
 
-				({ statusCode, headers, body } = await router[pathName](request, response));
+				({ statusCode, headers, body } = await router[pathName](request, response) ?? {});
 
 				if (/json/ui.test(headers?.["Content-Type"]) && typeof body !== "string") {
 					body = JSON.stringify(body, undefined, 4);
 				}
 			}
 
-			response.writeHead(statusCode, headers);
-			response.end(body);
+			if (!response.headersSent) {
+				response.writeHead(statusCode, headers);
+				response.end(body);
+			}
 		} catch (error) {
 			if (statusCode < 500) {
 				statusCode = 500;
@@ -84,8 +86,10 @@ export function createServer(router = {}) {
 
 			console.error(error.stack);
 
-			response.writeHead(statusCode, headers);
-			response.end(body ?? "Internal server error");
+			if (!response.headersSent) {
+				response.writeHead(statusCode, headers);
+				response.end(body ?? "Internal server error");
+			}
 		}
 	});
 
