@@ -1,12 +1,10 @@
-import stdLibBrowser from "node-stdlib-browser";
+import { builtinModules } from "module";
 import { PluginOption } from "vite";
 
 const NAMESPACE = "\0external-global:";
 
-export function polyfillNode(builtins = Object.keys(stdLibBrowser)) {
+export function polyfillNode(builtins = builtinModules) {
     const filter = new RegExp(`^(?:${NAMESPACE})?(${builtins.join("|")})(/.*)?$`);
-
-    const builtinsMap = Object.fromEntries(Object.keys(stdLibBrowser).map(function(libName) { return [libName, stdLibBrowser[libName]]; }))
 
     return {
         "name": "node-stdlib-browser-alias",
@@ -14,7 +12,7 @@ export function polyfillNode(builtins = Object.keys(stdLibBrowser)) {
         "resolveId": function(id) {
             const [_, match] = filter.exec(id) ?? [];
 
-            if (match !== undefined && (builtins ?? Object.keys(builtinsMap)).some((builtin) => id.startsWith(builtin))) {
+            if (match !== undefined && builtins.some((builtin) => id.startsWith(builtin))) {
                 return NAMESPACE + id
             }
         },
