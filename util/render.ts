@@ -41,7 +41,7 @@ async function transform(root, route) {
         },
         "define": {
             "import.meta.url": "location.pathname",
-			"process.env": "process.env"
+			"process": "{ \"env\": {} }"
         },
         "plugins": [
             virtualFileSystem({
@@ -149,7 +149,7 @@ export async function render(template, data = {}, { useVite = false, root = unde
 				},
 				"define": {
 					"import.meta.url": "location.pathname",
-                    "process.env": "process.env"
+                    "process": "{ \"env\": {} }"
 				},
 				"plugins": [
 					polyfillNode(),

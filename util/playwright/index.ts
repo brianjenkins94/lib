@@ -143,7 +143,7 @@ async function fetchFactory(baseUrl?, defaultOptions = {}) {
 		"define": {
 			"import.meta.url": "location.pathname",
 			"import.meta.resolve": "undefined",
-			"process.env": "process.env"
+			"process": "{ \"env\": {} }"
 		},
 		"plugins": [
 			polyfillNode(["fs", "path", "url"]),
