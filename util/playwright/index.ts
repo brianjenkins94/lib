@@ -115,7 +115,7 @@ const contents = async function({ url, query, options }) {
 		globalThis.fetch = iframe.contentWindow.fetch;
 	}
 
-	const response = await fido[options["method"].toLowerCase()](url, query, options);
+	globalThis["__response"] = await fido[options["method"].toLowerCase()](url, query, options);
 }.toString();
 
 let vite;
@@ -151,7 +151,6 @@ async function fetchFactory(baseUrl?, defaultOptions = {}) {
 				"index.ts": [
 					"import { fido } from \"./util/fido\";",
 					contents.substring(contents.indexOf("{", contents.indexOf(")") + 1) + 1, contents.lastIndexOf("}"))
-						.replace(/const response ?= ?await/u, "globalThis.__response = await")
 				].join("\n")
 			})
 		]
