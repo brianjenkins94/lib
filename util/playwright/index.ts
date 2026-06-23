@@ -137,7 +137,7 @@ async function fetchFactory(baseUrl?, defaultOptions = {}) {
 				"external": ["saxes"]
 			},
 			"minify": false,
-			"modulePreload": { "polyfill": false },
+			"modulePreload": false,
 			"write": false
 		},
 		"define": {
