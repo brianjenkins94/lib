@@ -21,24 +21,5 @@
         "playwright": "latest",
         "tar-stream": "latest",
         "vite": "latest"
-    },
-    "peerDependenciesMeta": {
-        "@badgateway/oauth2-client": { "optional": true },
-        "@clack/prompts": { "optional": true },
-        "@opensearch-project/opensearch": { "optional": true },
-        "cmd-ts": { "optional": true },
-        "ejs": { "optional": true },
-        "googleapis": { "optional": true },
-        "http-proxy-3": { "optional": true },
-        "hyperformula": { "optional": true },
-        "jsonc-parser": { "optional": true },
-        "jsx-async-runtime": { "optional": true },
-        "mime": { "optional": true },
-        "node-schedule": { "optional": true },
-        "papaparse": { "optional": true },
-        "path-to-regexp": { "optional": true },
-        "playwright": { "optional": true },
-        "tar-stream": { "optional": true },
-        "vite": { "optional": true }
     }
 }
