@@ -134,7 +134,9 @@ for (const workspace of workspaces) {
         // vite only built the .ts entries; also ship hand-written .mjs/.cjs source verbatim — files node
         // loads directly at runtime (silo's `node --import` preload + the broker it injects, the Deno
         // backend, the cooldown installer), which genuinely can't be .ts. Keyed workspace-relative.
-        for await (const entry of glob(path.join(__root, workspace, "**", "*.{mjs,cjs}"), { "exclude": (entry) => entry.includes("node_modules") || isNested(typeof entry === "string" ? entry : path.join(entry.parentPath, entry.name)), "withFileTypes": true })) {
+        // `withFileTypes` makes the exclude callback receive a Dirent, not a string — normalize to a path
+        // first, or `.includes` throws (TypeError: entry.includes is not a function) and aborts the build.
+        for await (const entry of glob(path.join(__root, workspace, "**", "*.{mjs,cjs}"), { "exclude": (entry) => { const file = typeof entry === "string" ? entry : path.join(entry.parentPath, entry.name); return file.includes("node_modules") || isNested(file); }, "withFileTypes": true })) {
             if (!entry.isFile()) {
                 continue;
             }
