@@ -31,7 +31,7 @@
           }
         },
         { "run": "pnpm config set --location=project --json allowBuilds \"{ \\\"esbuild\\\": true }\"" },
-        { "run": "pnpm install" },
+        { "run": "pnpm install --config.minimumReleaseAge=10080" },
         { "run": "pnpm run --if-present ${{ matrix.script }} " }
       ],
       "timeout-minutes": 15

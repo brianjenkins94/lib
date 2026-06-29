@@ -6,7 +6,8 @@ WARNING: May contain vibes.
 - `.github/workflows/scripts/smoke.sh`
 - `.github/workflows/scripts/tag.sh`
 - `components/monaco-vscode-api/vite.config.ts`
-- `scripts/publish.ts`
+- `util/cmd.ts`
 - `util/csv.ts`
+- `util/fs.ts`
 - `util/scripts/*`
 - `util/vite/*`

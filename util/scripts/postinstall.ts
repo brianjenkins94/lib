@@ -1,31 +1,28 @@
 import { mapAsync } from "../array";
+import { findWorkspaces } from "../fs";
 import { spawn } from "child_process";
 import { realpathSync } from "fs";
-import * as path from "path";
 import * as url from "url";
+
+// Release-age floor: never install a version published within the last N days (default 7), to dodge the
+// window when a freshly-compromised release does the most damage. pnpm has this natively
+// (minimumReleaseAge, in minutes); npm only has --before=<date> — which SILENTLY ignores anything that
+// isn't a date, so the date is computed here, never a literal.
+const MINIMUM_RELEASE_AGE_DAYS = Number(process.env["MINIMUM_RELEASE_AGE_DAYS"]) || 7;
+const PNPM_MINIMUM_RELEASE_AGE = String(MINIMUM_RELEASE_AGE_DAYS * 24 * 60);
+const NPM_BEFORE = new Date(Date.now() - MINIMUM_RELEASE_AGE_DAYS * 86_400_000).toISOString().split("T")[0];
 
 /**
  * Install every git-tracked workspace (pnpm `--ignore-workspace`, falling back to npm), so each
- * sub-package's own dependencies and install lifecycle run. Used as the repo's `postinstall`.
+ * sub-package's own dependencies and install lifecycle run. Used as the repo's `postinstall`. Private
+ * workspaces are skipped — they self-install (see `findWorkspaces()`).
  */
-export async function postinstall(workspaces?) {
-    workspaces ??= (await new Promise<string[]>(function(resolve, reject) {
-        const gitLs = spawn("sh", ["-c", "git ls-files */package.json */*/package.json"]);
-
-        const chunks = []
-
-        gitLs.stdout.on("data", function(chunk) {
-            chunks.push(chunk)
-        })
-
-        gitLs.on("close", function() {
-            resolve(Buffer.concat(chunks).toString().trim().split("\n"));
-        })
-    })).map(path.dirname);
+export async function postinstall(workspaces?: string[]) {
+    workspaces ??= (await findWorkspaces()).filter((workspace) => !workspace.private).map((workspace) => workspace.dir);
 
     return await mapAsync(workspaces, function(workspace) {
         return new Promise(function(resolve, reject) {
-            const subprocess = spawn("pnpm", ["--ignore-workspace", "install"], {
+            const subprocess = spawn("pnpm", ["--ignore-workspace", "install", "--config.minimumReleaseAge=" + PNPM_MINIMUM_RELEASE_AGE], {
                 "cwd": workspace,
                 "shell": true,
                 //"stdio": "inherit"
@@ -34,7 +31,7 @@ export async function postinstall(workspaces?) {
             subprocess.on("close", function(code) {
                 if (code !== 0) {
                     // FROM: https://github.com/vercel/turborepo/blob/1ae620cdf454d0258a162a96976e3064433391a2/packages/turbo/bin/turbo#L29
-                    const subprocess = spawn("npm", ["install", "--loglevel=error", "--prefer-offline", "--no-audit", "--progress=false"], {
+                    const subprocess = spawn("npm", ["install", "--before=" + NPM_BEFORE, "--loglevel=error", "--prefer-offline", "--no-audit", "--progress=false"], {
                         "cwd": workspace,
                         "shell": true,
                         //"stdio": "inherit"

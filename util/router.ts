@@ -7,17 +7,6 @@ import * as vite from "vite";
 let viteDevServer;
 let routeModules = new Map();
 
-// TODO: Improve
-export async function findParentPackageJson(directory) {
-	if (fs.existsSync(path.join(directory, "package.json"))) {
-		return path.join(directory, "package.json");
-	} else if (path.dirname(directory) === directory) {
-		throw new Error("Unable to find parent package.json for " + directory);
-	} else {
-		return findParentPackageJson(path.dirname(directory));
-	}
-}
-
 // TODO: Review
 function hasDependency(moduleNode, filePath, seen = new Set()) {
 	if (moduleNode === undefined || moduleNode === null) {
@@ -118,7 +107,7 @@ export async function bindRoutes(server, routeMap) {
 					"pathName": pathName,
 					"middlewares": middlewares,
 					"routeHandler": async function(request, response, next) {
-						let root = path.dirname(await findParentPackageJson(routeDirectory));
+						let root = path.dirname(fs.closest(routeDirectory, "package.json")!);
 
 						try {
 							const normalizedFilePath = path.resolve(filePath).replace(/\\/gu, "/");

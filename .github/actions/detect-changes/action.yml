@@ -20,7 +20,7 @@
       {
         "id": "enumerate",
         "shell": "bash",
-        "run": "echo \"PACKAGES=$(git ls-files */package.json */*/package.json | jq --compact-output --raw-input --slurp 'split(\"\\n\")[:-1] | map(sub(\"/package.json$\"; \"\")) | reduce .[] as $key ({}; .[$key] = \"\\($key)/**\")')\" >> \"$GITHUB_OUTPUT\""
+        "run": "echo \"PACKAGES=$(git ls-files */package.json */*/package.json | while read -r f; do [ \"$(jq -r '.private // false' \"$f\")\" = true ] || dirname \"$f\"; done | jq --raw-input --slurp --compact-output 'split(\"\\n\") | map(select(length > 0)) | reduce .[] as $key ({}; .[$key] = \"\\($key)/**\")')\" >> \"$GITHUB_OUTPUT\""
       },
       {
         "id": "base",

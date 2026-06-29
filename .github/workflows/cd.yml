@@ -30,7 +30,7 @@
         {
           "id": "enumerate",
           "shell": "bash",
-          "run": "echo \"packages=$(git ls-files */package.json */*/package.json | jq --compact-output --raw-input --slurp 'split(\"\\n\")[:-1] | map(sub(\"/package.json$\"; \"\"))')\" >> \"$GITHUB_OUTPUT\""
+          "run": "echo \"packages=$(git ls-files */package.json */*/package.json | while read -r f; do [ \"$(jq -r '.private // false' \"$f\")\" = true ] || dirname \"$f\"; done | jq --raw-input --slurp --compact-output 'split(\"\\n\") | map(select(length > 0))')\" >> \"$GITHUB_OUTPUT\""
         }
       ],
       "outputs": {
@@ -61,7 +61,7 @@
           }
         },
         { "run": "pnpm config set --location=project --json allowBuilds \"{ \\\"esbuild\\\": true }\"" },
-        { "run": "pnpm install" },
+        { "run": "pnpm install --config.minimumReleaseAge=10080" },
         {
           "working-directory": "${{ matrix.package }}",
           "run": "pnpm run --if-present build"
@@ -100,7 +100,7 @@
           }
         },
         { "run": "pnpm config set --location=project --json allowBuilds \"{ \\\"esbuild\\\": true }\"" },
-        { "run": "pnpm install" },
+        { "run": "pnpm install --config.minimumReleaseAge=10080" },
         { "run": "jq -r '.[]' <<< '${{ needs.list-packages.outputs.packages }}' | while read -r pkg; do curl --location --fail --show-error --silent --create-dirs --output \"docs/$pkg@latest.tgz\" \"https://${GITHUB_REPOSITORY_OWNER}.github.io/${GITHUB_REPOSITORY#*/}/$pkg@latest.tgz\" || rm -f \"docs/$pkg@latest.tgz\"; done" },
         {
           "env": {
@@ -138,7 +138,7 @@
         { "uses": "actions/setup-node@v4", "with": { "node-version": "lts/*" } },
         { "uses": "pnpm/action-setup@v4", "with": { "version": "latest", "run_install": false } },
         { "run": "pnpm config set --location=project --json allowBuilds \"{ \\\"esbuild\\\": true }\"" },
-        { "run": "pnpm install" },
+        { "run": "pnpm install --config.minimumReleaseAge=10080" },
         { "run": ".github/workflows/scripts/smoke.sh $(jq --raw-output '.[]' <<< '${{ needs.list-packages.outputs.packages }}')" }
       ],
       "timeout-minutes": 15

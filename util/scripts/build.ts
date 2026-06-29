@@ -1,28 +1,17 @@
 import { mapAsync, partition } from "../array";
+import { findWorkspaces } from "../fs";
 import { spawn } from "child_process";
 import { realpathSync } from "fs";
-import * as path from "path";
 import * as url from "url";
 
 /**
  * Build every git-tracked workspace by running its own `build` script. Library packages under
  * `packages/` build to completion first, so dependents (apps) can consume their built dist.
- * Returns a `{ workspace: exitCode }` map.
+ * Private workspaces are skipped (they self-manage — see `findWorkspaces()`). Returns a
+ * `{ workspace: exitCode }` map.
  */
-export async function build(workspaces?) {
-    workspaces ??= (await new Promise<string[]>(function(resolve, reject) {
-        const gitLs = spawn("sh", ["-c", "git ls-files */package.json */*/package.json"]);
-
-        const chunks = []
-
-        gitLs.stdout.on("data", function(chunk) {
-            chunks.push(chunk)
-        })
-
-        gitLs.on("close", function() {
-            resolve(Buffer.concat(chunks).toString().trim().split("\n"));
-        })
-    })).map(path.dirname);
+export async function build(workspaces?: string[]) {
+    workspaces ??= (await findWorkspaces()).filter((workspace) => !workspace.private).map((workspace) => workspace.dir);
 
     function buildOne(workspace) {
         return new Promise(function(resolve, reject) {
