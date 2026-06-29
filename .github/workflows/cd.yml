@@ -109,6 +109,9 @@
           "run": ".github/workflows/scripts/publish.sh $(jq --raw-output '.[]' <<< '${{ needs.list-packages.outputs.packages }}')"
         },
         {
+          # Ship even when a sibling package failed: publish.sh promoted the successes and exited non-zero
+          # only at the very end, so the docs/ tarballs that DID build are ready — deploy them regardless.
+          "if": "${{ !cancelled() }}",
           "uses": "actions/upload-pages-artifact@v3",
           "with": {
             "path": "./docs"
@@ -119,6 +122,8 @@
     },
     "deploy": {
       "runs-on": "ubuntu-latest",
+      # !cancelled() (not the implicit success()) so a partial-failure publish still deploys the successes.
+      "if": "${{ !cancelled() }}",
       "environment": {
         "name": "github-pages",
         "url": "${{ steps.deployment.outputs.page_url }}"

@@ -37,6 +37,10 @@ async function collectBuiltFiles(workspaceRoot: string, patterns: string[]): Pro
 
 const workspaces = Object.entries(await build(process.argv.length > 2 ? process.argv.slice(2) : undefined)).filter(([key, value]) => value === 0).map(([key]) => key);
 
+// Packages whose source build threw — collected so the run fails loudly at the end (see the catch below)
+// rather than silently shipping a stale tarball.
+const buildFailures: string[] = [];
+
 // All git-tracked workspaces (incl. private) — used to keep a parent's source build from slurping a
 // nested package's sources (e.g. silo's root tarball must NOT pull in examples/ci-demo or a private
 // vscode-in-browser subproject). Each nested package publishes itself.
@@ -122,6 +126,10 @@ for (const workspace of workspaces) {
                 }
             });
         } catch (error) {
+            // Don't swallow a build failure silently — that ships a stale tarball while CI stays green.
+            // Record it, keep going so other packages still build, then exit non-zero at the end.
+            console.error(`❌ build failed for ${workspace}:`, error);
+            buildFailures.push(workspace);
             continue;
         }
 
@@ -315,4 +323,13 @@ for (const workspace of workspaces) {
     });
 
     pack.pipe(createGzip()).pipe(writeStream);
+}
+
+// Any build failure fails the run — but via `exitCode`, NOT `process.exit()`: the successful packages'
+// tarball writes / npm-publishes are still in flight (fire-and-forget streams above), and a hard exit
+// would truncate them. Setting the code lets the event loop drain (successes finish) then exits non-zero,
+// which publish.sh captures and propagates AFTER promoting those successes.
+if (buildFailures.length > 0) {
+    console.error(`❌ ${buildFailures.length} package(s) failed to build: ${buildFailures.join(", ")}`);
+    process.exitCode = 1;
 }
