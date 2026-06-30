@@ -108,13 +108,8 @@ async function runStdio(meta: EntryMeta, options: ServeOptions): Promise<void> {
 
 /**
  * Boot the server. Dev → Vite/HTTP bridge (hot-reload + breakpoints + curl-able /mcp); production →
- * plain stdio. Pass `import.meta` so the bridge can read `env.SSR` (the Vite-pass marker) and `url`.
+ * plain stdio. Pass `import.meta` (we read `.url` to tell the entry from a mere import).
  */
-// Set the first time the bridge bootstraps Vite, before it re-enters the entry. The lib is a single
-// module instance (externalized from Vite), so on the re-entry pass this is already true — that's how
-// we tell "first pass" from "Vite SSR re-entry" WITHOUT touching import.meta.env.
-let viteBootstrapped = false;
-
 export async function serveMcp(meta: EntryMeta, options: ServeOptions): Promise<void> {
 	// Boots only when this module is the process entry (tsx) or the bridge is re-entering it under SSR —
 	// NOT when merely imported (e.g. a CLI that pulls in the server's exports). On failure this rejects;
@@ -123,18 +118,23 @@ export async function serveMcp(meta: EntryMeta, options: ServeOptions): Promise<
 	const useBridge = options.bridge ?? (process.env["NODE_ENV"] !== "production");
 
 	if (useBridge) {
-		if (viteBootstrapped) {
-			// Vite SSR re-entry (second pass) → actually serve.
-			const { runBridge } = await import("./bridge.js");
-			await runBridge(meta, options);
+		// Merely imported → no-op, don't even load Vite. The SSR re-entry still has isEntry === true
+		// (Vite gives the re-entered module the entry's own file URL), so this guard only stops imports.
+		if (!isEntry) {
 			return;
 		}
-		if (!isEntry) {
-			return; // merely imported — don't even load Vite
+
+		// First (tsx) pass: bootstrapOrRun creates Vite + re-enters via SSR and returns true → done, the
+		// re-entry serves — so this pass never even loads the bridge. Re-entry pass: returns false →
+		// load + run the bridge. (Both imports stay dynamic so `vite` never reaches the cheap paths —
+		// tool files importing defineTool/ok, plain stdio, the no-op import above.)
+		const { bootstrapOrRun } = await import("../vite/dev.js");
+		if (await bootstrapOrRun(meta.url, dirname(fileURLToPath(meta.url)))) {
+			return;
 		}
-		viteBootstrapped = true;
-		const { bootstrapVite } = await import("./bridge.js");
-		await bootstrapVite(meta); // creates Vite + re-enters the entry through SSR (→ the branch above)
+
+		const { runBridge } = await import("./bridge.js");
+		await runBridge(meta, options);
 		return;
 	}
 

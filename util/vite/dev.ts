@@ -6,7 +6,8 @@
 import http from "node:http";
 import { readFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
-import { join, basename } from "node:path";
+import { join, basename, relative } from "node:path";
+import { fileURLToPath } from "node:url";
 import { createServer as createViteServer, type ViteDevServer } from "vite";
 
 /**
@@ -26,6 +27,34 @@ export async function getViteDevServer(root: string): Promise<ViteDevServer> {
     });
 
     return viteDevServer;
+}
+
+let entered = false;
+
+/**
+ * Dev "quine" guard. On the FIRST call (the tsx entry, in dev) it spins up the shared Vite server and
+ * re-enters the calling entry through SSR, then returns `true` so the caller skips its app body — the
+ * re-entry will run it. On the re-entry pass (and in production) it returns `false` → run the app body,
+ * now in ONE module graph with the routes/tools it loads.
+ *
+ * The two passes are told apart by the module-level `entered` flag, NOT `import.meta.env.SSR`: this
+ * module is externalized from Vite (it's a node_module), so it's a single instance across both passes.
+ * That also means a consumer never has to read `import.meta.env` — which Vite's SSR module runner
+ * forbids reading dynamically anyway.
+ *
+ * Usage:  if (!(await bootstrapOrRun(import.meta.url, appRoot))) { ...app body... }
+ */
+export async function bootstrapOrRun(metaUrl: string, root: string): Promise<boolean> {
+    if (process.env["NODE_ENV"] === "production" || entered) {
+        return false;
+    }
+
+    entered = true;
+
+    const vite = await getViteDevServer(root);
+    await vite.ssrLoadModule("/" + relative(root, fileURLToPath(metaUrl)).replace(/\\/gu, "/"));
+
+    return true;
 }
 
 /** Serve one package directory in dev (Vite middleware + manual HTML, since

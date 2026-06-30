@@ -7,10 +7,10 @@
  * and edits hot-reload. The shared plumbing (this package) is externalized so Vite doesn't try to
  * transform itself; only the consumer's server.ts + tools/ (inside the Vite root) get transformed.
  *
- * Quine: tsx runs server.ts → serveMcp → bootstrapVite creates Vite and re-enters server.ts through
- * SSR → serveMcp (second pass) → runBridge actually boots. The two passes are told apart by a
- * module-level flag in serveMcp, NOT import.meta.env.SSR — Vite's module runner forbids reading
- * import.meta.env dynamically off a passed-in meta. One server on POST /mcp (rebuilt per request from
+ * Quine: tsx runs server.ts → serveMcp → bootstrapOrRun (util/vite/dev) creates Vite and re-enters
+ * server.ts through SSR → serveMcp (second pass) → runBridge actually boots. The two passes are told
+ * apart by a module-level flag in bootstrapOrRun, NOT import.meta.env.SSR — Vite's module runner forbids
+ * reading import.meta.env dynamically off a passed-in meta. One server on POST /mcp (rebuilt per request from
  * the current tools); stdio is bridged to it so Claude — and `curl localhost:PORT/mcp` — both hit the
  * same hot-reloading endpoint.
  */
@@ -25,20 +25,13 @@ import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { eachToolFile, registerTool, silenceStdout, type EntryMeta, type ServeOptions } from "./index";
 
-// Vite dev server comes from util/vite/dev (shared with the router). Node-module deps — including
-// @brianjenkins94/util itself — are externalized by Vite's SSR default, so no ssr.external needed
-// here (the old override existed only because the plumbing used to be a file:-linked dep).
+// The dev quine (bootstrapOrRun) lives in util/vite/dev — shared with the express app; serveMcp imports
+// it from there directly. Node-module deps — including @brianjenkins94/util itself — are externalized by
+// Vite's SSR default, so no ssr.external is needed (the old override existed only for the file:-link era).
 
 /** Vite root-relative module URL (what ssrLoadModule wants), e.g. /server.ts or /tools/list.ts. */
 function viteUrl(root: string, absPath: string): string {
 	return "/" + relative(root, absPath).replace(/\\/gu, "/");
-}
-
-/** First pass (tsx): spin up Vite and re-enter the entry through SSR so it (and the tools) transform. */
-export async function bootstrapVite(meta: EntryMeta): Promise<void> {
-	const entry = fileURLToPath(meta.url);
-	const vite = await getViteDevServer(dirname(entry));
-	await vite.ssrLoadModule(viteUrl(dirname(entry), entry));
 }
 
 /** Second pass (Vite SSR): boot POST /mcp (per-request rebuild → hot-reload) + the stdio bridge. */
