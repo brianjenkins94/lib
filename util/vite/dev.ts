@@ -7,7 +7,26 @@ import http from "node:http";
 import { readFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { join, basename } from "node:path";
-import { getViteDevServer } from "../router";
+import { createServer as createViteServer, type ViteDevServer } from "vite";
+
+/**
+ * The shared Vite dev server (middleware mode, custom appType) — one per process. This is the base
+ * everything else builds on: `util/router` layers route-module invalidation on top, `util/mcp`'s
+ * bridge re-enters the entry through it, and `serve` below renders HTML through it.
+ */
+let viteDevServer: ViteDevServer | undefined;
+
+export async function getViteDevServer(root: string): Promise<ViteDevServer> {
+    viteDevServer ??= await createViteServer({
+        "root": root,
+        "appType": "custom",
+        "server": { "middlewareMode": true },
+        "esbuild": { "jsx": "automatic", "jsxImportSource": "jsx-async-runtime" },
+        "publicDir": false
+    });
+
+    return viteDevServer;
+}
 
 /** Serve one package directory in dev (Vite middleware + manual HTML, since
  *  getViteDevServer uses appType:"custom"). */

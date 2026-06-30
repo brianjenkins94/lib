@@ -6,6 +6,7 @@
     "peerDependencies": {
         "@badgateway/oauth2-client": "latest",
         "@clack/prompts": "latest",
+        "@modelcontextprotocol/sdk": "latest",
         "@opensearch-project/opensearch": "latest",
         "cmd-ts": "latest",
         "ejs": "latest",

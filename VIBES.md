@@ -9,5 +9,7 @@ WARNING: May contain vibes.
 - `util/cmd.ts`
 - `util/csv.ts`
 - `util/fs.ts`
+- `util/mcp/*`
+- `util/router.ts`
 - `util/scripts/*`
 - `util/vite/*`

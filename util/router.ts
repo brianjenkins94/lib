@@ -2,9 +2,9 @@ import * as path from "path";
 import * as url from "url";
 import * as fs from "./fs";
 import { mapAsync } from "./array";
-import * as vite from "vite";
+import { getViteDevServer as getBaseViteDevServer } from "./vite/dev";
 
-let viteDevServer;
+let watcherAttached = false;
 let routeModules = new Map();
 
 // TODO: Review
@@ -32,20 +32,11 @@ function hasDependency(moduleNode, filePath, seen = new Set()) {
 	return false;
 }
 
-export async function getViteDevServer(root) {
-	if (viteDevServer === undefined) {
-		viteDevServer = await vite.createServer({
-			"root": root,
-			"appType": "custom",
-			"server": {
-				"middlewareMode": true
-			},
-			"esbuild": {
-				"jsx": "automatic",
-				"jsxImportSource": "jsx-async-runtime"
-			},
-			"publicDir": false
-		});
+async function getViteDevServer(root) {
+	const viteDevServer = await getBaseViteDevServer(root);
+
+	if (!watcherAttached) {
+		watcherAttached = true;
 
 		for (const event of ["change", "unlink"]) {
 			viteDevServer.watcher.on(event, async function(changedFilePath) {
