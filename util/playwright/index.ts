@@ -22,7 +22,8 @@ const browsers = {
 	}
 }
 
-export async function attach(endpointURL = "http://localhost:9222") {
+export async function attach(endpointURL = "http://localhost:9222", options = { timeout: 15_000 }) {
+
 	if (new URL(endpointURL).hostname === "localhost") {
 		for (const browser of Object.values(browsers).filter(({ path }) => fs.existsSync(path))) {
 			try {
@@ -64,7 +65,7 @@ export async function attach(endpointURL = "http://localhost:9222") {
 		}
 	}
 
-	const browser = await chromium.connectOverCDP(endpointURL);
+	const browser = await chromium.connectOverCDP(endpointURL, options);
 
 	return {
 		"browser": browser,
