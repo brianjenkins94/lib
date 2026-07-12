@@ -2,14 +2,14 @@ import type { Browser, BrowserContext, Page } from "playwright";
 import { spawn } from "node:child_process";
 import * as path from "node:path";
 import { chromium } from "playwright";
-import { mapSeries } from "../array";
+import { mapSeries } from "@brianjenkins94/util/array";
 
-import { __root, isWindows } from "../env";
-import { defaultConditionCallback } from "../fido";
-import * as fs from "../fs";
-import { sleep } from "../sleep";
-import { polyfillNode } from "../vite/plugins/polyfillNode";
-import { virtualFileSystem } from "../vite/plugins/virtualFileSystem";
+import { __root, isWindows } from "@brianjenkins94/util/env";
+import { defaultConditionCallback } from "@brianjenkins94/util/fido";
+import * as fs from "@brianjenkins94/util/fs";
+import { sleep } from "@brianjenkins94/util/sleep";
+import { polyfillNode } from "@brianjenkins94/util/vite/plugins/polyfillNode";
+import { virtualFileSystem } from "@brianjenkins94/util/vite/plugins/virtualFileSystem";
 
 const browsers = {
 	"Brave": {

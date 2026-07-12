@@ -2,7 +2,7 @@ import * as path from "node:path";
 import * as ejs from "ejs";
 import { jsxToString } from "jsx-async-runtime";
 import { mapEntries } from "./array";
-import * as fs from "./fs";
+import * as fs from "@brianjenkins94/util/fs";
 import { polyfillNode } from "./vite/plugins/polyfillNode";
 import { virtualFileSystem } from "./vite/plugins/virtualFileSystem";
 

@@ -9,7 +9,7 @@ import http from "node:http";
 import * as path from "node:path";
 import * as url from "node:url";
 import { createServer as createViteServer } from "vite";
-import { existsSync, readFile } from "../fs";
+import * as fs from "@brianjenkins94/util/fs";
 
 /**
  * The shared Vite dev server (middleware mode, custom appType) — one per process. This is the base
@@ -70,8 +70,8 @@ export async function serve(appRoot: string, port = 5173): Promise<void> {
 				const urlPath = (req.url ?? "/").split("?")[0];
 				let file = urlPath === "/" ? "index.html" : urlPath.slice(1);
 
-				if (!file.endsWith(".html") || !existsSync(path.join(appRoot, file))) { file = "index.html"; }
-				const html = await vite.transformIndexHtml(req.url ?? "/", await readFile(path.join(appRoot, file)));
+				if (!file.endsWith(".html") || !fs.existsSync(path.join(appRoot, file))) { file = "index.html"; }
+				const html = await vite.transformIndexHtml(req.url ?? "/", await fs.readFile(path.join(appRoot, file)));
 
 				res.setHeader("content-type", "text/html");
 				res.end(html);

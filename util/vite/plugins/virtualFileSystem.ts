@@ -1,6 +1,6 @@
 import type { PluginOption } from "vite";
 import * as path from "node:path";
-import * as fs from "../../../util/fs";
+import * as fs from "@brianjenkins94/util/fs";
 
 export function virtualFileSystem(files = {}) {
 	let __root;

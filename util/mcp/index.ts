@@ -15,7 +15,7 @@ import * as path from "node:path";
 import * as url from "node:url";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
-import { readdir } from "../fs";
+import * as fs from "@brianjenkins94/util/fs";
 
 export interface ToolResult { "content": { "type": "text"; "text": string }[]; "isError"?: boolean }
 
@@ -75,7 +75,7 @@ export function registerTool(server: McpServer, tool: McpTool): void {
 export async function eachToolFile(dir: string, load: (absPath: string) => Promise<{ "default"?: McpTool | McpTool[] }>): Promise<McpTool[]> {
 	const tools: McpTool[] = [];
 
-	for (const file of (await readdir(dir)).sort()) {
+	for (const file of (await fs.readdir(dir)).sort()) {
 		if (!/\.(ts|mts|js|mjs)$/u.test(file) || file.endsWith(".d.ts")) {
 			continue;
 		}

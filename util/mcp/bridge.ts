@@ -22,8 +22,8 @@ import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
-import { createServer } from "../server";
-import { getViteDevServer } from "../vite/dev";
+import { createServer } from "@brianjenkins94/util/server";
+import { getViteDevServer } from "@brianjenkins94/util/vite/dev";
 import { eachToolFile, registerTool, silenceStdout } from "./index";
 
 // The dev quine (bootstrapOrRun) lives in util/vite/dev — shared with the express app; serveMcp imports

@@ -3,7 +3,7 @@ import type { sheets_v4 as SheetsApi } from "googleapis/build/src/apis/sheets";
 import { OAuth2Client } from "@badgateway/oauth2-client";
 import { OAuth2Client as GoogleOAuth2Client } from "googleapis-common";
 import { sheets as sheetsApi } from "googleapis/build/src/apis/sheets";
-import { mapAsync } from "../array";
+import { mapAsync } from "@brianjenkins94/util/array";
 import { fetchWrapper } from "./auth";
 
 class Sheet {

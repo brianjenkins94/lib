@@ -1,6 +1,6 @@
 import type { Page } from "playwright";
 
-import { sleep } from "../sleep";
+import { sleep } from "@brianjenkins94/util/sleep";
 
 export function waitForNavigation(page: Page, targetUrl, options = { "timeout": 30_000 }) {
 	if (options["timeout"] === 0) {

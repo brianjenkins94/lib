@@ -2,7 +2,7 @@ import type { InlineConfig } from "vite";
 import * as path from "node:path";
 import * as url from "node:url";
 import { build, mergeConfig } from "vite";
-import { readdir } from "../fs";
+import * as fs from "@brianjenkins94/util/fs";
 import { defaults } from "./defaults";
 
 export { defaults };
@@ -35,7 +35,7 @@ export interface BuildAppOptions {
  */
 export async function buildApp(appRoot: string, repoRoot: string, options: BuildAppOptions = {}): Promise<void> {
 	const name = path.basename(appRoot);
-	const files = await readdir(appRoot);
+	const files = await fs.readdir(appRoot);
 	const input = files.filter((file) => file.endsWith(".html")).map((file) => path.resolve(appRoot, file));
 	const isApp = input.length > 0;
 

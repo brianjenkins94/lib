@@ -3,9 +3,8 @@ import * as path from "node:path";
 import { createGunzip, createGzip } from "node:zlib";
 import tarStream from "tar-stream";
 import * as vite from "vite";
-import { isCI } from "../env";
-import { findWorkspaces, glob } from "../fs";
-import * as fs from "../fs";
+import { isCI } from "@brianjenkins94/util/env";
+import * as fs from "@brianjenkins94/util/fs";
 import { build } from "./build";
 
 // util-publish runs in whatever repo invokes it (silo, lib, …) — the root is the cwd, not util's dir.
@@ -23,7 +22,7 @@ async function collectBuiltFiles(workspaceRoot: string, patterns: string[]): Pro
 	const result: Record<string, Buffer> = {};
 
 	for (const pattern of patterns) {
-		for await (const entry of glob(path.join(workspaceRoot, pattern, "**", "*"), { "exclude": ["**/*.map"], "withFileTypes": true })) {
+		for await (const entry of fs.glob(path.join(workspaceRoot, pattern, "**", "*"), { "exclude": ["**/*.map"], "withFileTypes": true })) {
 			if (entry.isFile()) {
 				const absolute = path.join(entry.parentPath, entry.name);
 
@@ -44,7 +43,7 @@ const buildFailures: string[] = [];
 // All git-tracked workspaces (incl. private) — used to keep a parent's source build from slurping a
 // nested package's sources (e.g. silo's root tarball must NOT pull in examples/ci-demo or a private
 // vscode-in-browser subproject). Each nested package publishes itself.
-const allWorkspaces = (await findWorkspaces()).map((workspace) => workspace.dir);
+const allWorkspaces = (await fs.findWorkspaces()).map((workspace) => workspace.dir);
 
 // Decide whether to publish the repo ROOT. A single-package repo — one whose only sub-package.jsons are
 // private (e.g. silo, whose sole sub-package is the private examples/ci-demo) — publishes its root. A
@@ -97,7 +96,7 @@ for (const workspace of workspaces) {
 	if (preBuilt) {
 		files = await collectBuiltFiles(path.join(__root, workspace).replace(/\\/gu, "/"), packageJson["files"]);
 	} else {
-		const entryPoints = packageJson["exports"] ?? (await Array.fromAsync(glob(path.join(workspace, "**", "*.ts"), { "exclude": (entry) => entry.includes("node_modules") || isNested(entry) }))).map((entry) => path.join(__root, entry).replace(/\\/gu, "/"));
+		const entryPoints = packageJson["exports"] ?? (await Array.fromAsync(fs.glob(path.join(workspace, "**", "*.ts"), { "exclude": (entry) => entry.includes("node_modules") || isNested(entry) }))).map((entry) => path.join(__root, entry).replace(/\\/gu, "/"));
 
 		let result;
 
@@ -144,7 +143,7 @@ for (const workspace of workspaces) {
 		// backend, the cooldown installer), which genuinely can't be .ts. Keyed workspace-relative.
 		// `withFileTypes` makes the exclude callback receive a Dirent, not a string — normalize to a path
 		// first, or `.includes` throws (TypeError: entry.includes is not a function) and aborts the build.
-		for await (const entry of glob(path.join(__root, workspace, "**", "*.{mjs,cjs}"), { "exclude": (entry) => {
+		for await (const entry of fs.glob(path.join(__root, workspace, "**", "*.{mjs,cjs}"), { "exclude": (entry) => {
 			const file = typeof entry === "string" ? entry : path.join(entry.parentPath, entry.name);
 
 			return file.includes("node_modules") || isNested(file);

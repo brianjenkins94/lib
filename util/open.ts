@@ -7,7 +7,7 @@ import { unescape } from "node:querystring";
 import mime from "mime/lite";
 import { __root } from "./env";
 
-import * as fs from "./fs";
+import * as fs from "@brianjenkins94/util/fs";
 import { createServer } from "./server";
 
 // SOURCE: https://github.com/sindresorhus/open/blob/main/index.js

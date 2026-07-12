@@ -1,7 +1,7 @@
 import type { OAuth2Client, OAuth2Token } from "@badgateway/oauth2-client";
 import { OAuth2Fetch } from "@badgateway/oauth2-client";
-import * as fs from "../fs";
-import { createServer } from "../server";
+import * as fs from "@brianjenkins94/util/fs";
+import { createServer } from "@brianjenkins94/util/server";
 
 export function fetchWrapper(oauth2Client: OAuth2Client, { redirectUri = "http://localhost:3000/callback", scopes = [] }) {
 	const fetchWrapper = new OAuth2Fetch({

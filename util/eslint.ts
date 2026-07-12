@@ -19,7 +19,10 @@ const errors = {
 	"ts/no-misused-promises": ["error", { "checksConditionals": true, "checksSpreads": true, "checksVoidReturn": false }], // keep the real-bug checks (promise-in-conditional = forgotten await; spread-promise) loud; drop void-return (unavoidable async handlers; the one real case — async Promise executor — is covered by no-async-promise-executor)
 	// Brian imports node:path / node:url as `* as path` / `* as url` (namespace) and calls `path.join`, `url.fileURLToPath`.
 	// extendDefaultStyles:false drops unicorn's built-in opinions (it wants `default` for path). NOT auto-fixable — flags named imports, convert by hand.
-	"unicorn/import-style": ["error", { "extendDefaultStyles": false, "styles": { "node:path": { "namespace": true }, "path": { "namespace": true }, "node:url": { "namespace": true }, "url": { "namespace": true } } }],
+	// namespace-only imports. path/url: Brian's `* as path`/`* as url` style. The fs wrapper (published as
+	// @brianjenkins94/util/fs — the alias-only specifier, forced by no-restricted-imports below) mirrors node
+	// fs, so `* as fs` → `fs.readFile` — never named. (import-style matches the literal specifier.)
+	"unicorn/import-style": ["error", { "extendDefaultStyles": false, "styles": { "node:path": { "namespace": true }, "path": { "namespace": true }, "node:url": { "namespace": true }, "url": { "namespace": true }, "@brianjenkins94/util/fs": { "namespace": true } } }],
 	// Categorically ban node fs — Brian uses his own wrapper (@brianjenkins94/util/fs; locally util/fs) that wraps
 	// node fs with utf8 defaults + async helpers. allowTypeImports lets `import type` through (types have no wrapper
 	// equivalent). NOT auto-fixable — convert by hand. The wrapper itself + sync-bound files are exempted in lib's eslint.config.ts.
@@ -148,6 +151,7 @@ const disabled = {
 	"unused-imports/no-unused-vars": "off", // don't nag on unused variables (unused-imports/no-unused-imports stays on, so unused imports still auto-remove)
 	"no-control-regex": "off", // intentional control characters in regexes are fine
 	"no-await-in-loop": "off", // sequential awaits in a loop are often intentional (order/rate), not always a Promise.all case
+	"no-bitwise": "off", // bitwise operators are fine — Brian uses them deliberately (game math, bit flags, bitecs)
 	"antfu/if-newline": "off", // forces a newline after `if (cond)` for non-block bodies — conflicts with Brian's beside one-liners AND with style/nonblock-statement-body-position:beside (the two oscillate, producing broken half-fixed saves)
 	"ts/no-shadow": "off", // intentional shadowing is fine (e.g. resolve/reject in a Promise executor, reused callback params); the option that might've trimmed it (ignoreFunctionTypeParameterNameValueShadow) is already the default. (core no-shadow is already off everywhere — antfu-off on JS, superseded off on TS)
 	"arrow-body-style": "off", // has no "allow both" mode (only always/as-needed/never); "as-needed" collapses block-body arrows to concise. Off so a deliberate `(row) => { return … }` (e.g. forced into an arrow by `this` but wanted on its own line) is left alone
@@ -360,6 +364,22 @@ function ignoreIndentComments<T extends { "rules"?: Record<string, unknown> }>(b
 	return { ...block, "rules": { ...block.rules, "style/indent": [indent[0], indent[1], options] } };
 }
 
+// perfectionist/sort-imports hoists imports (esp. split-out `import type`s) ABOVE a file-level doc comment that
+// touches the first import — burying the header between import groups on --fix. partitionByComment:true treats
+// comments as sort boundaries, so the leading comment stays put (and comment-grouped imports don't cross-sort).
+// Merged live into antfu's perfectionist options (keeps groups/order/type/newlines).
+function partitionImportsByComment<T extends { "rules"?: Record<string, unknown> }>(block: T): T {
+	const rule = block.rules?.["perfectionist/sort-imports"];
+
+	if (!Array.isArray(rule)) {
+		return block;
+	}
+
+	const options = typeof rule[1] === "object" && rule[1] !== null ? { ...(rule[1] as Record<string, unknown>), "partitionByComment": true } : { "partitionByComment": true };
+
+	return { ...block, "rules": { ...block.rules, "perfectionist/sort-imports": [rule[0], options] } };
+}
+
 // A disabled rule must be turned off wherever it's currently ENABLED — else the "off" either misses the rule
 // (wrong file scope, e.g. jsonc/* only runs on JSON) or errors ("plugin not found" on files where the plugin
 // isn't registered). So for each disable, gather the file globs of every block that turns it on (antfu's own
@@ -411,6 +431,7 @@ for (const config of configs) {
 }
 
 const yamlRules = {
+	"yaml/indent": ["warn", 2], // 2-space YAML indentation (no tabs — pairs with yaml/no-tab-indent), like jsonc/indent for JSON
 	"yaml/plain-scalar": ["warn", "never"], // require quotes, not plain scalars
 	"yaml/block-mapping": ["warn", "never"], // require flow `{ }`, not block mappings
 	"yaml/block-sequence": ["warn", "never"], // require flow `[ ]`, not block sequences
@@ -442,7 +463,7 @@ const l4For = (ts: boolean) => Object.fromEntries(Object.entries(L4).filter(([id
 const squelchFor = (ts: boolean) => Object.fromEntries(Object.entries(squelched).filter(([id]) => id.startsWith("ts/") === ts));
 
 export default [
-	...configs.map(hushFixable).map(ignoreIndentComments),
+	...configs.map(hushFixable).map(ignoreIndentComments).map(partitionImportsByComment),
 	hushFixable({ "files": [GLOB_SRC], "rules": srcFill }),
 	hushFixable({ "files": [GLOB_TS, GLOB_TSX], "rules": tsFill }),
 	{ "files": [GLOB_TS, GLOB_TSX], "rules": supersede },

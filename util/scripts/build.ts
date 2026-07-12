@@ -1,7 +1,7 @@
 import { spawn } from "node:child_process";
 import * as url from "node:url";
-import { mapAsync, partition } from "../array";
-import { findWorkspaces, realpath } from "../fs";
+import { mapAsync, partition } from "@brianjenkins94/util/array";
+import * as fs from "@brianjenkins94/util/fs";
 
 /**
  * Build every git-tracked workspace by running its own `build` script. Library packages under
@@ -10,7 +10,7 @@ import { findWorkspaces, realpath } from "../fs";
  * `{ workspace: exitCode }` map.
  */
 export async function build(workspaces?: string[]) {
-	workspaces ??= (await findWorkspaces()).filter((workspace) => !workspace.private).map((workspace) => workspace.dir);
+	workspaces ??= (await fs.findWorkspaces()).filter((workspace) => !workspace.private).map((workspace) => workspace.dir);
 
 	function buildOne(workspace) {
 		return new Promise(function(resolve, reject) {
@@ -34,6 +34,6 @@ export async function build(workspaces?: string[]) {
 	return Object.fromEntries([...packageResults, ...restResults]);
 }
 
-if (process.argv[1] !== undefined && import.meta.url === url.pathToFileURL(await realpath(process.argv[1])).toString()) {
+if (process.argv[1] !== undefined && import.meta.url === url.pathToFileURL(await fs.realpath(process.argv[1])).toString()) {
 	await build();
 }

@@ -1,5 +1,5 @@
 import * as util from "node:util";
-import { Bottleneck } from "../util/bottleneck";
+import { Bottleneck } from "@brianjenkins94/util/bottleneck";
 import { PersistentStore } from "./store";
 
 function flush(buffer, callback) {

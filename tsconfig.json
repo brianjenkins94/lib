@@ -2,6 +2,7 @@
   "extends": "@tsconfig/node-lts/tsconfig.json",
   "compilerOptions": {
     "paths": {
+      "@brianjenkins94/util/*": ["./util/*"],
       "@components/*": ["./components/*"]
     },
     "alwaysStrict": true,
