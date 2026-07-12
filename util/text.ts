@@ -39,7 +39,7 @@ export function dedent(input) {
 	return input
 		.replace(/^\s*\n(?=\s*\S)/mu, "")
 		.replace(new RegExp("^( {" + indentationWidth + "})", "gmu"), "")
-		.replace(/(?<=^)\n|(?<=\n+) +(?=$)/gu, "");
+		.replace(/^\n|(?<=\n+) +$/gu, "");
 	//.replace(/^ +/gmu, function(match) {
 	//	return "\t".repeat(match.length / 4);
 	//});

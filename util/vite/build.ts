@@ -1,7 +1,8 @@
-import { build, mergeConfig, type InlineConfig } from "vite";
-import { readdirSync } from "node:fs";
-import { resolve, basename } from "node:path";
-import { pathToFileURL } from "node:url";
+import type { InlineConfig } from "vite";
+import * as path from "node:path";
+import * as url from "node:url";
+import { build, mergeConfig } from "vite";
+import { readdir } from "../fs";
 import { defaults } from "./defaults";
 
 export { defaults };
@@ -33,17 +34,18 @@ export interface BuildAppOptions {
  * passes `baseDir: "games"` and a phaser `resolve.alias`).
  */
 export async function buildApp(appRoot: string, repoRoot: string, options: BuildAppOptions = {}): Promise<void> {
-	const name = basename(appRoot);
-	const files = readdirSync(appRoot);
-	const input = files.filter((file) => file.endsWith(".html")).map((file) => resolve(appRoot, file));
+	const name = path.basename(appRoot);
+	const files = await readdir(appRoot);
+	const input = files.filter((file) => file.endsWith(".html")).map((file) => path.resolve(appRoot, file));
 	const isApp = input.length > 0;
 
 	if (isApp) {
 		const base = "/" + [options.baseDir, name].filter(Boolean).join("/") + "/";
+
 		await buildPackage(appRoot, mergeConfig({
 			"base": base,
 			"build": {
-				"outDir": resolve(repoRoot, "docs", name),
+				"outDir": path.resolve(repoRoot, "docs", name),
 				"assetsInlineLimit": 0,
 				"rollupOptions": {
 					"input": input,
@@ -52,6 +54,7 @@ export async function buildApp(appRoot: string, repoRoot: string, options: Build
 						// instead of flattening into assets/. Fallback for generated assets.
 						"assetFileNames": (asset) => {
 							const source = asset.originalFileName;
+
 							return source ? source.replace(/^src\//u, "") : "assets/[name][extname]";
 						}
 					}
@@ -75,6 +78,6 @@ export async function buildApp(appRoot: string, repoRoot: string, options: Build
 
 // Run directly → build the package this was invoked from. repoRoot is two
 // levels up from this file (util/vite/).
-if (import.meta.url === pathToFileURL(process.argv[1]).href) {
-	await buildApp(process.cwd(), resolve(import.meta.dirname, "../.."));
+if (import.meta.url === url.pathToFileURL(process.argv[1]).href) {
+	await buildApp(process.cwd(), path.resolve(import.meta.dirname, "../.."));
 }

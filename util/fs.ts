@@ -1,11 +1,11 @@
 import type { Abortable } from "node:events";
+import type { OpenMode } from "node:fs";
 import { spawn } from "node:child_process";
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { OpenMode } from "node:fs";
 
 export { createReadStream, createWriteStream, existsSync, writeFileSync } from "node:fs";
-export { copyFile, cp, rename, rm, mkdir, readdir, stat, unlink, writeFile, appendFile, glob } from "node:fs/promises";
+export { appendFile, copyFile, cp, glob, mkdir, readdir, realpath, rename, rm, stat, unlink, writeFile } from "node:fs/promises";
 
 interface ReadFileOptions {
 	"encoding"?: BufferEncoding;

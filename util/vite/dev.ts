@@ -3,12 +3,13 @@
  * middleware mode (getViteDevServer). Run it via the `util-dev` bin (util/scripts/dev.ts);
  * a package that needs more imports `serve` here and composes its own dev script.
  */
+
+import type { ViteDevServer } from "vite";
 import http from "node:http";
-import { readFile } from "node:fs/promises";
-import { existsSync } from "node:fs";
-import { join, basename, relative } from "node:path";
-import { fileURLToPath } from "node:url";
-import { createServer as createViteServer, type ViteDevServer } from "vite";
+import * as path from "node:path";
+import * as url from "node:url";
+import { createServer as createViteServer } from "vite";
+import { existsSync, readFile } from "../fs";
 
 /**
  * The shared Vite dev server (middleware mode, custom appType) — one per process. This is the base
@@ -52,7 +53,8 @@ export async function bootstrapOrRun(metaUrl: string, root: string): Promise<boo
 	entered = true;
 
 	const vite = await getViteDevServer(root);
-	await vite.ssrLoadModule("/" + relative(root, fileURLToPath(metaUrl)).replace(/\\/gu, "/"));
+
+	await vite.ssrLoadModule("/" + path.relative(root, url.fileURLToPath(metaUrl)).replace(/\\/gu, "/"));
 
 	return true;
 }
@@ -67,8 +69,10 @@ export async function serve(appRoot: string, port = 5173): Promise<void> {
 			try {
 				const urlPath = (req.url ?? "/").split("?")[0];
 				let file = urlPath === "/" ? "index.html" : urlPath.slice(1);
-				if (!file.endsWith(".html") || !existsSync(join(appRoot, file))) file = "index.html";
-				const html = await vite.transformIndexHtml(req.url ?? "/", await readFile(join(appRoot, file), "utf8"));
+
+				if (!file.endsWith(".html") || !existsSync(path.join(appRoot, file))) file = "index.html";
+				const html = await vite.transformIndexHtml(req.url ?? "/", await readFile(path.join(appRoot, file)));
+
 				res.setHeader("content-type", "text/html");
 				res.end(html);
 			} catch (err) {
@@ -77,5 +81,5 @@ export async function serve(appRoot: string, port = 5173): Promise<void> {
 				res.end(String((err as Error)?.stack ?? err));
 			}
 		});
-	}).listen(port, () => console.log(`\n  ${basename(appRoot)} → http://localhost:${port}/\n`));
+	}).listen(port, () => { console.log(`\n  ${path.basename(appRoot)} → http://localhost:${port}/\n`); });
 }

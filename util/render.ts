@@ -1,10 +1,11 @@
+import * as path from "node:path";
 import * as ejs from "ejs";
-import * as fs from "./fs";
+import { jsxToString } from "jsx-async-runtime";
 import { mapEntries } from "./array";
-import * as path from "path";
+import * as fs from "./fs";
 import { polyfillNode } from "./vite/plugins/polyfillNode";
 import { virtualFileSystem } from "./vite/plugins/virtualFileSystem";
-import { jsxToString } from "jsx-async-runtime";
+
 let vite;
 
 function isJsxAsyncRuntimeNode(object) {
@@ -24,7 +25,8 @@ async function transform(root, route) {
 			"emptyOutDir": false,
 			"rollupOptions": {
 				"external": function(id, parentId, isResolved) {
-					const result = !(id.startsWith(".") || [path.join(root, route), route].some((external) => external === id));
+					const result = !(id.startsWith(".") || [path.join(root, route), route].includes(id));
+
 					//console.log(id, result);
 					return result;
 				},

@@ -11,13 +11,13 @@
  * Auth is deliberately NOT here — it differs per server (OAuth for mail, CDP/fido for admin).
  */
 
-import { readdirSync } from "node:fs";
-import { join, dirname } from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import * as path from "node:path";
+import * as url from "node:url";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import { readdir } from "../fs";
 
-export type ToolResult = { "content": { "type": "text", "text": string }[], "isError"?: boolean };
+export interface ToolResult { "content": { "type": "text"; "text": string }[]; "isError"?: boolean }
 
 export interface McpTool {
 	"name": string;
@@ -39,7 +39,7 @@ export interface ServeOptions {
 // Only `url` — we deliberately do NOT read `import.meta.env` here: Vite's SSR module runner supports
 // only the static `import.meta.env.SSR` (a compile-time replacement), so reading `.env` off a passed-in
 // meta throws. The Vite-pass detection uses a module-level flag instead (see serveMcp).
-export type EntryMeta = { "url": string };
+export interface EntryMeta { "url": string }
 
 /** Identity helper that gives a tool file its type + `export default defineTool({...})` shape. */
 export function defineTool(tool: McpTool): McpTool {
@@ -74,13 +74,17 @@ export function registerTool(server: McpServer, tool: McpTool): void {
 /** Discover tool files in a dir and load each via `load` (fs import for stdio, Vite SSR for the bridge). */
 export async function eachToolFile(dir: string, load: (absPath: string) => Promise<{ "default"?: McpTool | McpTool[] }>): Promise<McpTool[]> {
 	const tools: McpTool[] = [];
-	for (const file of readdirSync(dir).sort()) {
+
+	for (const file of (await readdir(dir)).sort()) {
 		if (!/\.(ts|mts|js|mjs)$/u.test(file) || file.endsWith(".d.ts")) {
 			continue;
 		}
-		const mod = await load(join(dir, file));
+
+		const mod = await load(path.join(dir, file));
+
 		tools.push(...toolsFromDefault(mod.default));
 	}
+
 	return tools;
 }
 
@@ -94,10 +98,11 @@ export function silenceStdout(): void {
 async function runStdio(meta: EntryMeta, options: ServeOptions): Promise<void> {
 	silenceStdout();
 
-	const dir = options.toolsDir ?? join(dirname(fileURLToPath(meta.url)), "tools");
+	const dir = options.toolsDir ?? path.join(path.dirname(url.fileURLToPath(meta.url)), "tools");
 	const server = new McpServer({ "name": options.name, "version": options.version });
 
-	const tools = await eachToolFile(dir, (abs) => import(pathToFileURL(abs).href));
+	const tools = await eachToolFile(dir, (abs) => import(url.pathToFileURL(abs).href));
+
 	for (const tool of tools) {
 		registerTool(server, tool);
 	}
@@ -114,7 +119,7 @@ export async function serveMcp(meta: EntryMeta, options: ServeOptions): Promise<
 	// Boots only when this module is the process entry (tsx) or the bridge is re-entering it under SSR —
 	// NOT when merely imported (e.g. a CLI that pulls in the server's exports). On failure this rejects;
 	// the caller owns the exit policy.
-	const isEntry = Boolean(process.argv[1]) && meta.url === pathToFileURL(process.argv[1]).href;
+	const isEntry = Boolean(process.argv[1]) && meta.url === url.pathToFileURL(process.argv[1]).href;
 	const useBridge = options.bridge ?? (process.env["NODE_ENV"] !== "production");
 
 	if (useBridge) {
@@ -129,17 +134,21 @@ export async function serveMcp(meta: EntryMeta, options: ServeOptions): Promise<
 		// load + run the bridge. (Both imports stay dynamic so `vite` never reaches the cheap paths —
 		// tool files importing defineTool/ok, plain stdio, the no-op import above.)
 		const { bootstrapOrRun } = await import("../vite/dev.js");
-		if (await bootstrapOrRun(meta.url, dirname(fileURLToPath(meta.url)))) {
+
+		if (await bootstrapOrRun(meta.url, path.dirname(url.fileURLToPath(meta.url)))) {
 			return;
 		}
 
 		const { runBridge } = await import("./bridge.js");
+
 		await runBridge(meta, options);
+
 		return;
 	}
 
 	if (!isEntry) {
 		return; // merely imported
 	}
+
 	await runStdio(meta, options);
 }

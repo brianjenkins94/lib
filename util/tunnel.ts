@@ -1,8 +1,8 @@
-import net from "net";
+import net from "node:net";
 
 export class Tunnel {
-	private sockets = new Set();
-	private localUrl;
+	private readonly sockets = new Set();
+	private readonly localUrl;
 	private remotePort;
 	private closed = false;
 	public url;

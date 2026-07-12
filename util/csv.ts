@@ -38,10 +38,10 @@ function stringify(headersOrData: string[] | object[], data?: string[][] | objec
 		Array.isArray(headersOrData) && headersOrData.length > 0 && typeof headersOrData[0] === "string";
 
 	const headers: string[] | undefined = hasExplicitHeaders ? headersOrData as string[] : undefined;
-	const rows = hasExplicitHeaders ? data! : headersOrData as object[];
+	const rows = hasExplicitHeaders ? data : headersOrData as object[];
 
 	const isArrayRows = rows.length > 0 && Array.isArray(rows[0]);
-	const flatRows = isArrayRows ? rows : (rows as object[]).map((row) => flatten(row));
+	const flatRows = isArrayRows ? rows : (rows).map((row) => flatten(row));
 	const fields = headers ?? getKeysOfLargestObject(flatRows as object[]);
 
 	return Papa.unparse({
@@ -59,7 +59,7 @@ function parse(data: any[][] | string): object[] {
 		// identify the header row. Going through stringify(headers, rows) omits the
 		// header row from the CSV output (header: false), causing Papa to treat the
 		// first data row as headers instead.
-		data = Papa.unparse(data as any[][], { "quotes": true });
+		data = Papa.unparse(data, { "quotes": true });
 	}
 
 	return Papa.parse(data, { "header": true, "dynamicTyping": true }).data as object[];
@@ -74,7 +74,7 @@ function toArray(headersOrData: string[] | object[], data?: object[]): any[][] {
 	const headers = hasExplicitHeaders
 		? headersOrData as string[]
 		: getKeysOfLargestObject((headersOrData as object[]).map((r) => flatten(r)));
-	const rows = hasExplicitHeaders ? data! : headersOrData as object[];
+	const rows = hasExplicitHeaders ? data : headersOrData as object[];
 	const flatRows = rows.map((r) => flatten(r) as Record<string, unknown>);
 
 	return [headers, ...flatRows.map((row) => headers.map((h) => row[h] ?? ""))];

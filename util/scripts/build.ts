@@ -1,8 +1,7 @@
+import { spawn } from "node:child_process";
+import * as url from "node:url";
 import { mapAsync, partition } from "../array";
-import { findWorkspaces } from "../fs";
-import { spawn } from "child_process";
-import { realpathSync } from "fs";
-import * as url from "url";
+import { findWorkspaces, realpath } from "../fs";
 
 /**
  * Build every git-tracked workspace by running its own `build` script. Library packages under
@@ -35,6 +34,6 @@ export async function build(workspaces?: string[]) {
 	return Object.fromEntries([...packageResults, ...restResults]);
 }
 
-if (process.argv[1] !== undefined && import.meta.url === url.pathToFileURL(realpathSync(process.argv[1])).toString()) {
+if (process.argv[1] !== undefined && import.meta.url === url.pathToFileURL(await realpath(process.argv[1])).toString()) {
 	await build();
 }

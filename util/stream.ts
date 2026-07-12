@@ -1,8 +1,8 @@
-import { createInterface, Interface as ReadlineInterface } from "node:readline";
+import { createInterface } from "node:readline";
 import { Readable, Writable } from "node:stream";
 
 class ReadLineStream extends Readable {
-	private _readStream;
+	private readonly _readStream;
 
 	public constructor(readStream, options = {}) {
 		super(options);
@@ -35,7 +35,7 @@ export function createReadLineStream(readStream, options = {}) {
 }
 
 class WriteMemoryStream extends Writable {
-	private _decoder = new TextDecoder();
+	private readonly _decoder = new TextDecoder();
 	public data = "";
 
 	public constructor(options = {}) {

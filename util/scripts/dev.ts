@@ -1,5 +1,5 @@
-import { realpathSync } from "fs";
-import * as url from "url";
+import * as url from "node:url";
+import { realpath } from "../fs";
 import { serve } from "../vite/dev";
 
 /**
@@ -8,6 +8,6 @@ import { serve } from "../vite/dev";
  * imports `serve` from `@brianjenkins94/util/vite/dev` and composes its own dev
  * script — see games/war2/scripts/dev.ts (PeerJS broker + debug server).
  */
-if (process.argv[1] !== undefined && import.meta.url === url.pathToFileURL(realpathSync(process.argv[1])).toString()) {
+if (process.argv[1] !== undefined && import.meta.url === url.pathToFileURL(await realpath(process.argv[1])).toString()) {
 	await serve(process.cwd());
 }

@@ -1,6 +1,5 @@
-import { drive as driveApi } from "googleapis/build/src/apis/drive";
-import type { drive_v3 as DriveApi } from "googleapis/build/src/apis/drive";
 import { OAuth2Client } from "googleapis-common";
+import { drive as driveApi } from "googleapis/build/src/apis/drive";
 
 export class Drive {
 	private readonly driveApi;
@@ -28,7 +27,7 @@ export class Drive {
 			"q": "parents in \"" + this.parentFolderId + "\" and mimeType = \"application/vnd.google-apps.folder\" and name = \"" + folderName + "\" and trashed = false",
 			"supportsAllDrives": true,
 			"includeItemsFromAllDrives": true
-		} as DriveApi.Params$Resource$Files$List);
+		});
 
 		if (files.length > 0) {
 			return files[0];
@@ -41,7 +40,7 @@ export class Drive {
 				"mimeType": "application/vnd.google-apps.folder"
 			},
 			"supportsAllDrives": true
-		} as DriveApi.Params$Resource$Files$Create))["data"];
+		}))["data"];
 	}
 
 	public async createFile(fileName, options = {}) {
@@ -53,7 +52,7 @@ export class Drive {
 				"name": fileName,
 				"parents": [this.parentFolderId]
 			}
-		} as DriveApi.Params$Resource$Files$Create))["data"];
+		}))["data"];
 	}
 
 	public async uploadFile(fileName, fileBytes, options = {}) {
@@ -70,14 +69,14 @@ export class Drive {
 				"body": fileBytes
 			},
 			"supportsAllDrives": true
-		} as DriveApi.Params$Resource$Files$Update))["data"];
+		}))["data"];
 	}
 
 	public async getFilePermissions(fileId) {
 		return (await this.driveApi.permissions.list({
 			"fileId": fileId,
 			"supportsAllDrives": true
-		} as DriveApi.Params$Resource$Permissions$List))["data"]["permissions"];
+		}))["data"]["permissions"];
 	}
 
 	public async getSharableFileUrl(fileId) {
@@ -88,7 +87,7 @@ export class Drive {
 				"role": "reader"
 			},
 			"supportsAllDrives": true
-		} as DriveApi.Params$Resource$Permissions$Create);
+		});
 
 		console.log(response);
 

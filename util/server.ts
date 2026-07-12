@@ -1,8 +1,8 @@
-import * as fs from "./fs";
-import { pathToRegexp, match } from "path-to-regexp";
-import * as http from "http";
-import * as path from "path";
+import * as http from "node:http";
+import * as path from "node:path";
 import mime from "mime/lite";
+import { match, pathToRegexp } from "path-to-regexp";
+import * as fs from "./fs";
 
 import { render } from "./render";
 

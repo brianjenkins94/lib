@@ -1,6 +1,5 @@
-import * as fs from "./fs";
 import * as path from "node:path";
-import * as url from "node:url";
+import * as fs from "./fs";
 
 async function readdir(directory) {
 	const output = {

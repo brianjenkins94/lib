@@ -1,5 +1,5 @@
-import { builtinModules } from "module";
-import { PluginOption } from "vite";
+import type { PluginOption } from "vite";
+import { builtinModules } from "node:module";
 
 const NAMESPACE = "\0external-global:";
 

@@ -63,7 +63,7 @@ export function liftGlobals(argv: string[], specs: Record<string, GlobalFlag>): 
 			const index = args.findIndex((argument) => pattern.test(argument));
 
 			if (index >= 0) {
-				const inline = pattern.exec(args[index])![1];
+				const inline = pattern.exec(args[index])[1];
 
 				if (inline !== undefined) {
 					values[key] = inline;

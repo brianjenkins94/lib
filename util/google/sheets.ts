@@ -1,11 +1,10 @@
-import { sheets as sheetsApi } from "googleapis/build/src/apis/sheets";
+import type { ClientSettings } from "@badgateway/oauth2-client/dist/client";
 import type { sheets_v4 as SheetsApi } from "googleapis/build/src/apis/sheets";
-import {  } from "googleapis-common";
-import { fetchWrapper } from "./auth";
 import { OAuth2Client } from "@badgateway/oauth2-client";
 import { OAuth2Client as GoogleOAuth2Client } from "googleapis-common";
-import { ClientSettings } from "@badgateway/oauth2-client/dist/client";
+import { sheets as sheetsApi } from "googleapis/build/src/apis/sheets";
 import { mapAsync } from "../array";
+import { fetchWrapper } from "./auth";
 
 class Sheet {
 	private readonly sheetsApi;
@@ -21,14 +20,14 @@ class Sheet {
 	}
 
 	private parseCell(cell) {
-		if (typeof cell === "string" && /^[{\[].*[}\]]$/.test(cell.trim())) {
+		if (typeof cell === "string" && /^[{[].*[}\]]$/.test(cell.trim())) {
 			try {
 				return JSON.parse(cell);
 			} catch {}
 		}
 
 		return cell;
-	};
+	}
 
 	private normalizeRows(rows = []) {
 		return rows.map((row) => {
@@ -56,7 +55,7 @@ class Sheet {
 				"spreadsheetId": this.spreadSheetId,
 				"ranges": ranges,
 				"fields": "valueRanges(values)"
-			} as SheetsApi.Params$Resource$Spreadsheets$Values$Batchget))["data"]?.["valueRanges"] ?? [];
+			}))["data"]?.["valueRanges"] ?? [];
 
 			return rows.flatMap(({ values }) => this.normalizeRows(values));
 		}
@@ -66,7 +65,7 @@ class Sheet {
 			"spreadsheetId": this.spreadSheetId,
 			"range": range,
 			"fields": "values"
-		} as SheetsApi.Params$Resource$Spreadsheets$Values$Get))["data"]?.["values"] ?? [];
+		}))["data"]?.["values"] ?? [];
 
 		return this.normalizeRows(rows);
 	}
@@ -75,7 +74,7 @@ class Sheet {
 		return (await this.sheetsApi.spreadsheets.get({
 			"spreadsheetId": this.spreadSheetId,
 			"ranges": [sheetName]
-		} as SheetsApi.Params$Resource$Spreadsheets$Get))["data"]["sheets"][0]["properties"]["gridProperties"];
+		}))["data"]["sheets"][0]["properties"]["gridProperties"];
 	}
 
 	public update(range: string, data: unknown[] | unknown[][]) {
@@ -90,7 +89,7 @@ class Sheet {
 			"resource": {
 				"values": data // [[key, parseInt(await get("Sheet1!B" + index), 10) + value]]
 			}
-		} as SheetsApi.Params$Resource$Spreadsheets$Values$Update);
+		});
 	}
 
 	public append(range: string, data: unknown[] | unknown[][]) {
@@ -105,7 +104,7 @@ class Sheet {
 			"resource": {
 				"values": data // [[key, value]]
 			}
-		} as SheetsApi.Params$Resource$Spreadsheets$Values$Append);
+		});
 	}
 
 	public batch(requests: SheetsApi.Schema$ValueRange[]) {
@@ -115,7 +114,7 @@ class Sheet {
 				"valueInputOption": "USER_ENTERED",
 				"data": requests
 			}
-		} as SheetsApi.Params$Resource$Spreadsheets$Values$Batchupdate);
+		});
 	}
 }
 

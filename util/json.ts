@@ -1,7 +1,8 @@
-import { visit, parseTree, getNodeValue, JSONVisitor } from "jsonc-parser";
+import type { JSONVisitor } from "jsonc-parser";
+import { getNodeValue, parseTree, visit } from "jsonc-parser";
 
 function escapeString(string: string): string {
-	return string.replace(/[\\"\u0000-\u001F]/g, function (char) {
+	return string.replace(/[\\"\u0000-\u001F]/g, function(char) {
 		switch (char) {
 			case "\"":
 				return "\\\"";
@@ -51,21 +52,25 @@ function serialize(
 
 		if (value === null) {
 			chunks.push(encoder.encode("null"));
+
 			return true;
 		}
 
 		if (typeof value === "string") {
 			chunks.push(encoder.encode(`"${escapeString(value)}"`));
+
 			return true;
 		}
 
 		if (typeof value === "number") {
 			chunks.push(encoder.encode(isFinite(value) ? String(value) : "null"));
+
 			return true;
 		}
 
 		if (typeof value === "boolean") {
 			chunks.push(encoder.encode(String(value)));
+
 			return true;
 		}
 
@@ -81,6 +86,7 @@ function serialize(
 		if (typeof value === "object") {
 			if (typeof value.toJSON === "function") {
 				value = value.toJSON(key);
+
 				return str("", { "": value }, depth);
 			}
 
@@ -95,20 +101,25 @@ function serialize(
 			if (Array.isArray(value)) {
 				chunks.push(encoder.encode("["));
 				const len = value.length;
+
 				for (let i = 0; i < len; i++) {
 					if (i > 0) chunks.push(encoder.encode(","));
 					if (indent) chunks.push(encoder.encode(step));
 					const ok = str(String(i), value, depth + 1);
+
 					if (!ok) chunks.push(encoder.encode("null"));
 				}
+
 				if (indent && len > 0) chunks.push(encoder.encode(stepEnd));
 				chunks.push(encoder.encode("]"));
 			} else {
 				chunks.push(encoder.encode("{"));
 				const keys = propertyList || Object.keys(value);
 				let first = true;
+
 				for (const k of keys) {
 					let subValue = value[k];
+
 					if (replacerFn) subValue = replacerFn.call(value, k, subValue);
 
 					if (subValue === undefined || typeof subValue === "function" || typeof subValue === "symbol") {
@@ -121,15 +132,18 @@ function serialize(
 					chunks.push(encoder.encode(indent ? ": " : ":"));
 
 					const ok = str(k, value, depth + 1);
+
 					if (!ok) chunks.push(encoder.encode("null"));
 
 					first = false;
 				}
+
 				if (indent && !first) chunks.push(encoder.encode(stepEnd));
 				chunks.push(encoder.encode("}"));
 			}
 
 			stack.pop();
+
 			return true;
 		}
 
@@ -138,6 +152,7 @@ function serialize(
 
 	const topLevel = { "": value };
 	const ok = str("", topLevel, 0);
+
 	if (!ok) throw new TypeError("Value is not JSON serializable");
 
 	return chunks;
@@ -171,7 +186,7 @@ export function stringify(value: any, replacer?: (this: any, key: string, value:
 export function parse(text, reviver?, options?: JSONVisitor) {
 	if (text instanceof Uint8Array) {
 		// TODO: https://github.com/evanw/uint8array-json-parser/blob/master/uint8array-json-parser.ts
-		throw new Error("Uint8Array input not yet implemented.");
+		throw new TypeError("Uint8Array input not yet implemented.");
 	}
 
 	if (reviver !== undefined) {

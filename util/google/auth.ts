@@ -1,7 +1,6 @@
-import { OAuth2Fetch } from "@badgateway/oauth2-client";
 import type { OAuth2Client, OAuth2Token } from "@badgateway/oauth2-client";
+import { OAuth2Fetch } from "@badgateway/oauth2-client";
 import * as fs from "../fs";
-import { __root } from "../env";
 import { createServer } from "../server";
 
 export function fetchWrapper(oauth2Client: OAuth2Client, { redirectUri = "http://localhost:3000/callback", scopes = [] }) {
@@ -54,7 +53,7 @@ export function fetchWrapper(oauth2Client: OAuth2Client, { redirectUri = "http:/
 			return token;
 		},
 		"storeToken": function(token) {
-			fs.writeFileSync("token.json", JSON.stringify(token, undefined, "\t") + "\n");
+			fs.writeFileSync("token.json", JSON.stringify(token, undefined, 2) + "\n");
 		},
 		"getStoredToken": async function() {
 			if (fs.existsSync("token.json")) {

@@ -15,15 +15,16 @@
  * same hot-reloading endpoint.
  */
 
-import { join, dirname, relative } from "node:path";
-import { fileURLToPath } from "node:url";
+import type { EntryMeta, ServeOptions } from "./index";
+import * as path from "node:path";
+import * as url from "node:url";
+import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
+import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { createServer } from "../server";
 import { getViteDevServer } from "../vite/dev";
-import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
-import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
-import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
-import { eachToolFile, registerTool, silenceStdout, type EntryMeta, type ServeOptions } from "./index";
+import { eachToolFile, registerTool, silenceStdout } from "./index";
 
 // The dev quine (bootstrapOrRun) lives in util/vite/dev — shared with the express app; serveMcp imports
 // it from there directly. Node-module deps — including @brianjenkins94/util itself — are externalized by
@@ -31,16 +32,16 @@ import { eachToolFile, registerTool, silenceStdout, type EntryMeta, type ServeOp
 
 /** Vite root-relative module URL (what ssrLoadModule wants), e.g. /server.ts or /tools/list.ts. */
 function viteUrl(root: string, absPath: string): string {
-	return "/" + relative(root, absPath).replace(/\\/gu, "/");
+	return "/" + path.relative(root, absPath).replace(/\\/gu, "/");
 }
 
 /** Second pass (Vite SSR): boot POST /mcp (per-request rebuild → hot-reload) + the stdio bridge. */
 export async function runBridge(meta: EntryMeta, options: ServeOptions): Promise<void> {
 	silenceStdout();
 
-	const root = dirname(fileURLToPath(meta.url));
+	const root = path.dirname(url.fileURLToPath(meta.url));
 	const vite = await getViteDevServer(root);
-	const toolsDir = options.toolsDir ?? join(root, "tools");
+	const toolsDir = options.toolsDir ?? path.join(root, "tools");
 	const port = options.port ?? 3000;
 
 	// Rebuilt per request: ssrLoadModule re-evaluates a tool after you edit it (Vite invalidates it),
@@ -48,20 +49,24 @@ export async function runBridge(meta: EntryMeta, options: ServeOptions): Promise
 	async function buildServer(): Promise<McpServer> {
 		const server = new McpServer({ "name": options.name, "version": options.version });
 		const tools = await eachToolFile(toolsDir, (abs) => vite.ssrLoadModule(viteUrl(root, abs)));
+
 		for (const tool of tools) {
 			registerTool(server, tool);
 		}
+
 		return server;
 	}
 
 	// util/server gives routing + request.json(); the MCP transport writes the response itself, so the
 	// handler returns nothing and util/server leaves the already-sent response alone.
 	const app = createServer();
+
 	app.post("/mcp", async (request: any, response: any) => {
 		try {
 			const body = await request.json();
 			const transport = new StreamableHTTPServerTransport({ "sessionIdGenerator": undefined, "enableJsonResponse": true });
 			const server = await buildServer();
+
 			response.on("close", () => { transport.close(); server.close(); });
 			await server.connect(transport);
 			await transport.handleRequest(request, response, body);
@@ -72,11 +77,11 @@ export async function runBridge(meta: EntryMeta, options: ServeOptions): Promise
 	});
 
 	await new Promise<void>((resolve, reject) => {
-		const httpServer = app.listen(port, () => resolve());
+		const httpServer = app.listen(port, () => { resolve(); });
+
 		httpServer.on("error", (err: NodeJS.ErrnoException) => {
 			// Port taken → a sibling instance already serves /mcp; bridge to it.
-			if (err.code === "EADDRINUSE") { process.stderr.write(`${options.name} MCP: port ${port} in use — bridging to existing\n`); resolve(); }
-			else { reject(err); }
+			if (err.code === "EADDRINUSE") { process.stderr.write(`${options.name} MCP: port ${port} in use — bridging to existing\n`); resolve(); } else { reject(err); }
 		});
 	});
 
@@ -84,8 +89,7 @@ export async function runBridge(meta: EntryMeta, options: ServeOptions): Promise
 	const httpClient = new StreamableHTTPClientTransport(new URL(`http://localhost:${port}/mcp`));
 	const stdio = new StdioServerTransport();
 
-	const warn = (label: string) => (error: unknown) =>
-		process.stderr.write(`${options.name} MCP bridge (${label}): ${error instanceof Error ? error.message : String(error)}\n`);
+	const warn = (label: string) => (error: unknown) => process.stderr.write(`${options.name} MCP bridge (${label}): ${error instanceof Error ? error.message : String(error)}\n`);
 
 	stdio.onmessage = (message) => { httpClient.send(message).catch(warn("stdin→http")); };
 	httpClient.onmessage = (message) => { stdio.send(message).catch(warn("http→stdout")); };
@@ -96,6 +100,7 @@ export async function runBridge(meta: EntryMeta, options: ServeOptions): Promise
 		if (/SSE stream/iu.test(error instanceof Error ? error.message : String(error))) { return; }
 		warn("http")(error);
 	};
+
 	stdio.onclose = () => { httpClient.close().catch(warn("close http")); };
 	httpClient.onclose = () => { stdio.close().catch(warn("close stdio")); };
 

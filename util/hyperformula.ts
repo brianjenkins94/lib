@@ -106,7 +106,7 @@ export function initHyperFormula(data) {
 
 				if (Array.isArray(changes)) {
 					if (headers.every((header) => Array.isArray(header))) {
-						headers = headers.reduce((result, headers) => result.map((value, index) => headers[index] !== undefined ? headers[index] : value));
+						headers = headers.reduce((result, headers) => result.map((value, index) => (headers[index] !== undefined ? headers[index] : value)));
 					}
 
 					if (changes.every((change) => !Array.isArray(change) && typeof change === "object")) {

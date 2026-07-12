@@ -37,7 +37,7 @@ export function parse() {
 
 	const headings = [...rows.shift().cells].map(function(heading) {
 		return heading.innerText.toLowerCase()
-			.replace(/(?:\s|-|_)+(.)/gu, function(_, match) {
+			.replace(/[\s\-_]+(.)/gu, function(_, match) {
 				return match.toUpperCase();
 			})
 			.replace(/[^a-z0-9]/gui, "");

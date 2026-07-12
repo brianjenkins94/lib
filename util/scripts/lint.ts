@@ -1,6 +1,6 @@
-import { realpathSync } from "fs";
-import * as url from "url";
+import * as url from "node:url";
 import { ESLint } from "eslint";
+import { realpath } from "../fs";
 
 /**
  * The `util-lint` bin. Run from a package directory (`"lint": "util-lint"`, or
@@ -12,7 +12,7 @@ import { ESLint } from "eslint";
  * Uses the ESLint Node API rather than spawning the `eslint` bin so it resolves
  * from util's dependencies regardless of the consumer's node_modules layout.
  */
-export async function lint({ fix = false, patterns = ["."] }: { "fix"?: boolean; "patterns"?: string[]; } = {}) {
+export async function lint({ fix = false, patterns = ["."] }: { "fix"?: boolean; "patterns"?: string[] } = {}) {
 	const eslint = new ESLint({ "cwd": process.cwd(), "fix": fix });
 
 	const results = await eslint.lintFiles(patterns);
@@ -31,7 +31,7 @@ export async function lint({ fix = false, patterns = ["."] }: { "fix"?: boolean;
 	return results.reduce((total, result) => total + result.errorCount, 0);
 }
 
-if (process.argv[1] !== undefined && import.meta.url === url.pathToFileURL(realpathSync(process.argv[1])).toString()) {
+if (process.argv[1] !== undefined && import.meta.url === url.pathToFileURL(await realpath(process.argv[1])).toString()) {
 	const args = process.argv.slice(2);
 	const positional = args.filter((argument) => !argument.startsWith("-"));
 

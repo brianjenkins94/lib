@@ -69,6 +69,7 @@ export function waitForNetworkIdle(page: Page, options = {}) {
 			function onRequest(request) {
 				pending.add(request);
 			}
+
 			function onRequestDone(request) {
 				pending.delete(request);
 			}

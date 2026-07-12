@@ -1,6 +1,6 @@
-import { docs as docsApi } from "googleapis/build/src/apis/docs";
 import type { docs_v1 as DocsApis } from "googleapis/build/src/apis/docs";
 import { OAuth2Client } from "googleapis-common";
+import { docs as docsApi } from "googleapis/build/src/apis/docs";
 //import { GoogleDocument } from "gatsby-source-google-docs/utils/google-document";
 
 export class Doc {
@@ -26,7 +26,7 @@ export class Doc {
 	public async get() {
 		return (await this.docsApi.documents.get({
 			"documentId": this.documentId
-		} as DocsApis.Params$Resource$Documents$Get))["data"];
+		}))["data"];
 	}
 
 	public append(request: DocsApis.Schema$InsertTextRequest) {
@@ -44,7 +44,7 @@ export class Doc {
 					}
 				]
 			}
-		} as DocsApis.Params$Resource$Documents$Batchupdate);
+		});
 	}
 
 	public prepend(request: DocsApis.Schema$InsertTextRequest) {
@@ -62,7 +62,7 @@ export class Doc {
 					}
 				]
 			}
-		} as DocsApis.Params$Resource$Documents$Batchupdate);
+		});
 	}
 
 	public async getAsMarkdown() {

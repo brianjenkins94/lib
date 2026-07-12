@@ -1,5 +1,5 @@
+import { Readable } from "node:stream";
 import { createProxyServer } from "http-proxy-3";
-import { Readable } from "stream";
 
 export function createProxy(to) {
 	const server = createProxyServer({

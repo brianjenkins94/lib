@@ -1,13 +1,14 @@
 #!/usr/bin/env node
 
-import * as fs from "./fs";
-import { SpawnOptionsWithoutStdio, spawn } from "node:child_process";
-import { unescape } from "node:querystring";
+import type { SpawnOptionsWithoutStdio } from "node:child_process";
+import { spawn } from "node:child_process";
 import * as path from "node:path";
+import { unescape } from "node:querystring";
 import mime from "mime/lite";
-
-import { createServer } from "./server";
 import { __root } from "./env";
+
+import * as fs from "./fs";
+import { createServer } from "./server";
 
 // SOURCE: https://github.com/sindresorhus/open/blob/main/index.js
 export function open(target) {

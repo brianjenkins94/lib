@@ -1,13 +1,13 @@
-import { chromium } from "playwright";
 import type { Browser, BrowserContext, Page } from "playwright";
-import { spawn } from "child_process";
-import * as path from "path";
-import * as fs from "../fs";
+import { spawn } from "node:child_process";
+import * as path from "node:path";
+import { chromium } from "playwright";
+import { mapSeries } from "../array";
 
 import { __root, isWindows } from "../env";
-import { sleep } from "../sleep";
-import { mapSeries } from "../array";
 import { defaultConditionCallback } from "../fido";
+import * as fs from "../fs";
+import { sleep } from "../sleep";
 import { polyfillNode } from "../vite/plugins/polyfillNode";
 import { virtualFileSystem } from "../vite/plugins/virtualFileSystem";
 
@@ -23,7 +23,6 @@ const browsers = {
 };
 
 export async function attach(endpointURL = "http://localhost:9222", options = { "timeout": 15_000 }) {
-
 	if (new URL(endpointURL).hostname === "localhost") {
 		for (const browser of Object.values(browsers).filter(({ path }) => fs.existsSync(path))) {
 			try {
@@ -163,7 +162,7 @@ async function fetchFactory(baseUrl?, defaultOptions = {}) {
 		return Array.from(new Uint8Array(await globalThis.__response.arrayBuffer()));
 	`;
 
-	const AsyncFunction = (async function() { }).constructor;
+	const AsyncFunction = async function() { }.constructor;
 
 	return async function(page, url, query?, options?) {
 		// @ts-expect-error
@@ -186,7 +185,7 @@ export const fido = {
 	"put": (page, url, query?, options?) => fido.fetch(page, url, options === undefined && (query && Object.values(query).every((value) => typeof value !== "object") ? query : undefined), { ...(options ?? query), "method": "PUT" }),
 	"patch": (page, url, query?, options?) => fido.fetch(page, url, options === undefined && (query && Object.values(query).every((value) => typeof value !== "object") ? query : undefined), { ...(options ?? query), "method": "PATCH" }),
 	"delete": (page, url, query?, options?) => fido.fetch(page, url, options === undefined && (query && Object.values(query).every((value) => typeof value !== "object") ? query : undefined), { ...(options ?? query), "method": "DELETE" }),
-	"poll": (page, url, query?, options?) => (async function poll(page, url, query: Record<string, string> = {}, { conditionCallback = defaultConditionCallback, initialValue = [], ...options}) {
+	"poll": (page, url, query?, options?) => (async function poll(page, url, query: Record<string, string> = {}, { conditionCallback = defaultConditionCallback, initialValue = [], ...options }) {
 		if (typeof url === "string") {
 			url = new URL(url);
 		}
@@ -196,7 +195,7 @@ export const fido = {
 			...Object.entries(query)
 		]).toString();
 
-		let currentValue = initialValue;
+		const currentValue = initialValue;
 
 		let request = new Request(url.toString(), {
 			"method": options["method"] ?? "GET",
@@ -207,7 +206,10 @@ export const fido = {
 		for (let callCount = 1; request instanceof Request; callCount++) {
 			const response = await fido[request.method.toLowerCase()](page, request);
 
-			request = await conditionCallback(currentValue, { request, response }, callCount);
+			request = await conditionCallback(currentValue, {
+				"request": request,
+				"response": response
+			}, callCount);
 		}
 
 		return request;

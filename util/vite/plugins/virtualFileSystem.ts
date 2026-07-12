@@ -1,6 +1,6 @@
-import * as path from "path";
+import type { PluginOption } from "vite";
+import * as path from "node:path";
 import * as fs from "../../../util/fs";
-import { PluginOption } from "vite";
 
 export function virtualFileSystem(files = {}) {
 	let __root;
@@ -24,7 +24,7 @@ export function virtualFileSystem(files = {}) {
 			input = files[path.join(__root, config.build.rollupOptions.input)];
 
 			// TODO: Improve
-			external = config.build.rollupOptions.external ?? Object.keys(JSON.parse(await fs.readFile(fs.closest(__root, "package.json")!))["devDependencies"]);
+			external = config.build.rollupOptions.external ?? Object.keys(JSON.parse(await fs.readFile(fs.closest(__root, "package.json")))["devDependencies"]);
 		},
 		"resolveId": async function(id, importer, { isEntry }) {
 			if (id.includes("?")) {

@@ -1,5 +1,5 @@
+import * as util from "node:util";
 import { Bottleneck } from "../util/bottleneck";
-import * as util from "util";
 import { PersistentStore } from "./store";
 
 function flush(buffer, callback) {
@@ -97,6 +97,7 @@ async function attemptParse(response: Response): Promise<any> {
 			response.json = async function() {
 				return body;
 			};
+
 			response.text = async function() {
 				return JSON.stringify(body, undefined, 2);
 			};
@@ -107,6 +108,7 @@ async function attemptParse(response: Response): Promise<any> {
 		response.json = async function() {
 			return JSON.parse(body);
 		};
+
 		response.text = async function() {
 			return body;
 		};
@@ -163,7 +165,7 @@ function extendedFetch(url, { cache, cacheKey, debug, fetch, limiter, retry, ...
 			cachePromise = cache.get(cacheKey)
 				.then(function({ body, status }) {
 					didResolve = true;
-					resolve(new Response(JSON.stringify(body), { status }));
+					resolve(new Response(JSON.stringify(body), { "status": status }));
 				})
 				.catch(function(error) {
 					if (cacheHeader === "only-if-cached") {
@@ -315,7 +317,7 @@ function fetchFactory(baseUrl?, defaultOptions = {}) {
 
 			let [header, reset] = response.headers.find(([header]) => /Rate-Limit-(After|Reset)/ui.test(header)) ?? [];
 
-			reset = reset * 1000;
+			reset *= 1000;
 
 			if (reset >= Date.now()) {
 				reset -= Date.now();
@@ -325,7 +327,7 @@ function fetchFactory(baseUrl?, defaultOptions = {}) {
 				const jitter = Math.floor(Math.random() * 500);
 
 				return (reset || (2 ** (retryCount + 1)) * 1000) + jitter;
-			} else  {
+			} else {
 				throw error;
 			}
 		});
@@ -401,7 +403,7 @@ export async function defaultConditionCallback(accumulator, { request, response 
 	return accumulator;
 }
 
-async function poll(url, query, { conditionCallback = defaultConditionCallback, initialValue = [], ...options} ) {
+async function poll(url, query, { conditionCallback = defaultConditionCallback, initialValue = [], ...options }) {
 	if (typeof url === "string") {
 		url = new URL(url);
 	}
@@ -411,7 +413,7 @@ async function poll(url, query, { conditionCallback = defaultConditionCallback, 
 		...Object.entries(query)
 	]).toString();
 
-	let currentValue = initialValue;
+	const currentValue = initialValue;
 
 	let request = new Request(url.toString(), {
 		"method": options["method"] ?? "GET",
@@ -422,7 +424,7 @@ async function poll(url, query, { conditionCallback = defaultConditionCallback, 
 	for (let callCount = 1; request instanceof Request; callCount++) {
 		const response = await this[request.method.toLowerCase()](request);
 
-		request = await conditionCallback(currentValue, { request, response }, callCount);
+		request = await conditionCallback(currentValue, { "request": request, "response": response }, callCount);
 	}
 
 	return request;
@@ -439,11 +441,13 @@ export function withDefaults(baseUrl, defaultOptions = {}) {
 		"poll": (url, query?, options?) => (fido.poll = (url, query?, options?) => (poll.bind(fido))(url, options === undefined && (query && Object.values(query).every((value) => typeof value !== "object") ? query : undefined), { "method": "GET", ...(options ?? query) }))(url, query, options),
 		"limit": function(amount) {
 			if (defaultOptions["limiter"] !== false) {
-				const limiter = new Bottleneck(typeof amount === "number" ? {
-					"reservoir": amount,
-					"reservoirRefreshAmount": amount,
-					"reservoirRefreshInterval": 60_000
-				} : amount);
+				const limiter = new Bottleneck(typeof amount === "number"
+					? {
+							"reservoir": amount,
+							"reservoirRefreshAmount": amount,
+							"reservoirRefreshInterval": 60_000
+						}
+					: amount);
 
 				defaultOptions["limiter"] = defaultOptions["limiter"] instanceof Bottleneck ? defaultOptions["limiter"].chain(limiter) : limiter;
 			}

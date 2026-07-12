@@ -1,12 +1,12 @@
+import { spawn } from "node:child_process";
+import * as path from "node:path";
+import { createGunzip, createGzip } from "node:zlib";
+import tarStream from "tar-stream";
 import * as vite from "vite";
 import { isCI } from "../env";
-import { build } from "./build";
-import { glob, findWorkspaces } from "../fs";
-import * as path from "path";
+import { findWorkspaces, glob } from "../fs";
 import * as fs from "../fs";
-import { createGunzip, createGzip } from "zlib";
-import tarStream from "tar-stream";
-import { spawn } from "child_process";
+import { build } from "./build";
 
 // util-publish runs in whatever repo invokes it (silo, lib, …) — the root is the cwd, not util's dir.
 const __root = process.cwd();
@@ -50,13 +50,13 @@ const allWorkspaces = (await findWorkspaces()).map((workspace) => workspace.dir)
 // private (e.g. silo, whose sole sub-package is the private examples/ci-demo) — publishes its root. A
 // monorepo with publishable sub-workspaces (e.g. lib → util, packages/*) publishes those and never the
 // root. Adding "." AFTER build() — never passing it in — avoids re-running a root `build` that calls build().
-const isPublishable = (workspace) => {
+function isPublishable(workspace) {
 	try {
 		return JSON.parse(fs.readFileSync(path.join(__root, workspace, "package.json")))["private"] !== true;
 	} catch {
 		return false;
 	}
-};
+}
 
 if (!workspaces.some((workspace) => workspace !== "." && isPublishable(workspace)) && isPublishable(".")) {
 	workspaces.push(".");
@@ -77,7 +77,7 @@ for (const workspace of workspaces) {
 	// Directories of workspaces nested UNDER this one — excluded from the source build so a parent
 	// (especially the repo root `.`) never ships a nested package's files. Absolute, for the .mjs/.cjs
 	// glob; relative form derived inline for the .ts glob.
-	const nestedDirs = allWorkspaces.filter((dir) => workspace === "." ? dir !== "." : dir !== workspace && dir.startsWith(workspace + "/"));
+	const nestedDirs = allWorkspaces.filter((dir) => (workspace === "." ? dir !== "." : dir !== workspace && dir.startsWith(workspace + "/")));
 	const nestedAbs = nestedDirs.map((dir) => path.join(__root, dir));
 	const isNested = (entry: string) => nestedDirs.some((dir) => entry.startsWith(dir + "/")) || nestedAbs.some((dir) => entry.startsWith(dir + path.sep));
 
@@ -133,7 +133,7 @@ for (const workspace of workspaces) {
 			continue;
 		}
 
-		const { output } = Array.isArray(result) ? result[0] : result as any;
+		const { output } = Array.isArray(result) ? result[0] : result;
 
 		files = Object.fromEntries(output
 			.filter(({ type }) => type === "chunk")
@@ -144,7 +144,11 @@ for (const workspace of workspaces) {
 		// backend, the cooldown installer), which genuinely can't be .ts. Keyed workspace-relative.
 		// `withFileTypes` makes the exclude callback receive a Dirent, not a string — normalize to a path
 		// first, or `.includes` throws (TypeError: entry.includes is not a function) and aborts the build.
-		for await (const entry of glob(path.join(__root, workspace, "**", "*.{mjs,cjs}"), { "exclude": (entry) => { const file = typeof entry === "string" ? entry : path.join(entry.parentPath, entry.name); return file.includes("node_modules") || isNested(file); }, "withFileTypes": true })) {
+		for await (const entry of glob(path.join(__root, workspace, "**", "*.{mjs,cjs}"), { "exclude": (entry) => {
+			const file = typeof entry === "string" ? entry : path.join(entry.parentPath, entry.name);
+
+			return file.includes("node_modules") || isNested(file);
+		},"withFileTypes": true })) {
 			if (!entry.isFile()) {
 				continue;
 			}
@@ -197,6 +201,7 @@ for (const workspace of workspaces) {
 		});
 
 		const packageJson = JSON.parse(archiveFiles["package.json"]?.toString() ?? "{}");
+
 		archiveVersion = packageJson["version"];
 		console.log("archiveVersion for", workspace, ":", archiveVersion);
 	}
@@ -206,50 +211,46 @@ for (const workspace of workspaces) {
 	// files that aren't shipped. (Allowlist the published fields instead if more leaks show up.)
 	const { "scripts": _scripts, ...publishable } = packageJson;
 
-	const buildPackageJson = (version) => JSON.stringify(
-		preBuilt
-		// Pre-built package: keep its own exports/files; only rewrite name + version.
-			? {
-					...publishable,
-					"name": `@${process.env["GITHUB_REPOSITORY_OWNER"]}/${packageJson["name"]}`,
-					"version": version
-				}
-		// Source package: derive exports/files/bin from the emitted modules.
-			: {
-					...publishable,
-					"name": `@${process.env["GITHUB_REPOSITORY_OWNER"]}/${packageJson["name"]}`,
-					"exports": Object.fromEntries(Object.keys(files).filter((key) => key !== "package.json").map((key) => {
-						const target = "./" + key;
-						const directory = path.dirname(key).replace(/\\/gu, "/");
-						const baseName = path.basename(key, path.extname(key));
+	const buildPackageJson = (version) => JSON.stringify(preBuilt ? {
+		...publishable,
+		"name": `@${process.env["GITHUB_REPOSITORY_OWNER"]}/${packageJson["name"]}`,
+		"version": version
+	} : {
+		...publishable,
+		"name": `@${process.env["GITHUB_REPOSITORY_OWNER"]}/${packageJson["name"]}`,
+		"exports": Object.fromEntries(Object.keys(files).filter((key) => key !== "package.json").map((key) => {
+			const target = "./" + key;
+			const directory = path.dirname(key).replace(/\\/gu, "/");
+			const baseName = path.basename(key, path.extname(key));
 
 						// An `index` module is addressed by its directory (root index becomes the `.` main entry);
 						// everything else by its own path-without-extension.
-						if (baseName === "index") {
-							return [directory === "." ? "." : "./" + directory, target];
-						}
+			if (baseName === "index") {
+				return [directory === "." ? "." : "./" + directory, target];
+			}
 
-						return ["./" + path.join(directory, baseName).replace(/\\/gu, "/"), target];
-					})),
-					"files": Object.keys(files).filter((key) => key !== "package.json"),
+			return ["./" + path.join(directory, baseName).replace(/\\/gu, "/"), target];
+		})),
+		"files": Object.keys(files).filter((key) => key !== "package.json"),
 					// bin: preserve a package's own `bin` (e.g. silo's root `cli.js` → `silo`), else derive
 					// from scripts/* as `${pkg}-${name}` (e.g. util-build). Targets are "./"-normalized.
-					...(declaredBin
-						? { "bin": typeof declaredBin === "string"
-								? "./" + String(declaredBin).replace(/^\.\//u, "")
-								: Object.fromEntries(Object.entries(declaredBin).map(([name, target]) => [name, "./" + String(target).replace(/^\.\//u, "")])) }
-						: binFiles.length > 0
-							? { "bin": Object.fromEntries(binFiles.map((key) => [`${packageJson["name"]}-${path.basename(key, ".js")}`, "./" + key])) }
-							: {}),
-					"version": version
-				}, undefined, 2);
+		...(declaredBin
+			? { "bin": typeof declaredBin === "string"
+					? "./" + String(declaredBin).replace(/^\.\//u, "")
+					: Object.fromEntries(Object.entries(declaredBin).map(([name, target]) => [name, "./" + String(target).replace(/^\.\//u, "")])) }
+			: binFiles.length > 0
+				? { "bin": Object.fromEntries(binFiles.map((key) => [`${packageJson["name"]}-${path.basename(key, ".js")}`, "./" + key])) }
+				: {}),
+		"version": version
+	}, undefined, 2);
 
 	// Build with the currently-published version so an unchanged package compares equal (no version churn).
 	let version = archiveVersion ?? packageJson["version"] ?? "0.1.0";
+
 	files["package.json"] = Buffer.from(buildPackageJson(version));
 
 	// Build every run; publish only when the emitted artifact differs from the last published one.
-	if (archiveFiles && Object.keys(files).length === Object.keys(archiveFiles).length && Object.entries(files).every(([key, value]) => archiveFiles![key] !== undefined && value.equals(archiveFiles![key]))) {
+	if (archiveFiles && Object.keys(files).length === Object.keys(archiveFiles).length && Object.entries(files).every(([key, value]) => archiveFiles[key] !== undefined && value.equals(archiveFiles[key]))) {
 		console.log("No changes for", workspace, "- skipping release");
 		continue;
 	}
@@ -300,6 +301,7 @@ for (const workspace of workspaces) {
 
 	const tarPath = path.join(outputDirectory, path.basename(workspace) + "@" + version + ".tgz");
 	const writeStream = fs.createWriteStream(tarPath);
+
 	console.log("Writing tar to:", tarPath);
 
 	writeStream.on("finish", async function() {

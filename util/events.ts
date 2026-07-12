@@ -6,7 +6,7 @@ export class EventEmitter {
 
 		this.events[event].push(listener);
 
-		return () => this.off(event, listener);
+		return () => { this.off(event, listener); };
 	}
 
 	public off(event?, listener?) {
@@ -14,7 +14,7 @@ export class EventEmitter {
 			this.events = {};
 		} else if (listener === undefined) {
 			delete this.events[event];
-		} else if (this.events[event].indexOf(listener) !== -1) {
+		} else if (this.events[event].includes(listener)) {
 			this.events[event].splice(this.events[event].indexOf(listener), 1);
 		}
 	}
@@ -22,7 +22,7 @@ export class EventEmitter {
 	public emit(event, ...args) {
 		const listeners = [...(this.events[event] ?? []), ...(this.events["*"] ?? [])];
 
-		return Promise.allSettled(listeners.map(fn => fn(...args)));
+		return Promise.allSettled(listeners.map((fn) => fn(...args)));
 	}
 
 	public once(event, listener) {

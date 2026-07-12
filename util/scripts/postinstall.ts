@@ -1,8 +1,7 @@
+import { spawn } from "node:child_process";
+import * as url from "node:url";
 import { mapAsync } from "../array";
-import { findWorkspaces } from "../fs";
-import { spawn } from "child_process";
-import { realpathSync } from "fs";
-import * as url from "url";
+import { findWorkspaces, realpath } from "../fs";
 
 // Release-age floor: never install a version published within the last N days (default 7), to dodge the
 // window when a freshly-compromised release does the most damage. pnpm has this natively
@@ -20,7 +19,7 @@ const NPM_BEFORE = new Date(Date.now() - MINIMUM_RELEASE_AGE_DAYS * 86_400_000).
 export async function postinstall(workspaces?: string[]) {
 	workspaces ??= (await findWorkspaces()).filter((workspace) => !workspace.private).map((workspace) => workspace.dir);
 
-	return await mapAsync(workspaces, function(workspace) {
+	return mapAsync(workspaces, function(workspace) {
 		return new Promise(function(resolve, reject) {
 			const subprocess = spawn("pnpm", ["--ignore-workspace", "install", "--config.minimumReleaseAge=" + PNPM_MINIMUM_RELEASE_AGE], {
 				"cwd": workspace,
@@ -48,6 +47,6 @@ export async function postinstall(workspaces?: string[]) {
 	});
 }
 
-if (process.argv[1] !== undefined && import.meta.url === url.pathToFileURL(realpathSync(process.argv[1])).toString()) {
+if (process.argv[1] !== undefined && import.meta.url === url.pathToFileURL(await realpath(process.argv[1])).toString()) {
 	await postinstall();
 }
