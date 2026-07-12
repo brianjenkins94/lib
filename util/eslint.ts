@@ -1,4 +1,4 @@
-import antfu, { GLOB_SRC, GLOB_TS } from "@antfu/eslint-config";
+import antfu, { GLOB_SRC, GLOB_TS, GLOB_TSX } from "@antfu/eslint-config";
 import js from "@eslint/js";
 import { builtinRules } from "eslint/use-at-your-own-risk";
 import tseslint from "typescript-eslint";
@@ -384,7 +384,7 @@ function enablingFiles(id: string): unknown[] | null {
 	}
 
 	if (id in tsFill) {
-		files.push(GLOB_TS);
+		files.push(GLOB_TS, GLOB_TSX);
 	}
 
 	return files.length > 0 ? files : [GLOB_SRC];
@@ -444,15 +444,15 @@ const squelchFor = (ts: boolean) => Object.fromEntries(Object.entries(squelched)
 export default [
 	...configs.map(hushFixable).map(ignoreIndentComments),
 	hushFixable({ "files": [GLOB_SRC], "rules": srcFill }),
-	hushFixable({ "files": [GLOB_TS], "rules": tsFill }),
-	{ "files": [GLOB_TS], "rules": supersede },
+	hushFixable({ "files": [GLOB_TS, GLOB_TSX], "rules": tsFill }),
+	{ "files": [GLOB_TS, GLOB_TSX], "rules": supersede },
 	// Brian's L4: type-aware ts/* rules → TS only; style/core/node/unicorn → ALL code, so .js files get his
 	// preferences (comma-dangle:never, his newline rules, tabs…) instead of falling back to antfu's JS defaults.
 	{ "files": [GLOB_SRC], "rules": l4For(false) },
-	{ "files": [GLOB_TS], "rules": l4For(true) },
+	{ "files": [GLOB_TS, GLOB_TSX], "rules": l4For(true) },
 	// squelched → warn (severity-only, options preserved): unblock CI now, fix + promote back later.
 	{ "files": [GLOB_SRC], "rules": squelchFor(false) },
-	{ "files": [GLOB_TS], "rules": squelchFor(true) },
+	{ "files": [GLOB_TS, GLOB_TSX], "rules": squelchFor(true) },
 	...disabledBlocks,
 	...(yamlFiles.length > 0 ? [{ "files": yamlFiles, "rules": yamlRules }] : []),
 	...(jsoncFiles.length > 0 ? [{ "files": jsoncFiles, "rules": { "jsonc/indent": ["warn", 2] } }] : [])
