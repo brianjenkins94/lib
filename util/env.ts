@@ -12,14 +12,14 @@ export const isCI = Boolean(process.env["CI"]) === true;
 
 // SOURCE: https://github.com/sinclairzx81/carbon/blob/main/src/runtime/runtime.mts
 
-const isBun = ('self' in globalThis && 'Bun' in globalThis.self) || 'Bun' in globalThis;
+const isBun = ("self" in globalThis && "Bun" in globalThis.self) || "Bun" in globalThis;
 
-const isDeno = ('self' in globalThis && 'Deno' in globalThis.self) || 'Deno' in globalThis;
+const isDeno = ("self" in globalThis && "Deno" in globalThis.self) || "Deno" in globalThis;
 
-const isNode = !isBun && ('self' in globalThis && 'process' in globalThis.self) || 'process' in globalThis;
+const isNode = !isBun && ("self" in globalThis && "process" in globalThis.self) || "process" in globalThis;
 
-export const isBrowser = !isBun && !isDeno && ('self' in globalThis && 'addEventListener' in globalThis.self) || 'window' in globalThis;
+export const isBrowser = !isBun && !isDeno && ("self" in globalThis && "addEventListener" in globalThis.self) || "window" in globalThis;
 
 export function getRuntime() {
-	return isBrowser ? 'browser' : isBun ? 'bun' : isDeno ? 'deno' : isNode ? 'node' : 'unknown';
+	return isBrowser ? "browser" : isBun ? "bun" : isDeno ? "deno" : isNode ? "node" : "unknown";
 }

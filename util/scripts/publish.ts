@@ -256,9 +256,9 @@ for (const workspace of workspaces) {
 
 	// Changed (or first publish): bump the version off the published one and rebuild package.json.
 	if (archiveVersion) {
-		const [major, minor] = archiveVersion.split('.');
+		const [major, minor] = archiveVersion.split(".");
 
-		version = [major, parseInt(minor) + 1, 0].join('.');
+		version = [major, parseInt(minor) + 1, 0].join(".");
 		files["package.json"] = Buffer.from(buildPackageJson(version));
 		console.log("Bumping version for", workspace, ":", version);
 	}

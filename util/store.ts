@@ -22,7 +22,7 @@ export class PersistentStore {
 		}
 		try {
 			const data = this.options.deserialize(
-				fs.readFileSync(this.options.filename, 'utf8')
+				fs.readFileSync(this.options.filename, "utf8")
 			);
 			this._cache = data.cache;
 			this._lastExpire = data.lastExpire;
@@ -33,7 +33,7 @@ export class PersistentStore {
 	}
 
 	private get _lockFile() {
-		return this.options.filename + '.lock';
+		return this.options.filename + ".lock";
 	}
 
 	acquireFileLock() {
@@ -41,11 +41,11 @@ export class PersistentStore {
 			let fd = fs.openSync(this._lockFile, "wx");
 			fs.closeSync(fd);
 
-			process.on('SIGINT', () => {
+			process.on("SIGINT", () => {
 				this.releaseFileLock();
 				process.exit(0);
 			});
-			process.on('exit', () => {
+			process.on("exit", () => {
 				this.releaseFileLock();
 			});
 		} catch (error) {

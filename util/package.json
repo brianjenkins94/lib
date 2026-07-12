@@ -1,34 +1,34 @@
 {
-    "name": "util",
-    "author": "Brian Jenkins",
-    "license": "MIT",
-    "type": "module",
-    "dependencies": {
-        "@antfu/eslint-config": "latest",
-        "@eslint/js": "latest",
-        "eslint": "latest",
-        "typescript-eslint": "latest"
-    },
-    "peerDependencies": {
-        "@badgateway/oauth2-client": "latest",
-        "@clack/prompts": "latest",
-        "@modelcontextprotocol/sdk": "latest",
-        "@opensearch-project/opensearch": "latest",
-        "cmd-ts": "latest",
-        "ejs": "latest",
-        "googleapis": "latest",
-        "http-proxy-3": "latest",
-        "hyperformula": "latest",
-        "jsonc-parser": "latest",
-        "jsx-async-runtime": "latest",
-        "mime": "latest",
-        "node-schedule": "latest",
-        "papaparse": "latest",
-        "path-to-regexp": "latest",
-        "playwright": "latest",
-        "tar-stream": "latest",
-        "vite": "latest",
-        "zod": "latest",
-        "zod-from-json-schema": "latest"
-    }
+  "name": "util",
+  "author": "Brian Jenkins",
+  "license": "MIT",
+  "type": "module",
+  "dependencies": {
+    "@antfu/eslint-config": "latest",
+    "@eslint/js": "latest",
+    "eslint": "latest",
+    "typescript-eslint": "latest"
+  },
+  "peerDependencies": {
+    "@badgateway/oauth2-client": "latest",
+    "@clack/prompts": "latest",
+    "@modelcontextprotocol/sdk": "latest",
+    "@opensearch-project/opensearch": "latest",
+    "cmd-ts": "latest",
+    "ejs": "latest",
+    "googleapis": "latest",
+    "http-proxy-3": "latest",
+    "hyperformula": "latest",
+    "jsonc-parser": "latest",
+    "jsx-async-runtime": "latest",
+    "mime": "latest",
+    "node-schedule": "latest",
+    "papaparse": "latest",
+    "path-to-regexp": "latest",
+    "playwright": "latest",
+    "tar-stream": "latest",
+    "vite": "latest",
+    "zod": "latest",
+    "zod-from-json-schema": "latest"
+  }
 }

@@ -1,35 +1,35 @@
 {
-	"extends": "@tsconfig/node-lts/tsconfig.json",
-	"compilerOptions": {
-		"paths": {
-			"@components/*": ["./components/*"]
-		},
-		"alwaysStrict": true,
-		//"exactOptionalPropertyTypes": true,
-		"forceConsistentCasingInFileNames": false,
-		"isolatedModules": true,
-		"jsx": "react-jsx",
-		"lib": [
-			"dom",
-			"dom.iterable",
-			"esnext"
-		],
-		"module": "ESNext",
-		"moduleResolution": "bundler",
-		"noEmit": true,
-		//"noImplicitAny": true,
-		"noImplicitOverride": true,
-		"noImplicitReturns": true,
-		//"noImplicitThis": true,
-		"noPropertyAccessFromIndexSignature": true,
-		"resolveJsonModule": true,
-		"strict": false,
-		"strictBindCallApply": true,
-		"strictFunctionTypes": true,
-		//"strictNullChecks": true,
-		//"strictPropertyInitialization": true,
-		//"useUnknownInCatchVariables": true
-		"target": "ESNext"
-	},
-	"exclude": ["node_modules", "test/runtime/deno.ts"]
+  "extends": "@tsconfig/node-lts/tsconfig.json",
+  "compilerOptions": {
+    "paths": {
+      "@components/*": ["./components/*"]
+    },
+    "alwaysStrict": true,
+    //"exactOptionalPropertyTypes": true,
+    "forceConsistentCasingInFileNames": false,
+    "isolatedModules": true,
+    "jsx": "react-jsx",
+    "lib": [
+      "dom",
+      "dom.iterable",
+      "esnext"
+    ],
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "noEmit": true,
+    //"noImplicitAny": true,
+    "noImplicitOverride": true,
+    "noImplicitReturns": true,
+    //"noImplicitThis": true,
+    "noPropertyAccessFromIndexSignature": true,
+    "resolveJsonModule": true,
+    "strict": false,
+    "strictBindCallApply": true,
+    "strictFunctionTypes": true,
+    //"strictNullChecks": true,
+    //"strictPropertyInitialization": true,
+    //"useUnknownInCatchVariables": true
+    "target": "ESNext"
+  },
+  "exclude": ["node_modules", "test/runtime/deno.ts"]
 }

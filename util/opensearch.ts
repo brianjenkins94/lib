@@ -1,4 +1,4 @@
-import { Client } from '@opensearch-project/opensearch';
+import { Client } from "@opensearch-project/opensearch";
 
 export async function _search(client: Client, { index = undefined, aggs = undefined, range = undefined, filters = undefined, query = {}, scroll = undefined, size = undefined, sort = undefined, search_after = undefined, _source = undefined, filter_path = undefined, ...options } = {}) {
 	range ??= {
@@ -409,7 +409,7 @@ export async function* streamScrollSearch(client: Client, { index = undefined, r
 			"@timestamp": range
 		},
 		"sort": [
-			{ "_doc": 'asc' }
+			{ "_doc": "asc" }
 		],
 		"_source": Object.keys(fields),
 		"filter_path": ["_scroll_id", "took", ...Object.keys(fields).map((field) => "hits.hits._source." + field)],
@@ -427,7 +427,7 @@ export async function* streamScrollSearch(client: Client, { index = undefined, r
 		const response = await client.transport.request({
 			"method": "POST",
 			"path": "/_search/scroll",
-			"querystring": 'filter_path=_scroll_id,took,' + Object.keys(fields).map((field) => "hits.hits._source." + field).join(","),
+			"querystring": "filter_path=_scroll_id,took," + Object.keys(fields).map((field) => "hits.hits._source." + field).join(","),
 			"body": {
 				"scroll": scroll,
 				"scroll_id": scrollId
@@ -446,8 +446,8 @@ export async function* streamScrollSearch(client: Client, { index = undefined, r
 
 	try {
 		await client.transport.request({
-			"method": 'DELETE',
-			"path": '/_search/scroll',
+			"method": "DELETE",
+			"path": "/_search/scroll",
 			"body": {
 				"scroll_id": scrollId
 			}
