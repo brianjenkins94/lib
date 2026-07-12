@@ -1,5 +1,6 @@
-document.addEventListener("DOMContentLoaded", async function(event) {
+/* global hljs */
 
+document.addEventListener("DOMContentLoaded", async function(event) {
 	let repository = "<%= repository %>";
 
 	const isLocal = location.hostname === "localhost";
@@ -8,7 +9,7 @@ document.addEventListener("DOMContentLoaded", async function(event) {
 
 	window.addEventListener("hashchange", async function(event) {
 		if (location.hash.endsWith("..")) {
-			location.hash = location.hash.replace(/[^\/]*\/..$/, "");
+			location.hash = location.hash.replace(/[^/]*\/..$/u, "");
 
 			return;
 		}
@@ -25,7 +26,7 @@ document.addEventListener("DOMContentLoaded", async function(event) {
 
 		let lastBreadcrumb = repository;
 
-		for (const directory of location.hash.substring(1).match(/([^/]+)/g) || []) {
+		for (const directory of location.hash.substring(1).match(/([^/]+)/gu) || []) {
 			partialPath += "/" + directory;
 
 			breadcrumbs.push(`
@@ -54,7 +55,7 @@ document.addEventListener("DOMContentLoaded", async function(event) {
 				<div role="row" class="Box-header Box-row--focus-gray p-0 pr-2 d-flex flex-shrink-0 flex-md-row flex-items-center js-navigation-item">
 					<div role="rowheader" class="flex-auto min-width-0 col-md-2">
 						<a rel="nofollow" title="Go to parent directory" class="js-navigation-open d-block py-2 px-3" href="${location.hash}/..">
-							<span class="text-bold text-center d-inline-block" style="min-width: 16px;">. .</span>
+							<span class="text-bold text-center d-inline-block" style="min-width: 16px;">.&#8202;.</span>
 						</a>
 					</div>
 					<div class="d-flex py-1 py-md-0 flex-auto flex-order-1 flex-md-order-2 flex-sm-grow-0 flex-justify-between">
@@ -125,7 +126,7 @@ document.addEventListener("DOMContentLoaded", async function(event) {
 				<div role="row" class="Box-row Box-row--focus-gray p-0 d-flex js-navigation-item">
 					<div role="rowheader" class="flex-auto min-width-0 col-md-2">
 						<a rel="nofollow" title="Go to parent directory" class="js-navigation-open d-block py-2 px-3" href="${location.hash}..">
-							<span class="text-bold text-center d-inline-block" style="min-width: 16px;">. .</span>
+							<span class="text-bold text-center d-inline-block" style="min-width: 16px;">.&#8202;.</span>
 						</a>
 					</div>
 				</div>
@@ -172,22 +173,23 @@ document.addEventListener("DOMContentLoaded", async function(event) {
 	if (location.hostname.endsWith("github.io")) {
 		tree.push(...(await (await fetch(location.pathname + "/tree.txt")).text()).split("\n"));
 
-		const matches = location.href.replace(/\./g, "/").split("/");
+		const matches = location.href.replace(/\./gu, "/").split("/");
 
 		const username = matches[2];
+
 		repository = matches[5];
 
 		const links = document.body.querySelectorAll("[href]");
 
 		for (const link of links) {
-			for (let [placeholder, value] of Object.entries({ username: username, repository: repository })) {
+			for (const [placeholder, value] of Object.entries({ "username": username, "repository": repository })) {
 				const placeholders = [
 					"<%= " + placeholder + " %>",
 					"%3C%=%20" + placeholder + "%20%%3E",
-					"%3C%25%3D%20" + placeholder + "%20%25%3E",
+					"%3C%25%3D%20" + placeholder + "%20%25%3E"
 				];
 
-				const placeholderRegex = new RegExp("(?:" + placeholders.join(")|(?:") + ")", "g");
+				const placeholderRegex = new RegExp("(?:" + placeholders.join(")|(?:") + ")", "gu");
 
 				for (const attribute of ["href", "textContent", "title"]) {
 					if (placeholderRegex.test(link[attribute])) {
@@ -206,5 +208,4 @@ document.addEventListener("DOMContentLoaded", async function(event) {
 	} else {
 		window.dispatchEvent(new HashChangeEvent("hashchange"));
 	}
-
 });

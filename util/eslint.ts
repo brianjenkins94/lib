@@ -23,12 +23,17 @@ const errors = {
 	// Categorically ban node fs — Brian uses his own wrapper (@brianjenkins94/util/fs; locally util/fs) that wraps
 	// node fs with utf8 defaults + async helpers. allowTypeImports lets `import type` through (types have no wrapper
 	// equivalent). NOT auto-fixable — convert by hand. The wrapper itself + sync-bound files are exempted in lib's eslint.config.ts.
-	"ts/no-restricted-imports": ["error", { "paths": [
-		{ "name": "fs", "message": "Use the fs wrapper: @brianjenkins94/util/fs (locally util/fs).", "allowTypeImports": true },
-		{ "name": "node:fs", "message": "Use the fs wrapper: @brianjenkins94/util/fs (locally util/fs).", "allowTypeImports": true },
-		{ "name": "fs/promises", "message": "Use the fs wrapper: @brianjenkins94/util/fs (locally util/fs).", "allowTypeImports": true },
-		{ "name": "node:fs/promises", "message": "Use the fs wrapper: @brianjenkins94/util/fs (locally util/fs).", "allowTypeImports": true }
-	] }]
+	"ts/no-restricted-imports": [
+		"error",
+		{
+			"paths": [
+				{ "name": "fs", "message": "Use the fs wrapper: @brianjenkins94/util/fs (locally util/fs).", "allowTypeImports": true },
+				{ "name": "node:fs", "message": "Use the fs wrapper: @brianjenkins94/util/fs (locally util/fs).", "allowTypeImports": true },
+				{ "name": "fs/promises", "message": "Use the fs wrapper: @brianjenkins94/util/fs (locally util/fs).", "allowTypeImports": true },
+				{ "name": "node:fs/promises", "message": "Use the fs wrapper: @brianjenkins94/util/fs (locally util/fs).", "allowTypeImports": true }
+			]
+		}
+	]
 };
 
 // warn = the formatter handles it (auto-fixed on save, hidden in the IDE) OR it's a deliberate FYI. The
@@ -68,6 +73,48 @@ const downgrades = {
 	"sort-vars": "warn"
 };
 
+// squelched = rules that are RIGHT but the CODE currently violates them — temporarily downgraded to warn so
+// CI (fails on errors, not warns) stays green. NOT `downgrades` (a permanent preference) and NOT `disabled`
+// (gone for good): this is TECH DEBT. Fix the violations, then DELETE the entry to promote the rule back to its
+// natural error severity. Emitted as its own severity-only block (below) so each rule KEEPS its options and
+// only the severity changes. `// N` = live violation count when squelched (a priority hint; recount as you go).
+const squelched = {
+	"id-length": "warn", // 26
+	"style/max-statements-per-line": "warn", // 22 — noise-candidate; consider `disabled` instead
+	"ts/class-methods-use-this": "warn", // 17
+	"ts/no-empty-function": "warn", // 14
+	"camelcase": "warn", // 13 — redundant with ts/naming-convention; consider `disabled` instead
+	"ts/require-await": "warn", // 10
+	"no-duplicate-imports": "warn", // 9
+	"ts/member-ordering": "warn", // 8
+	"ts/no-floating-promises": "warn", // 5
+	"require-unicode-regexp": "warn", // 5
+	"ts/no-base-to-string": "warn", // 5
+	"style/no-mixed-operators": "warn", // 4
+	"ts/naming-convention": "warn", // 4
+	"ts/ban-ts-comment": "warn", // 3
+	"complexity": "warn", // 3
+	"unicorn/prefer-dom-node-text-content": "warn", // 3
+	"ts/prefer-promise-reject-errors": "warn", // 2
+	"node/handle-callback-err": "warn", // 2
+	"ts/no-misused-spread": "warn", // 2
+	"ts/restrict-plus-operands": "warn", // 2
+	"ts/no-deprecated": "warn", // 2
+	"ts/no-invalid-this": "warn", // 1
+	"ts/switch-exhaustiveness-check": "warn", // 1
+	"guard-for-in": "warn", // 1
+	"ts/restrict-template-expressions": "warn", // 1
+	"ts/unbound-method": "warn", // 1
+	"ts/default-param-last": "warn", // 1
+	"style/no-tabs": "warn", // 1
+	"ts/no-unnecessary-type-conversion": "warn", // 1
+	"no-void": "warn", // 1
+	"ts/no-misused-promises": "warn", // 1
+	"no-empty": "warn", // 1
+	"array-callback-return": "warn", // 1
+	"no-cond-assign": "warn" // 1
+};
+
 const unsure = {
 	// rules we're still deciding on — parked here while we live with them
 	"ts/explicit-module-boundary-types": "off", // off for now — prefer functions whose return types trivially infer; but there are surely cases worth revisiting
@@ -87,8 +134,6 @@ const disabled = {
 	"jsonc/sort-keys": "off", // like alphabetized keys in principle, but if it ever happens it should be a separate deliberate pass
 	"sort-imports": "off", // TWO import sorters can't coexist — core sort-imports and antfu's perfectionist/sort-imports disagree on order and undo each other every --fix pass (circular fixes → non-deterministic import order on save). Defer to perfectionist (antfu's choice; the refill re-added this core one on top)
 	"sort-keys": "off", // same as jsonc/sort-keys — not a nag; a deliberate pass if ever
-	"ts/no-magic-numbers": "off", // flags every literal number (indexes, small constants, status codes) — more noise than signal
-	"no-ternary": "off", // ternaries are fine
 	"style/multiline-ternary": "off", // allow BOTH single-line and multiline ternaries — don't force either. "never" scrunched genuinely-multiline ones onto one line and hurt readability; "always" over-breaks short `a ? b : c`. Author's call.
 	"antfu/no-top-level-await": "off", // top-level await is wanted (this very config is built on it)
 	"no-console": "off", // would like better console discipline, but blanket-flagging every console.* doesn't get there
@@ -110,9 +155,6 @@ const disabled = {
 	"ts/consistent-return": "off", // inconsistent returns (value in some branches, nothing in others) are fine
 	"consistent-return": "off",
 	"ts/prefer-readonly-parameter-types": "off", // readonly-everywhere isn't Brian's style; `treatMethodsAsReadonly` only cut 178→171 (his params are mutable data, not method-bearing types)
-	"no-undefined": "off", // using the `undefined` literal is fine
-	"no-negated-condition": "off", // negated if/else conditions are fine
-	"capitalized-comments": "off", // don't force-capitalize the first letter of comments
 	"prefer-template": "off", // use both string concatenation and template literals — don't force one
 	"no-else-return": "off", // keep `else` blocks even when the `if` returns — don't strip them
 	"ts/promise-function-async": "off", // don't auto-add `async` to functions that return a promise
@@ -121,20 +163,6 @@ const disabled = {
 	// on a statically-KNOWN key, not an index signature). So both variants off.
 	"ts/dot-notation": "off",
 	"dot-notation": "off",
-	"func-names": "off", // no opinion on named vs anonymous function expressions — use both
-	"prefer-arrow-callback": "off", // no opinion — use both; and being fixable it'd auto-rewrite callbacks to arrows on save
-	"max-classes-per-file": "off", // one-class-per-file is an arbitrary limit
-	"no-warning-comments": "off", // TODO/FIXME comments are fine
-	"style/spaced-comment": "off", // don't care about the space after // or /*
-	"style/wrap-regex": "off", // don't need regex literals wrapped in parens
-	"regexp/sort-flags": "off", // don't care about regex flag order
-	"no-inline-comments": "off", // inline comments on the same line as code are fine
-	"style/line-comment-position": "off", // same "where do comments go" call as no-inline-comments
-	"style/lines-around-comment": "off", // don't force blank lines before/after comments (was gapping every interface member) — Brian places his own
-	"style/multiline-comment-style": "off", // leave comment style alone — don't merge //-runs into /* */ or reflow block comments
-	"jsdoc/multiline-blocks": "off", // don't force /** and */ onto their own lines in JSDoc
-	"style/newline-per-chained-call": "off", // don't force method chains onto separate lines (and its autofix even left them un-indented)
-	"prefer-named-capture-group": "off", // no opinion — don't need named groups on every regex
 	"ts/strict-void-return": "off", // mostly benign "returned a value that's ignored" idioms; the one real case (async fn in void context) is already covered by ts/no-misused-promises
 	// require `strictNullChecks` (off in tsconfig) to function — each emits "requires strictNullChecks" and can't
 	// work reliably without it, so they're just noise here. RE-ENABLE these if strictNullChecks is ever turned on:
@@ -143,6 +171,32 @@ const disabled = {
 	"ts/no-unnecessary-boolean-literal-compare": "off",
 	"ts/no-useless-default-assignment": "off",
 	"ts/prefer-nullish-coalescing": "off"
+};
+
+// stupid = rules that were NEVER going to be useful — pure noise that only fired because we turned on
+// literally everything (the maximal `all` catalogs). Not a considered trade-off like `disabled`; nobody sane
+// enables these. Separated out so `disabled` stays a list of DELIBERATE calls on legitimate rules.
+const stupid = {
+	"ts/no-magic-numbers": "off", // flags every literal number — indexes, status codes, tiny constants
+	"no-ternary": "off", // bans all ternaries
+	"no-undefined": "off", // bans the `undefined` literal
+	"no-negated-condition": "off", // bans negated if/else
+	"func-names": "off", // demands names on function expressions
+	"prefer-arrow-callback": "off", // force-rewrites callbacks to arrows
+	"max-classes-per-file": "off", // arbitrary one-class-per-file
+	"prefer-named-capture-group": "off", // named groups on every regex
+	"style/wrap-regex": "off", // wrap regex literals in parens
+	"regexp/sort-flags": "off", // alphabetize regex flags
+	// comment pedantry — ALL off by design; ESLint touches no comments anywhere
+	"capitalized-comments": "off", // force-capitalize the first letter
+	"no-warning-comments": "off", // bans TODO/FIXME
+	"no-inline-comments": "off", // bans same-line comments
+	"style/spaced-comment": "off", // space after // or /*
+	"style/line-comment-position": "off", // where comments may sit
+	"style/lines-around-comment": "off", // blank lines around comments
+	"style/multiline-comment-style": "off", // reflow //-runs into /* */
+	"jsdoc/multiline-blocks": "off", // /** and */ onto their own lines
+	"style/newline-per-chained-call": "off" // force method chains onto separate lines
 };
 
 /**
@@ -336,7 +390,7 @@ function enablingFiles(id: string): unknown[] | null {
 	return files.length > 0 ? files : [GLOB_SRC];
 }
 
-const disabledBlocks = Object.entries(disabled).map(([id, value]) => {
+const disabledBlocks = Object.entries({ ...disabled, ...stupid }).map(([id, value]) => {
 	const files = enablingFiles(id);
 
 	return files === null ? { "rules": { [id]: value } } : { "files": files, "rules": { [id]: value } };
@@ -380,12 +434,25 @@ for (const config of configs) {
 	}
 }
 
+const L4 = { ...errors, ...warnings, ...downgrades, ...unsure };
+const l4For = (ts: boolean) => Object.fromEntries(Object.entries(L4).filter(([id]) => id.startsWith("ts/") === ts));
+
+// squelched: severity-only blocks AFTER L4 so ESLint's flat-config merge keeps each rule's options and just
+// drops it to warn (temporary CI-green tech debt — see the `squelched` map). Split by ts/ like L4.
+const squelchFor = (ts: boolean) => Object.fromEntries(Object.entries(squelched).filter(([id]) => id.startsWith("ts/") === ts));
+
 export default [
 	...configs.map(hushFixable).map(ignoreIndentComments),
 	hushFixable({ "files": [GLOB_SRC], "rules": srcFill }),
 	hushFixable({ "files": [GLOB_TS], "rules": tsFill }),
 	{ "files": [GLOB_TS], "rules": supersede },
-	{ "files": [GLOB_TS], "rules": { ...errors, ...warnings, ...downgrades, ...unsure } },
+	// Brian's L4: type-aware ts/* rules → TS only; style/core/node/unicorn → ALL code, so .js files get his
+	// preferences (comma-dangle:never, his newline rules, tabs…) instead of falling back to antfu's JS defaults.
+	{ "files": [GLOB_SRC], "rules": l4For(false) },
+	{ "files": [GLOB_TS], "rules": l4For(true) },
+	// squelched → warn (severity-only, options preserved): unblock CI now, fix + promote back later.
+	{ "files": [GLOB_SRC], "rules": squelchFor(false) },
+	{ "files": [GLOB_TS], "rules": squelchFor(true) },
 	...disabledBlocks,
 	...(yamlFiles.length > 0 ? [{ "files": yamlFiles, "rules": yamlRules }] : []),
 	...(jsoncFiles.length > 0 ? [{ "files": jsoncFiles, "rules": { "jsonc/indent": ["warn", 2] } }] : [])

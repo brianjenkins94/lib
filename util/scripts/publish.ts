@@ -148,7 +148,7 @@ for (const workspace of workspaces) {
 			const file = typeof entry === "string" ? entry : path.join(entry.parentPath, entry.name);
 
 			return file.includes("node_modules") || isNested(file);
-		},"withFileTypes": true })) {
+		}, "withFileTypes": true })) {
 			if (!entry.isFile()) {
 				continue;
 			}
