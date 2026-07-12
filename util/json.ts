@@ -33,7 +33,11 @@ function serialize(
 	const encoder = new TextEncoder();
 	const chunks: Uint8Array[] = [];
 
-	const indent = typeof space === "number" ? " ".repeat(Math.min(10, space)) : typeof space === "string" ? space.slice(0, 10) : "";
+	const indent = typeof space === "number"
+		? " ".repeat(Math.min(10, space))
+		: typeof space === "string"
+			? space.slice(0, 10)
+			: "";
 
 	const propertyList = Array.isArray(replacer) ? replacer.map(String) : null;
 	const replacerFn = typeof replacer === "function" ? replacer : null;

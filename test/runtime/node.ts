@@ -12,7 +12,9 @@ const items = packages.length > 0 ? packages : fs.glob(path.join(__root, "util",
 });
 
 for await (const item of items) {
-	const command = packages.length > 0 ? ["node", "--input-type=module", "--eval", `import "${item}";`] : ["npx", "tsx", item];
+	const command = packages.length > 0
+		? ["node", "--input-type=module", "--eval", `import "${item}";`]
+		: ["npx", "tsx", item];
 
 	console.log(">", command.join(" "));
 	let process = spawn(command[0], command.slice(1), {

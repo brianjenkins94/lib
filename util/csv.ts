@@ -71,7 +71,9 @@ function toArray(headersOrData: string[] | object[], data?: object[]): any[][] {
 	const hasExplicitHeaders =
 		Array.isArray(headersOrData) && headersOrData.length > 0 && typeof headersOrData[0] === "string";
 
-	const headers = hasExplicitHeaders ? headersOrData as string[] : getKeysOfLargestObject((headersOrData as object[]).map((r) => flatten(r)));
+	const headers = hasExplicitHeaders
+		? headersOrData as string[]
+		: getKeysOfLargestObject((headersOrData as object[]).map((r) => flatten(r)));
 	const rows = hasExplicitHeaders ? data : headersOrData as object[];
 	const flatRows = rows.map((r) => flatten(r) as Record<string, unknown>);
 

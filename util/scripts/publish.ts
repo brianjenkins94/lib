@@ -234,7 +234,13 @@ for (const workspace of workspaces) {
 		"files": Object.keys(files).filter((key) => key !== "package.json"),
 		// bin: preserve a package's own `bin` (e.g. silo's root `cli.js` → `silo`), else derive
 		// from scripts/* as `${pkg}-${name}` (e.g. util-build). Targets are "./"-normalized.
-		...(declaredBin ? { "bin": typeof declaredBin === "string" ? "./" + String(declaredBin).replace(/^\.\//u, "") : Object.fromEntries(Object.entries(declaredBin).map(([name, target]) => [name, "./" + String(target).replace(/^\.\//u, "")])) } : binFiles.length > 0 ? { "bin": Object.fromEntries(binFiles.map((key) => [`${packageJson["name"]}-${path.basename(key, ".js")}`, "./" + key])) } : {}),
+		...(declaredBin
+			? { "bin": typeof declaredBin === "string"
+					? "./" + String(declaredBin).replace(/^\.\//u, "")
+					: Object.fromEntries(Object.entries(declaredBin).map(([name, target]) => [name, "./" + String(target).replace(/^\.\//u, "")])) }
+			: binFiles.length > 0
+				? { "bin": Object.fromEntries(binFiles.map((key) => [`${packageJson["name"]}-${path.basename(key, ".js")}`, "./" + key])) }
+				: {}),
 		"version": version
 	}, undefined, 2);
 

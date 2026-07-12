@@ -104,7 +104,9 @@ export async function bindRoutes(server, routeMap) {
 							const normalizedFilePath = path.resolve(filePath).replace(/\\/gu, "/");
 							const moduleUrl = "/" + path.relative(root, normalizedFilePath).replace(/\\/gu, "/");
 
-							const route = process.env["NODE_ENV"] === "production" ? { [routeMethod]: routeHandler } : await (routeModules.get(normalizedFilePath) ?? routeModules.set(normalizedFilePath, (await getViteDevServer(root)).ssrLoadModule(moduleUrl)).get(normalizedFilePath));
+							const route = process.env["NODE_ENV"] === "production"
+								? { [routeMethod]: routeHandler }
+								: await (routeModules.get(normalizedFilePath) ?? routeModules.set(normalizedFilePath, (await getViteDevServer(root)).ssrLoadModule(moduleUrl)).get(normalizedFilePath));
 
 							return route[routeMethod](request, response, next);
 						} catch (error) {
