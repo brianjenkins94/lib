@@ -1,5 +1,5 @@
 import { Bottleneck } from "../util/bottleneck";
-import * as util from "util"
+import * as util from "util";
 import { PersistentStore } from "./store";
 
 function flush(buffer, callback) {
@@ -163,7 +163,7 @@ function extendedFetch(url, { cache, cacheKey, debug, fetch, limiter, retry, ...
 			cachePromise = cache.get(cacheKey)
 				.then(function({ body, status }) {
 					didResolve = true;
-					resolve(new Response(JSON.stringify(body), { status }))
+					resolve(new Response(JSON.stringify(body), { status }));
 				})
 				.catch(function(error) {
 					if (cacheHeader === "only-if-cached") {
@@ -285,7 +285,7 @@ function fetchFactory(baseUrl?, defaultOptions = {}) {
 	defaultOptions["fetch"] ??= globalThis.fetch;
 	defaultOptions["retry"] ??= ({ method }) => method === "get";
 	defaultOptions["headers"] ??= {};
-	defaultOptions["debug"] ??= process.env["NODE_ENV"] !== "production"
+	defaultOptions["debug"] ??= process.env["NODE_ENV"] !== "production";
 
 	if (defaultOptions["debug"] && defaultOptions["cache"]) {
 		cache ??= new PersistentStore();
@@ -380,7 +380,7 @@ export async function defaultConditionCallback(accumulator, { request, response 
 
 	const query = {
 		"page": callCount + 1
-	}
+	};
 
 	url.search = new URLSearchParams({
 		...new URLSearchParams(url.search),
@@ -401,7 +401,7 @@ export async function defaultConditionCallback(accumulator, { request, response 
 	return accumulator;
 }
 
-async function poll(url, query, { conditionCallback = defaultConditionCallback, initialValue = [], ...options}, ) {
+async function poll(url, query, { conditionCallback = defaultConditionCallback, initialValue = [], ...options} ) {
 	if (typeof url === "string") {
 		url = new URL(url);
 	}
@@ -448,7 +448,7 @@ export function withDefaults(baseUrl, defaultOptions = {}) {
 				defaultOptions["limiter"] = defaultOptions["limiter"] instanceof Bottleneck ? defaultOptions["limiter"].chain(limiter) : limiter;
 			}
 
-			return withDefaults(baseUrl, defaultOptions)
+			return withDefaults(baseUrl, defaultOptions);
 		}
 	};
 

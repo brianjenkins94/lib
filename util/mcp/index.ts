@@ -17,29 +17,29 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 
-export type ToolResult = { content: { type: "text", text: string }[], isError?: boolean };
+export type ToolResult = { "content": { "type": "text", "text": string }[], "isError"?: boolean };
 
 export interface McpTool {
-	name: string;
-	config: { title?: string; description: string; inputSchema: Record<string, unknown> };
-	handler: (args: any) => ToolResult | Promise<ToolResult>;
+	"name": string;
+	"config": { "title"?: string; "description": string; "inputSchema": Record<string, unknown> };
+	"handler": (args: any) => ToolResult | Promise<ToolResult>;
 }
 
 export interface ServeOptions {
-	name: string;
-	version: string;
+	"name": string;
+	"version": string;
 	/** Port for the dev bridge's HTTP server. */
-	port?: number;
+	"port"?: number;
 	/** Defaults to ./tools next to the entry's import.meta.url. */
-	toolsDir?: string;
+	"toolsDir"?: string;
 	/** Force the bridge on/off. Default: on unless NODE_ENV=production. */
-	bridge?: boolean;
+	"bridge"?: boolean;
 }
 
 // Only `url` — we deliberately do NOT read `import.meta.env` here: Vite's SSR module runner supports
 // only the static `import.meta.env.SSR` (a compile-time replacement), so reading `.env` off a passed-in
 // meta throws. The Vite-pass detection uses a module-level flag instead (see serveMcp).
-export type EntryMeta = { url: string };
+export type EntryMeta = { "url": string };
 
 /** Identity helper that gives a tool file its type + `export default defineTool({...})` shape. */
 export function defineTool(tool: McpTool): McpTool {
@@ -72,7 +72,7 @@ export function registerTool(server: McpServer, tool: McpTool): void {
 }
 
 /** Discover tool files in a dir and load each via `load` (fs import for stdio, Vite SSR for the bridge). */
-export async function eachToolFile(dir: string, load: (absPath: string) => Promise<{ default?: McpTool | McpTool[] }>): Promise<McpTool[]> {
+export async function eachToolFile(dir: string, load: (absPath: string) => Promise<{ "default"?: McpTool | McpTool[] }>): Promise<McpTool[]> {
 	const tools: McpTool[] = [];
 	for (const file of readdirSync(dir).sort()) {
 		if (!/\.(ts|mts|js|mjs)$/u.test(file) || file.endsWith(".d.ts")) {

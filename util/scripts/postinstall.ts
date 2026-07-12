@@ -18,36 +18,36 @@ const NPM_BEFORE = new Date(Date.now() - MINIMUM_RELEASE_AGE_DAYS * 86_400_000).
  * workspaces are skipped — they self-install (see `findWorkspaces()`).
  */
 export async function postinstall(workspaces?: string[]) {
-    workspaces ??= (await findWorkspaces()).filter((workspace) => !workspace.private).map((workspace) => workspace.dir);
+	workspaces ??= (await findWorkspaces()).filter((workspace) => !workspace.private).map((workspace) => workspace.dir);
 
-    return await mapAsync(workspaces, function(workspace) {
-        return new Promise(function(resolve, reject) {
-            const subprocess = spawn("pnpm", ["--ignore-workspace", "install", "--config.minimumReleaseAge=" + PNPM_MINIMUM_RELEASE_AGE], {
-                "cwd": workspace,
-                "shell": true,
-                //"stdio": "inherit"
-            });
+	return await mapAsync(workspaces, function(workspace) {
+		return new Promise(function(resolve, reject) {
+			const subprocess = spawn("pnpm", ["--ignore-workspace", "install", "--config.minimumReleaseAge=" + PNPM_MINIMUM_RELEASE_AGE], {
+				"cwd": workspace,
+				"shell": true
+				//"stdio": "inherit"
+			});
 
-            subprocess.on("close", function(code) {
-                if (code !== 0) {
-                    // FROM: https://github.com/vercel/turborepo/blob/1ae620cdf454d0258a162a96976e3064433391a2/packages/turbo/bin/turbo#L29
-                    const subprocess = spawn("npm", ["install", "--before=" + NPM_BEFORE, "--loglevel=error", "--prefer-offline", "--no-audit", "--progress=false"], {
-                        "cwd": workspace,
-                        "shell": true,
-                        //"stdio": "inherit"
-                    });
+			subprocess.on("close", function(code) {
+				if (code !== 0) {
+					// FROM: https://github.com/vercel/turborepo/blob/1ae620cdf454d0258a162a96976e3064433391a2/packages/turbo/bin/turbo#L29
+					const subprocess = spawn("npm", ["install", "--before=" + NPM_BEFORE, "--loglevel=error", "--prefer-offline", "--no-audit", "--progress=false"], {
+						"cwd": workspace,
+						"shell": true
+						//"stdio": "inherit"
+					});
 
-                    subprocess.on("close", function(code) {
-                        resolve(code);
-                    });
-                } else {
-                    resolve(code);
-                }
-            })
-        })
-    });
+					subprocess.on("close", function(code) {
+						resolve(code);
+					});
+				} else {
+					resolve(code);
+				}
+			});
+		});
+	});
 }
 
 if (process.argv[1] !== undefined && import.meta.url === url.pathToFileURL(realpathSync(process.argv[1])).toString()) {
-    await postinstall();
+	await postinstall();
 }

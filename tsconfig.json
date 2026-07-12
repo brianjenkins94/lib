@@ -1,7 +1,6 @@
 {
 	"extends": "@tsconfig/node-lts/tsconfig.json",
 	"compilerOptions": {
-		"baseUrl": "./",
 		"paths": {
 			"@components/*": ["./components/*"]
 		},
@@ -16,7 +15,7 @@
 			"esnext"
 		],
 		"module": "ESNext",
-		"moduleResolution": "Node",
+		"moduleResolution": "bundler",
 		"noEmit": true,
 		//"noImplicitAny": true,
 		"noImplicitOverride": true,
@@ -31,5 +30,6 @@
 		//"strictPropertyInitialization": true,
 		//"useUnknownInCatchVariables": true
 		"target": "ESNext"
-	}
+	},
+	"exclude": ["node_modules", "test/runtime/deno.ts"]
 }

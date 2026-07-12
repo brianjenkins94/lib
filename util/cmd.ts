@@ -15,26 +15,26 @@ export * from "cmd-ts";
 
 /** Expand "a|b|c" alias keys so one command registers under several names. */
 export function aliases<T>(commands: Record<string, T>): Record<string, T> {
-    const expanded: Record<string, T> = {};
+	const expanded: Record<string, T> = {};
 
-    for (const [key, value] of Object.entries(commands)) {
-        for (const name of key.split("|")) {
-            expanded[name.trim()] = value;
-        }
-    }
+	for (const [key, value] of Object.entries(commands)) {
+		for (const name of key.split("|")) {
+			expanded[name.trim()] = value;
+		}
+	}
 
-    return expanded;
+	return expanded;
 }
 
 /** A cmd-ts `subcommands` whose keys may be "a|b" alias groups. */
 export function group(name: string, commands: Record<string, any>) {
-    return subcommands({ "name": name, "cmds": aliases(commands) });
+	return subcommands({ "name": name, "cmds": aliases(commands) });
 }
 
 interface GlobalFlag {
-    long: string;            // the flag name without leading dashes
-    env?: string;            // environment variable to fall back to
-    boolean?: boolean;       // a valueless flag (presence → true)
+	"long": string;            // the flag name without leading dashes
+	"env"?: string;            // environment variable to fall back to
+	"boolean"?: boolean;       // a valueless flag (presence → true)
 }
 
 /**
@@ -42,74 +42,74 @@ interface GlobalFlag {
  * every subcommand. Supports `--flag value`, `--flag=value`, valueless `--flag`, and an env fallback.
  * Returns the collected values and a new argv with the matched flags removed.
  */
-export function liftGlobals(argv: string[], specs: Record<string, GlobalFlag>): { values: Record<string, string | boolean | undefined>; argv: string[] } {
-    const args = [...argv];
-    const values: Record<string, string | boolean | undefined> = {};
+export function liftGlobals(argv: string[], specs: Record<string, GlobalFlag>): { "values": Record<string, string | boolean | undefined>; "argv": string[] } {
+	const args = [...argv];
+	const values: Record<string, string | boolean | undefined> = {};
 
-    for (const [key, spec] of Object.entries(specs)) {
-        if (spec.env !== undefined && process.env[spec.env] !== undefined) {
-            values[key] = process.env[spec.env];
-        }
+	for (const [key, spec] of Object.entries(specs)) {
+		if (spec.env !== undefined && process.env[spec.env] !== undefined) {
+			values[key] = process.env[spec.env];
+		}
 
-        if (spec.boolean === true) {
-            const index = args.indexOf("--" + spec.long);
+		if (spec.boolean === true) {
+			const index = args.indexOf("--" + spec.long);
 
-            if (index >= 0) {
-                values[key] = true;
-                args.splice(index, 1);
-            }
-        } else {
-            const pattern = new RegExp(`^--${spec.long}(?:=(.*))?$`, "u");
-            const index = args.findIndex((argument) => pattern.test(argument));
+			if (index >= 0) {
+				values[key] = true;
+				args.splice(index, 1);
+			}
+		} else {
+			const pattern = new RegExp(`^--${spec.long}(?:=(.*))?$`, "u");
+			const index = args.findIndex((argument) => pattern.test(argument));
 
-            if (index >= 0) {
-                const inline = pattern.exec(args[index])![1];
+			if (index >= 0) {
+				const inline = pattern.exec(args[index])![1];
 
-                if (inline !== undefined) {
-                    values[key] = inline;
-                    args.splice(index, 1);
-                } else {
-                    values[key] = args[index + 1];
-                    args.splice(index, 2);
-                }
-            }
-        }
-    }
+				if (inline !== undefined) {
+					values[key] = inline;
+					args.splice(index, 1);
+				} else {
+					values[key] = args[index + 1];
+					args.splice(index, 2);
+				}
+			}
+		}
+	}
 
-    return { "values": values, "argv": args };
+	return { "values": values, "argv": args };
 }
 
 interface RunOptions {
-    argv?: string[];
-    onError?: (error: unknown) => void | Promise<void>;
-    onExit?: () => void;
-    signals?: NodeJS.Signals[];
-    exit?: boolean;
+	"argv"?: string[];
+	"onError"?: (error: unknown) => void | Promise<void>;
+	"onExit"?: () => void;
+	"signals"?: NodeJS.Signals[];
+	"exit"?: boolean;
 }
 
 /** Run a cmd-ts app with lifecycle scaffolding. Defaults to the common signal set + a graceful exit(0). */
 export async function run(app: Parameters<typeof runCommand>[0], options: RunOptions = {}): Promise<void> {
-    const { argv = process.argv.slice(2), onError, onExit, signals = ["SIGINT", "SIGUSR1", "SIGUSR2"], exit = true } = options;
+	const { argv = process.argv.slice(2), onError, onExit, signals = ["SIGINT", "SIGUSR1", "SIGUSR2"], exit = true } = options;
 
-    process.on("uncaughtException", async function(error) {
-        if (onError !== undefined) {
-            await onError(error);
-        } else {
-            console.error(error instanceof Error ? error.stack : error);
-        }
+	process.on("uncaughtException", async function(error) {
+		if (onError !== undefined) {
+			await onError(error);
+		} else {
+			console.error(error instanceof Error ? error.stack : error);
+		}
 
-        process.exit(1);
-    });
+		process.exit(1);
+	});
 
-    if (onExit !== undefined) {
-        for (const signal of [...signals, "exit" as NodeJS.Signals]) {
-            process.on(signal, onExit);
-        }
-    }
+	if (onExit !== undefined) {
+		for (const signal of [...signals, "exit" as NodeJS.Signals]) {
+			process.on(signal, onExit);
+		}
+	}
 
-    await runCommand(app, argv);
+	await runCommand(app, argv);
 
-    if (exit) {
-        process.exit(0);
-    }
+	if (exit) {
+		process.exit(0);
+	}
 }

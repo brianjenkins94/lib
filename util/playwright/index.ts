@@ -2,7 +2,7 @@ import { chromium } from "playwright";
 import type { Browser, BrowserContext, Page } from "playwright";
 import { spawn } from "child_process";
 import * as path from "path";
-import * as fs from "../fs"
+import * as fs from "../fs";
 
 import { __root, isWindows } from "../env";
 import { sleep } from "../sleep";
@@ -20,9 +20,9 @@ const browsers = {
 		"path": isWindows ? path.join(process.env["ProgramW6432"], "Google", "Chrome", "Application", "chrome.exe") : path.join("/", "Applications", "Google Chrome.app", "Contents", "MacOS", "Google Chrome"),
 		"args": isWindows ? ["/F", "/IM", "chrome.exe", "/T"] : ["-INT", "\"Google Chrome\""]
 	}
-}
+};
 
-export async function attach(endpointURL = "http://localhost:9222", options = { timeout: 15_000 }) {
+export async function attach(endpointURL = "http://localhost:9222", options = { "timeout": 15_000 }) {
 
 	if (new URL(endpointURL).hostname === "localhost") {
 		for (const browser of Object.values(browsers).filter(({ path }) => fs.existsSync(path))) {
@@ -48,7 +48,7 @@ export async function attach(endpointURL = "http://localhost:9222", options = { 
 						// https://chromium.googlesource.com/chromium/src/+/master/docs/user_data_dir.md#Windows
 						//"--enable-logging=stderr --v=1",
 						"--remote-debugging-port=9222",
-						"--restore-last-session",
+						"--restore-last-session"
 						//"--user-data-dir=" + (isWindows ? path.join(process.env["LOCALAPPDATA"], "Google", "Chrome", "User Data") : path.join(process.env["HOME"], "Library", "Application Support", "Google", "Chrome"))
 						//"--profile-directory=Default"
 					], {
@@ -70,7 +70,7 @@ export async function attach(endpointURL = "http://localhost:9222", options = { 
 	return {
 		"browser": browser,
 		"contexts": browser.contexts(),
-		[Symbol.asyncDispose]: async () => { await browser.close(); },
+		[Symbol.asyncDispose]: async () => { await browser.close(); }
 	};
 }
 

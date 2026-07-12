@@ -8,21 +8,21 @@ class ReadLineStream extends Readable {
 		super(options);
 
 		this._readStream = readStream;
-		this._readStream._readableState.highWaterMark = 1
+		this._readStream._readableState.highWaterMark = 1;
 
 		readStream.on("readable", () => {
-			super.read(0)
-		})
+			super.read(0);
+		});
 	}
 
 	public override async _read(size: number): Promise<void> {
 		const readline = createInterface({
 			"input": this._readStream
-		})
+		});
 
 		readline.on("line", (line) => {
 			if (line !== "\n") {
-				super.emit("line", line)
+				super.emit("line", line);
 			}
 		});
 

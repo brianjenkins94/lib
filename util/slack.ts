@@ -9,5 +9,5 @@ export function initSlack(webhookUrl) {
 				...options
 			})
 		});
-	}
+	};
 }

@@ -6,61 +6,61 @@ import { spawn } from "child_process";
 const packages = process.argv.slice(2);
 
 const items = packages.length > 0 ? packages : fs.glob(path.join(__root, "util", "**", "*.ts"), {
-    "exclude": function(fileName) {
-        return /(^|[\\/])(node_modules|scripts)([\\/]|$)/u.test(fileName);
-    }
+	"exclude": function(fileName) {
+		return /(^|[\\/])(node_modules|scripts)([\\/]|$)/u.test(fileName);
+	}
 });
 
 for await (const item of items) {
-    const command = packages.length > 0
-        ? ["node", "--input-type=module", "--eval", `import "${item}";`]
-        : ["npx", "tsx", item];
+	const command = packages.length > 0
+		? ["node", "--input-type=module", "--eval", `import "${item}";`]
+		: ["npx", "tsx", item];
 
-    console.log(">", command.join(" "))
-    let process = spawn(command[0], command.slice(1), {
-        "shell": true,
-        //"stdio": "inherit"
-    });
+	console.log(">", command.join(" "));
+	let process = spawn(command[0], command.slice(1), {
+		"shell": true
+		//"stdio": "inherit"
+	});
 
-    await new Promise<void>(function recurse(resolve, reject) {
-        const buffer = [];
+	await new Promise<void>(function recurse(resolve, reject) {
+		const buffer = [];
 
-        process.stderr.on("data", function(chunk) {
-            buffer.push(chunk);
-        });
+		process.stderr.on("data", function(chunk) {
+			buffer.push(chunk);
+		});
 
-        process.on("close", async function(code) {
-            if (code === 0) {
-                resolve();
+		process.on("close", async function(code) {
+			if (code === 0) {
+				resolve();
 
-                return;
-            }
+				return;
+			}
 
-            const [packageName] = /(?<=').*?(?=')/u.exec(Buffer.concat(buffer).toString())
+			const [packageName] = /(?<=').*?(?=')/u.exec(Buffer.concat(buffer).toString());
 
-            if (packageName.startsWith(".")) {
-                reject(new Error(`${item} has a broken relative import: ${packageName}`));
-                return;
-            }
+			if (packageName.startsWith(".")) {
+				reject(new Error(`${item} has a broken relative import: ${packageName}`));
+				return;
+			}
 
-            console.log(">", ["npm", "install", "--save-peer", packageName + "@latest"].join(" "))
-            const subprocess = spawn("npm", ["install", "--save-peer", packageName + "@latest"], {
-                "cwd": path.join(__root, "util"),
-                "shell": true,
-                "stdio": "inherit"
-            });
+			console.log(">", ["npm", "install", "--save-peer", packageName + "@latest"].join(" "));
+			const subprocess = spawn("npm", ["install", "--save-peer", packageName + "@latest"], {
+				"cwd": path.join(__root, "util"),
+				"shell": true,
+				"stdio": "inherit"
+			});
 
-            await new Promise(function(resolve, reject) {
-                subprocess.on("close", resolve);
-            });
+			await new Promise(function(resolve, reject) {
+				subprocess.on("close", resolve);
+			});
 
-            console.log(">", command.join(" "))
-            process = spawn(command[0], command.slice(1), {
-                "shell": true,
-                //"stdio": "inherit"
-            });
+			console.log(">", command.join(" "));
+			process = spawn(command[0], command.slice(1), {
+				"shell": true
+				//"stdio": "inherit"
+			});
 
-            recurse(resolve, reject);
-        })
-    });
+			recurse(resolve, reject);
+		});
+	});
 }

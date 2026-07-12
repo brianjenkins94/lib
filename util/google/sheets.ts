@@ -32,12 +32,12 @@ class Sheet {
 
 	private normalizeRows(rows = []) {
 		return rows.map((row) => {
-			return (Array.isArray(row) ? row : [row]).map((cell) => this.parseCell(cell))
+			return (Array.isArray(row) ? row : [row]).map((cell) => this.parseCell(cell));
 		});
 	}
 
 	public async get(range: string, options = { "valueRenderOption": "FORMATTED_VALUE" }) {
-		let ranges = range.split(";")
+		let ranges = range.split(";");
 
 		if (ranges.length > 1) {
 			ranges = await mapAsync(ranges, async (range) => {
@@ -49,7 +49,7 @@ class Sheet {
 
 				// TODO: Memoize
 				return sheet + "!" + start + ":" + end + (await this.getMaxRange(sheet)).rowCount;
-			})
+			});
 
 			const rows = (await this.sheetsApi.spreadsheets.values.batchGet({
 				...options,
@@ -119,7 +119,7 @@ class Sheet {
 	}
 }
 
-export async function initSheets({ sheetId, ...oauth2ClientOptions }: Partial<ClientSettings> & { sheetId: string }) {
+export async function initSheets({ sheetId, ...oauth2ClientOptions }: Partial<ClientSettings> & { "sheetId": string }) {
 	const client = new OAuth2Client({
 		"authorizationEndpoint": "./auth",
 		"tokenEndpoint": "./token",

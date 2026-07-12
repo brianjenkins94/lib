@@ -11,28 +11,28 @@ import * as url from "url";
  * `{ workspace: exitCode }` map.
  */
 export async function build(workspaces?: string[]) {
-    workspaces ??= (await findWorkspaces()).filter((workspace) => !workspace.private).map((workspace) => workspace.dir);
+	workspaces ??= (await findWorkspaces()).filter((workspace) => !workspace.private).map((workspace) => workspace.dir);
 
-    function buildOne(workspace) {
-        return new Promise(function(resolve, reject) {
-            const subprocess = spawn("pnpm", ["--ignore-workspace", "run", "--if-present", "build"], {
-                "cwd": workspace,
-                "shell": true,
-                //"stdio": "inherit"
-            });
+	function buildOne(workspace) {
+		return new Promise(function(resolve, reject) {
+			const subprocess = spawn("pnpm", ["--ignore-workspace", "run", "--if-present", "build"], {
+				"cwd": workspace,
+				"shell": true
+				//"stdio": "inherit"
+			});
 
-            subprocess.on("close", function(code) {
-                resolve([workspace, code]);
-            });
-        });
-    }
+			subprocess.on("close", function(code) {
+				resolve([workspace, code]);
+			});
+		});
+	}
 
-    const [packages, rest] = partition(workspaces, (workspace) => workspace.split("/")[0] === "packages");
+	const [packages, rest] = partition(workspaces, (workspace) => workspace.split("/")[0] === "packages");
 
-    const packageResults = await mapAsync(packages, buildOne);
-    const restResults = await mapAsync(rest, buildOne);
+	const packageResults = await mapAsync(packages, buildOne);
+	const restResults = await mapAsync(rest, buildOne);
 
-    return Object.fromEntries([...packageResults, ...restResults]);
+	return Object.fromEntries([...packageResults, ...restResults]);
 }
 
 if (process.argv[1] !== undefined && import.meta.url === url.pathToFileURL(realpathSync(process.argv[1])).toString()) {

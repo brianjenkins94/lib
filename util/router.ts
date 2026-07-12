@@ -86,7 +86,7 @@ export async function bindRoutes(server, routeMap) {
 				let deferred = false;
 
 				pathName = pathName
-					.replace(/(\[\[?)([.]{3}?)(.+?)\]\]?/gu, function(_, optional, catchAll, parameter) {
+					.replace(/(\[\[?)(\.{3}?)(.+?)\]\]?/gu, function(_, optional, catchAll, parameter) {
 						deferred = true;
 
 						return (catchAll === "..." ? "*" : ":") + parameter;

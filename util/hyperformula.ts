@@ -29,32 +29,32 @@ export function initHyperFormula(data) {
 		const { height, width } = hfInstance.getSheetDimensions(sheetId);
 
 		switch (true) {
-		// `start` ends with a letter
-		// Example: A:A
-		case /\D$/u.test(start):
-			start += 1;
-		// `end` ends with a letter
-		// Example: A1:A
-		case /\D$/u.test(end):
-			end += height;
-			break;
-		// `start` starts with a digit
-		// Example: 1:1
-		case /^\d/u.test(start):
-			if (start === end) {
-				start = "A" + start;
-				end = columnToLetter(width) + end;
-
+			// `start` ends with a letter
+			// Example: A:A
+			case /\D$/u.test(start):
+				start += 1;
+			// `end` ends with a letter
+			// Example: A1:A
+			case /\D$/u.test(end):
+				end += height;
 				break;
-			}
+			// `start` starts with a digit
+			// Example: 1:1
+			case /^\d/u.test(start):
+				if (start === end) {
+					start = "A" + start;
+					end = columnToLetter(width) + end;
 
-			start = "A" + start;
-		// `end` starts with a digit
-		// Example: A1:1
-		case /^\d/u.test(end):
-			end = /\d+$/u.exec(start)[0] === end ? /^\D+/u.exec(start)[0] + width : columnToLetter(width) + height;
-			break;
-		default:
+					break;
+				}
+
+				start = "A" + start;
+			// `end` starts with a digit
+			// Example: A1:1
+			case /^\d/u.test(end):
+				end = /\d+$/u.exec(start)[0] === end ? /^\D+/u.exec(start)[0] + width : columnToLetter(width) + height;
+				break;
+			default:
 		}
 
 		const range = hfInstance.simpleCellRangeFromString([start, end].join(":"), contextSheetId);

@@ -40,39 +40,39 @@ export function dedent(input) {
 		.replace(/^\s*\n(?=\s*\S)/mu, "")
 		.replace(new RegExp("^( {" + indentationWidth + "})", "gmu"), "")
 		.replace(/(?<=^)\n|(?<=\n+) +(?=$)/gu, "");
-		//.replace(/^ +/gmu, function(match) {
-		//	return "\t".repeat(match.length / 4);
-		//});
+	//.replace(/^ +/gmu, function(match) {
+	//	return "\t".repeat(match.length / 4);
+	//});
 }
 
 export function indent(input) {
-    input = input
-        .replace(/^\t+/gmu, function(match) {
-            return " ".repeat(match.length * 4);
-        });
+	input = input
+		.replace(/^\t+/gmu, function(match) {
+			return " ".repeat(match.length * 4);
+		});
 
-    const indentationWidth = (/^ {2,}/mu.exec(input) ?? [""])[0].length;
+	const indentationWidth = (/^ {2,}/mu.exec(input) ?? [""])[0].length;
 
-    return input.trim().split("\n").map((line, index) => " ".repeat(index && indentationWidth - 4) + line).join("\n");
+	return input.trim().split("\n").map((line, index) => " ".repeat(index && indentationWidth - 4) + line).join("\n");
 }
 
 export async function replaceAsync(regex, input, callback = async (execResults: RegExpExecArray) => Promise.resolve(execResults[1])) {
-    regex = new RegExp(regex.source, [...new Set([...regex.flags, "d"])].join(""));
+	regex = new RegExp(regex.source, [...new Set([...regex.flags, "d"])].join(""));
 
-    const output = [];
+	const output = [];
 
-    let index = input.length;
-    let result;
+	let index = input.length;
+	let result;
 
-    for (let origin = 0; result = regex.exec(input); origin = index) {
-        index = result.indices[1][1] + 1;
+	for (let origin = 0; result = regex.exec(input); origin = index) {
+		index = result.indices[1][1] + 1;
 
-        output.push(input.substring(origin, result.indices[1][0] - 1), await callback(result));
-    }
+		output.push(input.substring(origin, result.indices[1][0] - 1), await callback(result));
+	}
 
-    output.push(input.substring(index));
+	output.push(input.substring(index));
 
-    return output.join("");
+	return output.join("");
 }
 
 export function longestCommonPrefix([first, ...strings]) {

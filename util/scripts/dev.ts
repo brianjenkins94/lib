@@ -9,5 +9,5 @@ import { serve } from "../vite/dev";
  * script — see games/war2/scripts/dev.ts (PeerJS broker + debug server).
  */
 if (process.argv[1] !== undefined && import.meta.url === url.pathToFileURL(realpathSync(process.argv[1])).toString()) {
-    await serve(process.cwd());
+	await serve(process.cwd());
 }

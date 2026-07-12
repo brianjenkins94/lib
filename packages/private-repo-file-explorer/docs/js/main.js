@@ -94,7 +94,7 @@ document.addEventListener("DOMContentLoaded", async function(event) {
 		const folders = [];
 
 		if (isLocal) {
-			const response = await (await fetch(location.href.replace("#", "~"))).json()
+			const response = await (await fetch(location.href.replace("#", "~"))).json();
 
 			files.push(...response["files"]);
 			folders.push(...response["folders"]);
@@ -180,11 +180,11 @@ document.addEventListener("DOMContentLoaded", async function(event) {
 		const links = document.body.querySelectorAll("[href]");
 
 		for (const link of links) {
-			for (let [placeholder, value] of Object.entries({ "username": username, "repository": repository })) {
+			for (let [placeholder, value] of Object.entries({ username: username, repository: repository })) {
 				const placeholders = [
 					"<%= " + placeholder + " %>",
 					"%3C%=%20" + placeholder + "%20%%3E",
-					"%3C%25%3D%20" + placeholder + "%20%25%3E"
+					"%3C%25%3D%20" + placeholder + "%20%25%3E",
 				];
 
 				const placeholderRegex = new RegExp("(?:" + placeholders.join(")|(?:") + ")", "g");

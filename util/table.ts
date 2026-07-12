@@ -10,7 +10,7 @@ const defaultOptions = {
 let createTable;
 
 try {
-	createTable = (await import("table")).table
+	createTable = (await import("table")).table;
 } catch (error) {}
 
 export async function table(data, options = defaultOptions) {

@@ -8,20 +8,20 @@ import type { InlineConfig } from "vite";
  * not fire during config loading).
  */
 export const defaults: InlineConfig = {
-    "build": {
-        "target": "esnext",
-        "minify": false,
-        "emptyOutDir": true,
-        "modulePreload": { "polyfill": false },
-        "rollupOptions": {
-            "output": {
-                "entryFileNames": "[name].js",
-                "chunkFileNames": "[name].js"
-            }
-        }
-    },
-    "worker": {
-        "format": "es"
-    },
-    "logLevel": "warn"
+	"build": {
+		"target": "esnext",
+		"minify": false,
+		"emptyOutDir": true,
+		"modulePreload": { "polyfill": false },
+		"rollupOptions": {
+			"output": {
+				"entryFileNames": "[name].js",
+				"chunkFileNames": "[name].js"
+			}
+		}
+	},
+	"worker": {
+		"format": "es"
+	},
+	"logLevel": "warn"
 };

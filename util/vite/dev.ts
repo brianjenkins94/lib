@@ -18,15 +18,15 @@ import { createServer as createViteServer, type ViteDevServer } from "vite";
 let viteDevServer: ViteDevServer | undefined;
 
 export async function getViteDevServer(root: string): Promise<ViteDevServer> {
-    viteDevServer ??= await createViteServer({
-        "root": root,
-        "appType": "custom",
-        "server": { "middlewareMode": true },
-        "esbuild": { "jsx": "automatic", "jsxImportSource": "jsx-async-runtime" },
-        "publicDir": false
-    });
+	viteDevServer ??= await createViteServer({
+		"root": root,
+		"appType": "custom",
+		"server": { "middlewareMode": true },
+		"esbuild": { "jsx": "automatic", "jsxImportSource": "jsx-async-runtime" },
+		"publicDir": false
+	});
 
-    return viteDevServer;
+	return viteDevServer;
 }
 
 let entered = false;
@@ -45,37 +45,37 @@ let entered = false;
  * Usage:  if (!(await bootstrapOrRun(import.meta.url, appRoot))) { ...app body... }
  */
 export async function bootstrapOrRun(metaUrl: string, root: string): Promise<boolean> {
-    if (process.env["NODE_ENV"] === "production" || entered) {
-        return false;
-    }
+	if (process.env["NODE_ENV"] === "production" || entered) {
+		return false;
+	}
 
-    entered = true;
+	entered = true;
 
-    const vite = await getViteDevServer(root);
-    await vite.ssrLoadModule("/" + relative(root, fileURLToPath(metaUrl)).replace(/\\/gu, "/"));
+	const vite = await getViteDevServer(root);
+	await vite.ssrLoadModule("/" + relative(root, fileURLToPath(metaUrl)).replace(/\\/gu, "/"));
 
-    return true;
+	return true;
 }
 
 /** Serve one package directory in dev (Vite middleware + manual HTML, since
  *  getViteDevServer uses appType:"custom"). */
 export async function serve(appRoot: string, port = 5173): Promise<void> {
-    const vite = await getViteDevServer(appRoot);
+	const vite = await getViteDevServer(appRoot);
 
-    http.createServer((req, res) => {
-        vite.middlewares(req, res, async () => {
-            try {
-                const urlPath = (req.url ?? "/").split("?")[0];
-                let file = urlPath === "/" ? "index.html" : urlPath.slice(1);
-                if (!file.endsWith(".html") || !existsSync(join(appRoot, file))) file = "index.html";
-                const html = await vite.transformIndexHtml(req.url ?? "/", await readFile(join(appRoot, file), "utf8"));
-                res.setHeader("content-type", "text/html");
-                res.end(html);
-            } catch (err) {
-                vite.ssrFixStacktrace?.(err as Error);
-                res.statusCode = 500;
-                res.end(String((err as Error)?.stack ?? err));
-            }
-        });
-    }).listen(port, () => console.log(`\n  ${basename(appRoot)} → http://localhost:${port}/\n`));
+	http.createServer((req, res) => {
+		vite.middlewares(req, res, async () => {
+			try {
+				const urlPath = (req.url ?? "/").split("?")[0];
+				let file = urlPath === "/" ? "index.html" : urlPath.slice(1);
+				if (!file.endsWith(".html") || !existsSync(join(appRoot, file))) file = "index.html";
+				const html = await vite.transformIndexHtml(req.url ?? "/", await readFile(join(appRoot, file), "utf8"));
+				res.setHeader("content-type", "text/html");
+				res.end(html);
+			} catch (err) {
+				vite.ssrFixStacktrace?.(err as Error);
+				res.statusCode = 500;
+				res.end(String((err as Error)?.stack ?? err));
+			}
+		});
+	}).listen(port, () => console.log(`\n  ${basename(appRoot)} → http://localhost:${port}/\n`));
 }
