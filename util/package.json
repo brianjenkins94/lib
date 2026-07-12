@@ -6,7 +6,6 @@
   "dependencies": {
     "@antfu/eslint-config": "latest",
     "@eslint/js": "latest",
-    "@tsconfig/node-lts": "latest",
     "eslint": "latest",
     "typescript-eslint": "latest"
   },
