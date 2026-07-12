@@ -441,13 +441,11 @@ export function withDefaults(baseUrl, defaultOptions = {}) {
 		"poll": (url, query?, options?) => (fido.poll = (url, query?, options?) => (poll.bind(fido))(url, options === undefined && (query && Object.values(query).every((value) => typeof value !== "object") ? query : undefined), { "method": "GET", ...(options ?? query) }))(url, query, options),
 		"limit": function(amount) {
 			if (defaultOptions["limiter"] !== false) {
-				const limiter = new Bottleneck(typeof amount === "number"
-					? {
-							"reservoir": amount,
-							"reservoirRefreshAmount": amount,
-							"reservoirRefreshInterval": 60_000
-						}
-					: amount);
+				const limiter = new Bottleneck(typeof amount === "number" ? {
+					"reservoir": amount,
+					"reservoirRefreshAmount": amount,
+					"reservoirRefreshInterval": 60_000
+				} : amount);
 
 				defaultOptions["limiter"] = defaultOptions["limiter"] instanceof Bottleneck ? defaultOptions["limiter"].chain(limiter) : limiter;
 			}

@@ -40,9 +40,9 @@ export function dedent(input) {
 		.replace(/^\s*\n(?=\s*\S)/mu, "")
 		.replace(new RegExp("^( {" + indentationWidth + "})", "gmu"), "")
 		.replace(/^\n|(?<=\n+) +$/gu, "");
-	//.replace(/^ +/gmu, function(match) {
-	//	return "\t".repeat(match.length / 4);
-	//});
+		//.replace(/^ +/gmu, function(match) {
+		//  return "\t".repeat(match.length / 4);
+		//});
 }
 
 export function indent(input) {

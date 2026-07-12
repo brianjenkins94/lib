@@ -1,11 +1,11 @@
-import * as path from "path";
-import * as url from "url";
-import * as fs from "./fs";
+import * as path from "node:path";
+import * as url from "node:url";
 import { mapAsync } from "./array";
+import * as fs from "./fs";
 import { getViteDevServer as getBaseViteDevServer } from "./vite/dev";
 
 let watcherAttached = false;
-let routeModules = new Map();
+const routeModules = new Map();
 
 // TODO: Review
 function hasDependency(moduleNode, filePath, seen = new Set()) {
@@ -86,7 +86,7 @@ export async function bindRoutes(server, routeMap) {
 				let deferred = false;
 
 				pathName = pathName
-					.replace(/(\[\[?)(\.{3}?)(.+?)\]\]?/gu, function(_, optional, catchAll, parameter) {
+					.replace(/(\[\[?)(\.{3})?([^[\]]+)\]\]?/gu, function(_, optional, catchAll, parameter) {
 						deferred = true;
 
 						return (catchAll === "..." ? "*" : ":") + parameter;
@@ -98,15 +98,13 @@ export async function bindRoutes(server, routeMap) {
 					"pathName": pathName,
 					"middlewares": middlewares,
 					"routeHandler": async function(request, response, next) {
-						let root = path.dirname(fs.closest(routeDirectory, "package.json")!);
+						const root = path.dirname(fs.closest(routeDirectory, "package.json"));
 
 						try {
 							const normalizedFilePath = path.resolve(filePath).replace(/\\/gu, "/");
 							const moduleUrl = "/" + path.relative(root, normalizedFilePath).replace(/\\/gu, "/");
 
-							const route = process.env["NODE_ENV"] === "production"
-								? { [routeMethod]: routeHandler }
-								: await (routeModules.get(normalizedFilePath) ?? routeModules.set(normalizedFilePath, (await getViteDevServer(root)).ssrLoadModule(moduleUrl)).get(normalizedFilePath));
+							const route = process.env["NODE_ENV"] === "production" ? { [routeMethod]: routeHandler } : await (routeModules.get(normalizedFilePath) ?? routeModules.set(normalizedFilePath, (await getViteDevServer(root)).ssrLoadModule(moduleUrl)).get(normalizedFilePath));
 
 							return route[routeMethod](request, response, next);
 						} catch (error) {

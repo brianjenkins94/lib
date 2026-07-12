@@ -23,8 +23,7 @@ const errors = {
 	// Categorically ban node fs — Brian uses his own wrapper (@brianjenkins94/util/fs; locally util/fs) that wraps
 	// node fs with utf8 defaults + async helpers. allowTypeImports lets `import type` through (types have no wrapper
 	// equivalent). NOT auto-fixable — convert by hand. The wrapper itself + sync-bound files are exempted in lib's eslint.config.ts.
-	"ts/no-restricted-imports": ["error",
-{ "paths": [
+	"ts/no-restricted-imports": ["error", { "paths": [
 		{ "name": "fs", "message": "Use the fs wrapper: @brianjenkins94/util/fs (locally util/fs).", "allowTypeImports": true },
 		{ "name": "node:fs", "message": "Use the fs wrapper: @brianjenkins94/util/fs (locally util/fs).", "allowTypeImports": true },
 		{ "name": "fs/promises", "message": "Use the fs wrapper: @brianjenkins94/util/fs (locally util/fs).", "allowTypeImports": true },
@@ -41,6 +40,7 @@ const warnings = {
 	"curly": ["warn", "all"], // require braces on ALL control statements. The unbraced beside one-liners in the existing source are AI artifacts, not Brian's style. Conflict-free now that antfu/if-newline is disabled (it was the rule that split one-liners onto a new line, oscillating with nonblock-statement-body-position:beside)
 	"style/no-multi-spaces": ["warn", { "ignoreEOLComments": true }], // clean stray runs (merge artifacts, accidental double-spaces) but leave aligned trailing // comments alone
 	"object-shorthand": ["warn", "never"], // always long-form — `{ foo: foo }` not `{ foo }`, `key: function() {}` not `key() {}` — for properties AND methods alike
+	"style/generator-star-spacing": ["warn", { "before": true, "after": false }], // star glued to the NAME everywhere: `public *entries()` and `function *foo()` (antfu's default is `public* entries` / `function* foo`)
 
 	// fixable style rules — warn (auto-fixed on save, hidden in IDE) but carrying Brian's custom options:
 	"style/array-bracket-newline": ["warn", "consistent"],
@@ -89,6 +89,7 @@ const disabled = {
 	"sort-keys": "off", // same as jsonc/sort-keys — not a nag; a deliberate pass if ever
 	"ts/no-magic-numbers": "off", // flags every literal number (indexes, small constants, status codes) — more noise than signal
 	"no-ternary": "off", // ternaries are fine
+	"style/multiline-ternary": "off", // allow BOTH single-line and multiline ternaries — don't force either. "never" scrunched genuinely-multiline ones onto one line and hurt readability; "always" over-breaks short `a ? b : c`. Author's call.
 	"antfu/no-top-level-await": "off", // top-level await is wanted (this very config is built on it)
 	"no-console": "off", // would like better console discipline, but blanket-flagging every console.* doesn't get there
 	"max-statements": "off", // raw statement count is a weak signal — `complexity` (kept on) is the better measure

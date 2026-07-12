@@ -1,7 +1,7 @@
-import * as fs from "../../util/fs";
-import * as path from "path";
+import { spawn } from "node:child_process";
+import * as path from "node:path";
 import { __root } from "../../util/env";
-import { spawn } from "child_process";
+import * as fs from "../../util/fs";
 
 const packages = process.argv.slice(2);
 
@@ -12,9 +12,7 @@ const items = packages.length > 0 ? packages : fs.glob(path.join(__root, "util",
 });
 
 for await (const item of items) {
-	const command = packages.length > 0
-		? ["node", "--input-type=module", "--eval", `import "${item}";`]
-		: ["npx", "tsx", item];
+	const command = packages.length > 0 ? ["node", "--input-type=module", "--eval", `import "${item}";`] : ["npx", "tsx", item];
 
 	console.log(">", command.join(" "));
 	let process = spawn(command[0], command.slice(1), {
@@ -40,6 +38,7 @@ for await (const item of items) {
 
 			if (packageName.startsWith(".")) {
 				reject(new Error(`${item} has a broken relative import: ${packageName}`));
+
 				return;
 			}
 

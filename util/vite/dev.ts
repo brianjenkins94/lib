@@ -70,7 +70,7 @@ export async function serve(appRoot: string, port = 5173): Promise<void> {
 				const urlPath = (req.url ?? "/").split("?")[0];
 				let file = urlPath === "/" ? "index.html" : urlPath.slice(1);
 
-				if (!file.endsWith(".html") || !existsSync(path.join(appRoot, file))) file = "index.html";
+				if (!file.endsWith(".html") || !existsSync(path.join(appRoot, file))) { file = "index.html"; }
 				const html = await vite.transformIndexHtml(req.url ?? "/", await readFile(path.join(appRoot, file)));
 
 				res.setHeader("content-type", "text/html");

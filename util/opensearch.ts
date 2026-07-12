@@ -1,4 +1,4 @@
-import { Client } from "@opensearch-project/opensearch";
+import type { Client } from "@opensearch-project/opensearch";
 
 export async function _search(client: Client, { index = undefined, aggs = undefined, range = undefined, filters = undefined, query = {}, scroll = undefined, size = undefined, sort = undefined, search_after = undefined, _source = undefined, filter_path = undefined, ...options } = {}) {
 	range ??= {
@@ -71,7 +71,7 @@ export async function _search(client: Client, { index = undefined, aggs = undefi
 	const hits = response.body["hits"]?.["hits"] ?? [];
 
 	if (aggregations !== undefined) {
-		console.info(`Received ${(aggregations["buckets"] && aggregations["buckets"].length) || hits.length} buckets in ${(response.body["took"] / 1000).toFixed(3)}s.`);
+		console.info(`Received ${(aggregations["buckets"]?.length) || hits.length} buckets in ${(response.body["took"] / 1000).toFixed(3)}s.`);
 	}
 
 	return {
@@ -103,7 +103,7 @@ function transformFields({ filters, fields }) {
 										[`${key}.keyword`]: value
 									}
 								},
-								...value.map(value => ({ "match_phrase": { [key]: value } }))
+								...value.map((value) => ({ "match_phrase": { [key]: value } }))
 							],
 							"minimum_should_match": 1
 						}
@@ -163,25 +163,31 @@ function transformFields({ filters, fields }) {
 				});
 
 				return [
-					[key, {
-						"terms": {
-							"field": key + ".keyword",
-							"order": { "_key": "asc" },
-							"size": TERMS_LIMIT
+					[
+						key,
+						{
+							"terms": {
+								"field": key + ".keyword",
+								"order": { "_key": "asc" },
+								"size": TERMS_LIMIT
+							}
 						}
-					}]
+					]
 				];
 			});
 		}
 
 		return [
-			[field, {
-				"terms": {
-					"field": field + ".keyword",
-					"order": "asc" //{ "_key": "asc" },
-					//"size": TERMS_LIMIT
+			[
+				field,
+				{
+					"terms": {
+						"field": field + ".keyword",
+						"order": "asc" //{ "_key": "asc" },
+						//"size": TERMS_LIMIT
+					}
 				}
-			}]
+			]
 		];
 	}));
 
@@ -193,8 +199,7 @@ function transformFields({ filters, fields }) {
 			.filter((f) => f.range)
 			.flatMap((f) => Object.entries(f.range)
 				.filter(([, v]) => Object.values(v).some((n) => typeof n === "number"))
-				.map(([k]) => k)
-			)
+				.map(([k]) => k))
 	);
 
 	for (const [key, value] of Object.entries(fields)) {
@@ -212,7 +217,7 @@ function transformFields({ filters, fields }) {
 }
 
 // Yields pages of [key, count] entries for a single field
-async function* streamFieldBuckets(client: Client, { index, field, value, filters, range, size = 1000, ...options }) {
+async function *streamFieldBuckets(client: Client, { index, field, value, filters, range, size = 1000, ...options }) {
 	let afterKey, buckets;
 
 	do {
@@ -245,10 +250,10 @@ async function* streamFieldBuckets(client: Client, { index, field, value, filter
 	} while (afterKey !== undefined);
 }
 
-export async function* streamUniqueFieldValues(client: Client, { index, range = undefined, /* filters = undefined, filter = undefined, */ fields = undefined, size = 1000, ...options }) {
+export async function *streamUniqueFieldValues(client: Client, { index, range = undefined, /* filters = undefined, filter = undefined, */ fields = undefined, size = 1000, ...options }) {
 	let filters;
 
-	({ filters, fields } = transformFields({ filters, fields }));
+	({ filters, fields } = transformFields({ "filters": filters, "fields": fields }));
 
 	// For each field, yield tagged pages as they arrive
 	for (const [field, value] of Object.entries(fields)) {
@@ -261,7 +266,7 @@ export async function* streamUniqueFieldValues(client: Client, { index, range = 
 			"size": size,
 			...options
 		})) {
-			yield { field, page };
+			yield { "field": field, "page": page };
 		}
 	}
 }
@@ -270,7 +275,7 @@ export async function* streamUniqueFieldValues(client: Client, { index, range = 
 export async function getUniqueFieldValues(client: Client, { index, range = undefined, /* filters = undefined, filter = undefined, */ fields = undefined, size = 1000, ...options }) {
 	let filters;
 
-	({ filters, fields } = transformFields({ filters, fields }));
+	({ filters, fields } = transformFields({ "filters": filters, "fields": fields }));
 
 	// TODO: Replace with `mapEntries()`
 	const results = await Promise.all(Object.entries(fields).map(async function([field, value]) {
@@ -300,9 +305,9 @@ export async function getUniqueFieldValues(client: Client, { index, range = unde
 export async function getUniqueFieldCombinations(client: Client, { index, range = undefined, /* filters = undefined, filter = undefined, */ fields = undefined, size = 1000, ...options }) {
 	const results = [];
 
-	let filters, afterKey;
+	let afterKey, filters;
 
-	({ filters, fields } = transformFields({ "filters": undefined, fields }));
+	({ filters, fields } = transformFields({ "filters": undefined, "fields": fields }));
 
 	// Convert transformFields output to composite sources format
 	const sources = Object.entries(fields).map(([key, value]) => ({
@@ -338,16 +343,16 @@ export async function getUniqueFieldCombinations(client: Client, { index, range 
 
 		({ "aggregations": { "composite_terms": { buckets, "after_key": afterKey } } } = body);
 
-		results.push(...buckets.map(({ key, doc_count }) => ({ ...key, doc_count })));
+		results.push(...buckets.map(({ key, doc_count }) => ({ ...key, "doc_count": doc_count })));
 	} while (afterKey !== undefined);
 
 	return results;
 }
 
-export async function* streamSearch(client: Client, { index = undefined, range = undefined, /* filters = undefined, */ fields = undefined, size = 1000, ...options } = {}) {
+export async function *streamSearch(client: Client, { index = undefined, range = undefined, /* filters = undefined, */ fields = undefined, size = 1000, ...options } = {}) {
 	let filters;
 
-	({ filters, fields } = transformFields({ filters, fields }));
+	({ filters, fields } = transformFields({ "filters": filters, "fields": fields }));
 
 	const sort = [{ "@timestamp": "asc" }];
 
@@ -380,10 +385,10 @@ export async function* streamSearch(client: Client, { index = undefined, range =
 	} while (true);
 }
 
-export async function* streamScrollSearch(client: Client, { index = undefined, range = undefined, /* filters = undefined, */ fields = undefined, scroll = "2m", size = 1000, ...options } = {}) {
+export async function *streamScrollSearch(client: Client, { index = undefined, range = undefined, /* filters = undefined, */ fields = undefined, scroll = "2m", size = 1000, ...options } = {}) {
 	let filters;
 
-	({ filters, fields } = transformFields({ filters, fields }));
+	({ filters, fields } = transformFields({ "filters": filters, "fields": fields }));
 
 	// Preflight
 
@@ -401,7 +406,7 @@ export async function* streamScrollSearch(client: Client, { index = undefined, r
 		return;
 	}
 
-	let { "body": { "_scroll_id": scrollId, "took": took }, hits } = await _search(client, {
+	let { "body": { "_scroll_id": scrollId, took }, hits } = await _search(client, {
 		...options,
 		"index": index,
 		"filters": filters,
@@ -461,12 +466,12 @@ export async function scrollSearch(client: Client, { index = undefined, range = 
 	const results = [];
 
 	for await (const hits of streamScrollSearch(client, {
-		index,
-		range,
+		"index": index,
+		"range": range,
 		/* filters = undefined, */
-		fields,
-		scroll,
-		size,
+		"fields": fields,
+		"scroll": scroll,
+		"size": size,
 		...options
 	})) {
 		results.push(...hits);

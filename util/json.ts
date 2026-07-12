@@ -33,11 +33,7 @@ function serialize(
 	const encoder = new TextEncoder();
 	const chunks: Uint8Array[] = [];
 
-	const indent = typeof space === "number"
-		? " ".repeat(Math.min(10, space))
-		: typeof space === "string"
-			? space.slice(0, 10)
-			: "";
+	const indent = typeof space === "number" ? " ".repeat(Math.min(10, space)) : typeof space === "string" ? space.slice(0, 10) : "";
 
 	const propertyList = Array.isArray(replacer) ? replacer.map(String) : null;
 	const replacerFn = typeof replacer === "function" ? replacer : null;
@@ -103,14 +99,14 @@ function serialize(
 				const len = value.length;
 
 				for (let i = 0; i < len; i++) {
-					if (i > 0) chunks.push(encoder.encode(","));
-					if (indent) chunks.push(encoder.encode(step));
+					if (i > 0) { chunks.push(encoder.encode(",")); }
+					if (indent) { chunks.push(encoder.encode(step)); }
 					const ok = str(String(i), value, depth + 1);
 
-					if (!ok) chunks.push(encoder.encode("null"));
+					if (!ok) { chunks.push(encoder.encode("null")); }
 				}
 
-				if (indent && len > 0) chunks.push(encoder.encode(stepEnd));
+				if (indent && len > 0) { chunks.push(encoder.encode(stepEnd)); }
 				chunks.push(encoder.encode("]"));
 			} else {
 				chunks.push(encoder.encode("{"));
@@ -120,25 +116,25 @@ function serialize(
 				for (const k of keys) {
 					let subValue = value[k];
 
-					if (replacerFn) subValue = replacerFn.call(value, k, subValue);
+					if (replacerFn) { subValue = replacerFn.call(value, k, subValue); }
 
 					if (subValue === undefined || typeof subValue === "function" || typeof subValue === "symbol") {
 						continue;
 					}
 
-					if (!first) chunks.push(encoder.encode(","));
-					if (indent) chunks.push(encoder.encode(step));
+					if (!first) { chunks.push(encoder.encode(",")); }
+					if (indent) { chunks.push(encoder.encode(step)); }
 					chunks.push(encoder.encode(`"${escapeString(k)}"`));
 					chunks.push(encoder.encode(indent ? ": " : ":"));
 
 					const ok = str(k, value, depth + 1);
 
-					if (!ok) chunks.push(encoder.encode("null"));
+					if (!ok) { chunks.push(encoder.encode("null")); }
 
 					first = false;
 				}
 
-				if (indent && !first) chunks.push(encoder.encode(stepEnd));
+				if (indent && !first) { chunks.push(encoder.encode(stepEnd)); }
 				chunks.push(encoder.encode("}"));
 			}
 
@@ -153,7 +149,7 @@ function serialize(
 	const topLevel = { "": value };
 	const ok = str("", topLevel, 0);
 
-	if (!ok) throw new TypeError("Value is not JSON serializable");
+	if (!ok) { throw new TypeError("Value is not JSON serializable"); }
 
 	return chunks;
 }

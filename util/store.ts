@@ -1,17 +1,18 @@
-import * as fs from "fs";
-import * as path from "path";
+import * as fs from "node:fs";
+import * as path from "node:path";
 import { isBrowser } from "./env";
 
 // FROM: https://github.com/zaaack/keyv-file/blob/master/src/index.ts#L42
 export class PersistentStore {
-	private options = {
+	private readonly options = {
 		"deserialize": JSON.parse,
 		"expiredCheckDelay": 24 * 3600 * 1000, // ms
 		"filename": `.cache/keyv-file.json`,
-		"serialize": (value) => JSON.stringify(value, undefined, 4),
+		"serialize": (value) => JSON.stringify(value, undefined, 2),
 		"writeDelay": 100, // ms
 		"checkFileLock": false
 	};
+
 	private _cache: object;
 	private _lastExpire: number;
 
@@ -20,13 +21,15 @@ export class PersistentStore {
 		if (!isBrowser && this.options.checkFileLock) {
 			this.acquireFileLock();
 		}
+
 		try {
 			const data = this.options.deserialize(
 				fs.readFileSync(this.options.filename, "utf8")
 			);
+
 			this._cache = data.cache;
 			this._lastExpire = data.lastExpire;
-		} catch (e) {
+		} catch (error) {
 			this._cache = {};
 			this._lastExpire = Date.now();
 		}
@@ -38,7 +41,8 @@ export class PersistentStore {
 
 	acquireFileLock() {
 		try {
-			let fd = fs.openSync(this._lockFile, "wx");
+			const fd = fs.openSync(this._lockFile, "wx");
+
 			fs.closeSync(fd);
 
 			process.on("SIGINT", () => {
@@ -62,21 +66,29 @@ export class PersistentStore {
 
 	public has(key: string) {
 		const data = this._cache[key];
-		if (!data) return false;
+
+		if (!data) {
+			return false;
+		}
+
 		if (this.isExpired(data)) {
 			delete this._cache[key];
 			void this.save();
+
 			return false;
 		}
+
 		return true;
 	}
 
 	public get(key: string) {
 		try {
 			const data = this._cache[key];
+
 			if (this.isExpired(data)) {
 				delete this._cache[key];
 			}
+
 			return data?.value;
 		} catch (error) {}
 	}
@@ -85,23 +97,25 @@ export class PersistentStore {
 		if (ttl === 0) {
 			ttl = undefined;
 		}
+
 		this._cache[key] = {
 			"expire": typeof ttl === "number" ? Date.now() + ttl : undefined,
-			"value": value as any
+			"value": value
 		};
+
 		return this.save();
 	}
 
 	public *keys() {
 		this.clearExpire();
 
-		for (const [key] of Object.entries(this._cache)) yield key;
+		for (const [key] of Object.entries(this._cache)) { yield key; }
 	}
 
 	public *values() {
 		this.clearExpire();
 
-		for (const [, entry] of Object.entries(this._cache)) yield entry.value;
+		for (const [, entry] of Object.entries(this._cache)) { yield entry.value; }
 	}
 
 	public *entries() {
@@ -122,14 +136,17 @@ export class PersistentStore {
 
 	private clearExpire() {
 		const now = Date.now();
+
 		if (now - this._lastExpire <= this.options.expiredCheckDelay) {
 			return;
 		}
+
 		for (const [key, value] of Object.entries(this._cache)) {
 			if (this.isExpired(value)) {
 				delete this._cache[key];
 			}
 		}
+
 		this._lastExpire = now;
 	}
 
@@ -165,6 +182,7 @@ export class PersistentStore {
 		if (this._savePromise) {
 			return this._savePromise;
 		}
+
 		this._savePromise = isBrowser ? Promise.resolve() : new Promise<void>((resolve, reject) => {
 			setTimeout(() => {
 				this.saveToDisk()
@@ -174,6 +192,7 @@ export class PersistentStore {
 					});
 			}, this.options.writeDelay);
 		});
+
 		return this._savePromise;
 	}
 }
