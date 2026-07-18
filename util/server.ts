@@ -1,8 +1,8 @@
 import * as http from "node:http";
 import * as path from "node:path";
+import * as fs from "@brianjenkins94/util/fs";
 import mime from "mime/lite";
 import { match, pathToRegexp } from "path-to-regexp";
-import * as fs from "@brianjenkins94/util/fs";
 
 import { render } from "./render";
 
@@ -102,6 +102,9 @@ export function createServer(router = {}) {
 		},
 		"post": function(route, handler) {
 			router["POST " + route] = handler;
+		},
+		"delete": function(route, handler) {
+			router["DELETE " + route] = handler;
 		},
 		"listen": function(port: number, callback?: () => void) {
 			return server.listen(port, callback);
