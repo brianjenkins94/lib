@@ -73,7 +73,7 @@ import getTelemetryServiceOverride from '@codingame/monaco-vscode-telemetry-serv
 import getProcessControllerServiceOverride from '@codingame/monaco-vscode-process-explorer-service-override'
 import getImageResizeServiceOverride from '@codingame/monaco-vscode-image-resize-service-override'
 import getAssignmentServiceOverride from '@codingame/monaco-vscode-assignment-service-override'
-import getViewsServiceOverride, { isEditorPartVisible, Parts, onPartVisibilityChange, isPartVisibile as isPartVisible, attachPart, onDidChangeSideBarPosition } from '@codingame/monaco-vscode-views-service-override'
+import getViewsServiceOverride, { isEditorPartVisible, Parts, onPartVisibilityChange, isPartVisibile as isPartVisible, attachPart, onDidChangeSideBarPosition, registerCustomView, ViewContainerLocation } from '@codingame/monaco-vscode-views-service-override'
 import getQuickAccessServiceOverride from '@codingame/monaco-vscode-quickaccess-service-override'
 import { registerExtension, ExtensionHostKind } from '@codingame/monaco-vscode-api/extensions'
 import { setUnexpectedErrorHandler } from '@codingame/monaco-vscode-api/monaco'
@@ -476,6 +476,11 @@ export async function boot(options: BootOptions): Promise<void> {
 // Re-exported so the consumer (games) can register its own extension(s) and set the default API:
 //   registerExtension({ name, publisher, version, engines }, ExtensionHostKind.LocalProcess).setAsDefaultApi()
 export { ExtensionHostKind, registerExtension, registerFileSystemOverlay }
+
+// Custom views re-exported so a consumer can render arbitrary DOM into a view (renderBody) placed in the
+// sidebar / panel / auxiliary bar (ViewContainerLocation) — real DOM, not a sandboxed webview iframe, so it
+// composites everywhere. (silo's review burndown; mirrors the @codingame demo's customView feature.)
+export { registerCustomView, ViewContainerLocation } from '@codingame/monaco-vscode-views-service-override'
 
 // Filesystem primitives re-exported so consumers can build + register custom overlay providers
 // (e.g. games' CDN-backed node_modules resolver) without depending on @codingame packages directly.
