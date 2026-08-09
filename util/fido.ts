@@ -1,16 +1,7 @@
 import * as util from "node:util";
 import { Bottleneck } from "@brianjenkins94/util/bottleneck";
+import { log } from "./logger";
 import { PersistentStore } from "./store";
-
-function flush(buffer, callback) {
-	for (let x = 0; x < buffer.length; x++) {
-		if (x % 2 === 0) {
-			callback("--> " + buffer[x].join("\n--> "));
-		} else {
-			callback("\n<-- " + buffer[x].join("\n<-- ") + "\n");
-		}
-	}
-}
 
 let SaxesParser;
 
@@ -140,9 +131,7 @@ function extendedFetch(url, { cache, cacheKey, debug, fetch, limiter, retry, ...
 	return new Promise(function(resolve, reject) {
 		const requestBuffer = [];
 
-		if (debug) {
-			requestBuffer.push(options["method"].toUpperCase() + " " + (url instanceof Request ? url.url : url));
-		}
+		const summary = options["method"].toUpperCase() + " " + (url instanceof Request ? url.url : url);
 
 		if (debug && options["headers"]?.["Content-Type"] !== undefined) {
 			for (const header of ["Content-Type"]) {
@@ -183,91 +172,101 @@ function extendedFetch(url, { cache, cacheKey, debug, fetch, limiter, retry, ...
 				return;
 			}
 
-			limiter.schedule(function() {
+			limiter.schedule(async function() {
 				const responseBuffer = [];
 
-				return fetch(url, options)
-					.then(async function(response) {
-						if (debug) {
-							responseBuffer.push("HTTP " + String(response.status) + " " + response.statusText);
+				using span = debug ? log.span(summary) : undefined;
 
-							for (const header of ["Content-Length", "Content-Type", "Retry-After", "Server", "X-Powered-By", /Rate-Limit/ui]) {
-								if (header instanceof RegExp) {
-									for (const [key, value] of response.headers) {
-										if (header.test(key)) {
-											responseBuffer.push(key.replace(/(^\w|-\w)/gu, (match) => match.toUpperCase()) + ": " + value);
-										}
+				if (debug) {
+					for (const line of requestBuffer) {
+						span.debug(line);
+					}
+				}
+
+				try {
+					const response = await fetch(url, options);
+
+					if (debug) {
+						responseBuffer.push("HTTP " + String(response.status) + " " + response.statusText);
+
+						for (const header of ["Content-Length", "Content-Type", "Retry-After", "Server", "X-Powered-By", /Rate-Limit/ui]) {
+							if (header instanceof RegExp) {
+								for (const [key, value] of response.headers) {
+									if (header.test(key)) {
+										responseBuffer.push(key.replace(/(^\w|-\w)/gu, (match) => match.toUpperCase()) + ": " + value);
 									}
-								} else if (response.headers.has(header)) {
-									responseBuffer.push(header + ": " + response.headers.get(header));
 								}
+							} else if (response.headers.has(header)) {
+								responseBuffer.push(header + ": " + response.headers.get(header));
 							}
 						}
+					}
 
-						if (response.status >= 400 && response.status < 500) {
-							responseBuffer.push("Request failed with " + (String(response.status) + " " + response.statusText).trim());
+					if (response.status >= 400 && response.status < 500) {
+						responseBuffer.push("Request failed with " + (String(response.status) + " " + response.statusText).trim());
 
-							const body = await attemptParse(response.clone());
+						const body = await attemptParse(response.clone());
 
-							if (debug && body !== undefined) {
-								responseBuffer.push(...util.inspect(body, { "compact": false }).split("\n"));
-							}
-
-							if (retry === true || (typeof retry === "function" && retry(options))) {
-								responseBuffer.push("Retrying...");
-
-								const error = new Error("Response status code: " + response.status);
-
-								error["request"] = {
-									"body": options["body"],
-									"headers": options["headers"],
-									"method": options["method"],
-									"url": url
-								};
-
-								error["response"] = {
-									"body": body,
-									"headers": response.headers,
-									"ok": response.ok,
-									"redirected": response.redirected,
-									"status": response.status,
-									"statusText": response.statusText,
-									"type": response.type,
-									"url": response.url
-								};
-
-								throw error;
-							}
-						} else {
-							const body = await attemptParse(response.clone());
-
-							if (debug && body !== undefined) {
-								responseBuffer.push(...util.inspect(body, { "compact": false }).split("\n"));
-							}
-
-							if (response.ok && cache && cacheHeader !== undefined && [true, "reload", "no-cache", "force-cache"].includes(cacheHeader)) {
-								cache.set(cacheKey, {
-									"body": body,
-									"status": response.status,
-									"url": response.url
-								});
-							}
+						if (debug && body !== undefined) {
+							responseBuffer.push(...util.inspect(body, { "compact": false }).split("\n"));
 						}
 
-						resolve(response);
+						if (retry === true || (typeof retry === "function" && retry(options))) {
+							responseBuffer.push("Retrying...");
 
-						flush([requestBuffer, responseBuffer], console.log);
-					})
-					.catch(function(error) {
-						if (debug) {
-							responseBuffer.push(error.toString());
+							const error = new Error("Response status code: " + response.status);
+
+							error["request"] = {
+								"body": options["body"],
+								"headers": options["headers"],
+								"method": options["method"],
+								"url": url
+							};
+
+							error["response"] = {
+								"body": body,
+								"headers": response.headers,
+								"ok": response.ok,
+								"redirected": response.redirected,
+								"status": response.status,
+								"statusText": response.statusText,
+								"type": response.type,
+								"url": response.url
+							};
+
+							throw error;
+						}
+					} else {
+						const body = await attemptParse(response.clone());
+
+						if (debug && body !== undefined) {
+							responseBuffer.push(...util.inspect(body, { "compact": false }).split("\n"));
 						}
 
-						flush([requestBuffer, responseBuffer], console.log);
+						if (response.ok && cache && cacheHeader !== undefined && [true, "reload", "no-cache", "force-cache"].includes(cacheHeader)) {
+							cache.set(cacheKey, {
+								"body": body,
+								"status": response.status,
+								"url": response.url
+							});
+						}
+					}
 
-						throw error;
-					});
-			});
+					resolve(response);
+				} catch (error) {
+					if (debug) {
+						responseBuffer.push(error.toString());
+					}
+
+					throw error;
+				} finally {
+					if (debug) {
+						for (const line of responseBuffer) {
+							span.debug(line);
+						}
+					}
+				}
+			}).catch(reject);
 		});
 	});
 }
@@ -285,7 +284,7 @@ let limiter;
 
 function fetchFactory(baseUrl?, defaultOptions = {}) {
 	defaultOptions["fetch"] ??= globalThis.fetch;
-	defaultOptions["retry"] ??= ({ method }) => method === "get";
+	defaultOptions["retry"] ??= ({ method }) => method.toLowerCase() === "get";
 	defaultOptions["headers"] ??= {};
 	defaultOptions["debug"] ??= process.env["NODE_ENV"] !== "production";
 
@@ -308,14 +307,19 @@ function fetchFactory(baseUrl?, defaultOptions = {}) {
 	defaultOptions["limiter"] ??= limiter;
 
 	if (defaultOptions["limiter"] instanceof Bottleneck && defaultOptions["retry"]) {
-		defaultOptions["limiter"].on("failed", function(error, { "options": { id }, retryCount }) {
+		defaultOptions["limiter"].retryHandler = function(error, { "options": { id }, retryCount }) {
 			const { request, response } = error;
 
-			if (defaultOptions["retry"] === false || (typeof defaultOptions["retry"] === "function" && defaultOptions["retry"]({ "method": request.method }) === false)) {
-				throw error;
+			// Not a fido-shaped HTTP error (e.g. a network rejection)
+			if (request === undefined || response === undefined) {
+				return undefined;
 			}
 
-			let [header, reset] = response.headers.find(([header]) => /Rate-Limit-(After|Reset)/ui.test(header)) ?? [];
+			if (defaultOptions["retry"] === false || (typeof defaultOptions["retry"] === "function" && defaultOptions["retry"]({ "method": request.method }) === false)) {
+				return undefined;
+			}
+
+			let [header, reset] = [...response.headers].find(([header]) => /Rate-Limit-(After|Reset)/ui.test(header)) ?? [];
 
 			reset *= 1000;
 
@@ -328,9 +332,9 @@ function fetchFactory(baseUrl?, defaultOptions = {}) {
 
 				return (reset || (2 ** (retryCount + 1)) * 1000) + jitter;
 			} else {
-				throw error;
+				return undefined;
 			}
-		});
+		};
 	}
 
 	return async function(url, query?, options = {}) {

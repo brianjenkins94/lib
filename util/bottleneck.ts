@@ -12,9 +12,9 @@ const NUM_PRIORITIES = 10;
 
 const DEFAULT_PRIORITY = 5;
 
-class Job extends EventEmitter {
-	constructor(task, args, options, rejectOnDrop, _states) {
-		super();
+class Job {
+	constructor(limiter, task, args, options, rejectOnDrop, _states) {
+		this.limiter = limiter;
 		this.task = task;
 		this.args = args;
 		this.rejectOnDrop = rejectOnDrop;
@@ -59,7 +59,7 @@ class Job extends EventEmitter {
 			if (this.rejectOnDrop) {
 				this._reject(error != null ? error : new Error(message));
 			}
-			this.emit("dropped", {
+			this.limiter.emit("dropped", {
 				args: this.args,
 				options: this.options,
 				task: this.task,
@@ -80,7 +80,7 @@ class Job extends EventEmitter {
 
 	doReceive() {
 		this._states.start(this.options.id);
-		return this.emit("received", {
+		return this.limiter.emit("received", {
 			args: this.args,
 			options: this.options
 		});
@@ -89,7 +89,7 @@ class Job extends EventEmitter {
 	doQueue(reachedHWM, blocked) {
 		this._assertStatus("RECEIVED");
 		this._states.next(this.options.id);
-		return this.emit("queued", {
+		return this.limiter.emit("queued", {
 			args: this.args,
 			options: this.options,
 			reachedHWM,
@@ -104,7 +104,7 @@ class Job extends EventEmitter {
 		} else {
 			this._assertStatus("EXECUTING");
 		}
-		return this.emit("scheduled", {
+		return this.limiter.emit("scheduled", {
 			args: this.args,
 			options: this.options
 		});
@@ -122,7 +122,7 @@ class Job extends EventEmitter {
 			options: this.options,
 			retryCount: this.retryCount
 		};
-		this.emit("executing", eventInfo);
+		this.limiter.emit("executing", eventInfo);
 		try {
 			const passed = (await (chained != null ? chained.schedule(this.options, this.task, ...this.args) : this.task(...this.args)));
 			if (clearGlobalState()) {
@@ -152,10 +152,22 @@ class Job extends EventEmitter {
 
 	async _onFailure(error, eventInfo, clearGlobalState, run, free) {
 		if (clearGlobalState()) {
-			const retry = (await this.emit("failed", error, eventInfo));
-			if (retry != null) {
+			// Notify observers of the failure, then consult the retry callback for the control decision.
+			// (emit is a fire-and-forget notifier; the retry delay comes from limiter.retryHandler, not
+			// from emit's return value — see util/events.ts EventEmitter.)
+			this.limiter.emit("failed", error, eventInfo);
+
+			let retry;
+
+			try {
+				retry = await this.limiter.retryHandler?.(error, eventInfo);
+			} catch (handlerError) {
+				this.limiter.emit("error", handlerError);
+			}
+
+			if (typeof retry === "number") {
 				const retryAfter = ~~retry;
-				this.emit("retry", `Retrying ${this.options.id} after ${retryAfter} ms`, eventInfo);
+				this.limiter.emit("retry", `Retrying ${this.options.id} after ${retryAfter} ms`, eventInfo);
 				this.retryCount++;
 				return run(retryAfter);
 			} else {
@@ -170,7 +182,7 @@ class Job extends EventEmitter {
 	doDone(eventInfo) {
 		this._assertStatus("EXECUTING");
 		this._states.next(this.options.id);
-		return this.emit("done", eventInfo);
+		return this.limiter.emit("done", eventInfo);
 	}
 };
 
@@ -424,6 +436,8 @@ export class Bottleneck extends EventEmitter {
 		this.id = options.id ?? "<no-id>",
 		this.rejectOnDrop = options.rejectOnDrop ?? true,
 		this.trackDoneStatus = options.trackDoneStatus ?? false
+
+		this.retryHandler = options.retryHandler ?? null
 
 		this._queues = Array.from({ length: NUM_PRIORITIES }, () => []);
 		this._queuesLength = 0;
@@ -692,7 +706,7 @@ export class Bottleneck extends EventEmitter {
 		} else {
 			[options, task, ...args] = args;
 		}
-		job = new Job(task, args, options, this.rejectOnDrop, this._states);
+		job = new Job(this, task, args, options, this.rejectOnDrop, this._states);
 		this._receive(job);
 		return job.promise;
 	}
