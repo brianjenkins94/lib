@@ -8,8 +8,8 @@ import type { ViteDevServer } from "vite";
 import http from "node:http";
 import * as path from "node:path";
 import * as url from "node:url";
-import { createServer as createViteServer } from "vite";
 import * as fs from "@brianjenkins94/util/fs";
+import { createServer as createViteServer } from "vite";
 
 /**
  * The shared Vite dev server (middleware mode, custom appType) — one per process. This is the base

@@ -1,8 +1,8 @@
 import type { InlineConfig } from "vite";
 import * as path from "node:path";
 import * as url from "node:url";
-import { build, mergeConfig } from "vite";
 import * as fs from "@brianjenkins94/util/fs";
+import { build, mergeConfig } from "vite";
 import { defaults } from "./defaults";
 
 export { defaults };

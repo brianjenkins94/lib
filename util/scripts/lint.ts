@@ -1,6 +1,6 @@
 import * as url from "node:url";
-import { ESLint } from "eslint";
 import * as fs from "@brianjenkins94/util/fs";
+import { ESLint } from "eslint";
 
 /**
  * The `util-lint` bin. Run from a package directory (`"lint": "util-lint"`, or

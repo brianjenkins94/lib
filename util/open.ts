@@ -4,10 +4,10 @@ import type { SpawnOptionsWithoutStdio } from "node:child_process";
 import { spawn } from "node:child_process";
 import * as path from "node:path";
 import { unescape } from "node:querystring";
-import mime from "mime/lite";
-import { __root } from "./env";
-
 import * as fs from "@brianjenkins94/util/fs";
+import mime from "mime/lite";
+
+import { __root } from "./env";
 import { createServer } from "./server";
 
 // SOURCE: https://github.com/sindresorhus/open/blob/main/index.js

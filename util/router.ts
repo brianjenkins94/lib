@@ -1,7 +1,7 @@
 import * as path from "node:path";
 import * as url from "node:url";
-import { mapAsync } from "./array";
 import * as fs from "@brianjenkins94/util/fs";
+import { mapAsync } from "./array";
 import { getViteDevServer as getBaseViteDevServer } from "./vite/dev";
 
 let watcherAttached = false;

@@ -1,10 +1,10 @@
 import { spawn } from "node:child_process";
 import * as path from "node:path";
 import { createGunzip, createGzip } from "node:zlib";
-import tarStream from "tar-stream";
-import * as vite from "vite";
 import { isCI } from "@brianjenkins94/util/env";
 import * as fs from "@brianjenkins94/util/fs";
+import tarStream from "tar-stream";
+import * as vite from "vite";
 import { build } from "./build";
 
 // util-publish runs in whatever repo invokes it (silo, lib, …) — the root is the cwd, not util's dir.
