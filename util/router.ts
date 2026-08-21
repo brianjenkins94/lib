@@ -132,12 +132,8 @@ export async function bind(targets, routeMap) {
 			if (targets.http !== undefined) {
 				const middlewares = module["middlewares"] ?? [];
 
-				for (const [exportName] of Object.entries(module)) {
+				for (const [exportName] of Object.entries(module).filter(([name]) => VERB.test(name))) {
 					let [method] = VERB.exec(exportName) ?? [];
-
-					if (method === undefined) {
-						continue;
-					}
 
 					if (exportName === "del") {
 						method = "delete";
@@ -174,7 +170,7 @@ export async function bind(targets, routeMap) {
 			}
 
 			// --- MCP: a `tool` object export ---
-			const tool = module["tool"];
+			const { tool } = module;
 
 			if (tool !== undefined && targets.mcp !== undefined) {
 				if (/\[[^\]]+\]/u.test(relativePath)) {
