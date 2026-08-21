@@ -1,5 +1,6 @@
 import * as http from "node:http";
 import * as path from "node:path";
+import { log } from "./logger";
 import * as fs from "@brianjenkins94/util/fs";
 import mime from "mime/lite";
 import { match, pathToRegexp } from "path-to-regexp";
@@ -8,12 +9,13 @@ import { render } from "./render";
 
 export function createServer(router = {}) {
 	const server = http.createServer(async function(request, response) {
-		const startTime = performance.now();
-
 		const originalUrl = request.url;
 
+		// One span per request: it times the exchange and any logging during the request nests under it.
+		const span = log.span(request.method + " " + originalUrl);
+
 		response.on("finish", function() {
-			console.log(request.method, originalUrl, response.statusCode, (performance.now() - startTime).toFixed(3), "ms");
+			span.end({ "status": response.statusCode });
 		});
 
 		let statusCode = 404;

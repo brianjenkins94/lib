@@ -3,6 +3,7 @@
 import type { SpawnOptionsWithoutStdio } from "node:child_process";
 import { spawn } from "node:child_process";
 import * as path from "node:path";
+import { log } from "./logger";
 import { unescape } from "node:querystring";
 import * as fs from "@brianjenkins94/util/fs";
 import mime from "mime/lite";
@@ -141,7 +142,7 @@ async function serve() {
 	});
 
 	server.listen(parseInt(new URL(BASE_URL).port), function() {
-		console.log("> Ready on " + BASE_URL);
+		log.info("Ready on " + BASE_URL);
 
 		open(BASE_URL);
 	});

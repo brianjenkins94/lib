@@ -1,4 +1,5 @@
 import * as clack from "@clack/prompts";
+import { print } from "./logger";
 
 export * from "@clack/prompts";
 export { default as color } from "picocolors";
@@ -6,7 +7,7 @@ export { default as color } from "picocolors";
 export function cancel(message = "Operation cancelled.", code = 0) {
 	clack.log.error(message);
 
-	console.log();
+	print();
 
 	process.exit(code);
 }

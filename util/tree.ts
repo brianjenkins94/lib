@@ -1,4 +1,5 @@
 import * as path from "node:path";
+import { print } from "./logger";
 import * as fs from "@brianjenkins94/util/fs";
 
 async function readdir(directory) {
@@ -38,7 +39,7 @@ const SYMBOLS = {
 
 export async function tree(cwd = process.cwd(), preface = []) {
 	if (preface.length === 0) {
-		console.log(path.basename(cwd));
+		print(path.basename(cwd));
 	}
 
 	const { directories, files } = await readdir(cwd);
@@ -46,7 +47,7 @@ export async function tree(cwd = process.cwd(), preface = []) {
 	for (const directory of directories) {
 		const isLast = directories.indexOf(directory) === directories.length - 1 && files.length === 0;
 
-		console.log([...preface, isLast ? SYMBOLS.LAST_BRANCH : SYMBOLS.BRANCH].join("") + directory);
+		print([...preface, isLast ? SYMBOLS.LAST_BRANCH : SYMBOLS.BRANCH].join("") + directory);
 
 		await tree(path.join(cwd, directory), [...preface, isLast ? SYMBOLS.INDENT : SYMBOLS.VERTICAL]);
 	}
@@ -54,7 +55,7 @@ export async function tree(cwd = process.cwd(), preface = []) {
 	for (const file of files) {
 		const isLast = files.indexOf(file) === files.length - 1;
 
-		console.log([...preface, isLast ? SYMBOLS.LAST_BRANCH : SYMBOLS.BRANCH].join("") + file);
+		print([...preface, isLast ? SYMBOLS.LAST_BRANCH : SYMBOLS.BRANCH].join("") + file);
 	}
 }
 

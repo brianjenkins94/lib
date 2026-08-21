@@ -1,5 +1,6 @@
 import type { InlineConfig } from "vite";
 import * as path from "node:path";
+import { log } from "@brianjenkins94/util/logger";
 import * as url from "node:url";
 import * as fs from "@brianjenkins94/util/fs";
 import { build, mergeConfig } from "vite";
@@ -35,6 +36,10 @@ export interface BuildAppOptions {
  */
 export async function buildApp(appRoot: string, repoRoot: string, options: BuildAppOptions = {}): Promise<void> {
 	const name = path.basename(appRoot);
+
+	// Span the build so its duration is reported; the outcome is a nested line.
+	using span = log.span("build", { "name": name });
+
 	const files = await fs.readdir(appRoot);
 	const input = files.filter((file) => file.endsWith(".html")).map((file) => path.resolve(appRoot, file));
 	const isApp = input.length > 0;
@@ -61,18 +66,18 @@ export async function buildApp(appRoot: string, repoRoot: string, options: Build
 				}
 			}
 		}, options.overrides ?? {}));
-		console.log(`built ${name} → docs/${name}/`);
+		span.info("built app", { "output": `docs/${name}/` });
 	} else if (files.some((file) => /^vite\.config\.[mc]?[jt]s$/u.test(file))) {
 		// Library with its own vite.config — build it directly so the file config is
 		// authoritative. It inherits `defaults` itself (via mergeConfig) and may override
 		// them (e.g. `minify`); buildPackage's inline config would otherwise win and clobber.
 		await build({ "root": appRoot, "logLevel": "warn" });
 
-		console.log(`built ${name}`);
+		span.info("built library");
 	} else {
 		// No `.html` and no vite.config — nothing buildable here (this is also what runs
 		// when the file is invoked from a non-package dir, e.g. the repo root).
-		console.log(`nothing to build in ${name}`);
+		span.info("nothing to build");
 	}
 }
 

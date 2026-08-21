@@ -1,6 +1,7 @@
 import type { OAuth2Client, OAuth2Token } from "@badgateway/oauth2-client";
 import { OAuth2Fetch } from "@badgateway/oauth2-client";
 import * as fs from "@brianjenkins94/util/fs";
+import { print } from "@brianjenkins94/util/logger";
 import { createServer } from "@brianjenkins94/util/server";
 
 export function fetchWrapper(oauth2Client: OAuth2Client, { redirectUri = "http://localhost:3000/callback", scopes = [] }) {
@@ -36,7 +37,7 @@ export function fetchWrapper(oauth2Client: OAuth2Client, { redirectUri = "http:/
 
 				server.listen(parseInt(new URL(redirectUri).port), function() {
 					// TODO: Use open() instead.
-					console.log(oauth2Client.settings.server + "?" + new URLSearchParams({
+					print(oauth2Client.settings.server + "?" + new URLSearchParams({
 						"access_type": "offline",
 						"prompt": "consent",
 						"response_type": "code",

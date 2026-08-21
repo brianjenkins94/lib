@@ -6,6 +6,7 @@
 
 import type { ViteDevServer } from "vite";
 import http from "node:http";
+import { log } from "@brianjenkins94/util/logger";
 import * as path from "node:path";
 import * as url from "node:url";
 import * as fs from "@brianjenkins94/util/fs";
@@ -81,5 +82,5 @@ export async function serve(appRoot: string, port = 5173): Promise<void> {
 				res.end(String((err as Error)?.stack ?? err));
 			}
 		});
-	}).listen(port, () => { console.log(`\n  ${path.basename(appRoot)} → http://localhost:${port}/\n`); });
+	}).listen(port, () => { log.info(`${path.basename(appRoot)} → http://localhost:${port}/`); });
 }

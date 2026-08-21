@@ -1,5 +1,6 @@
 import { spawn } from "node:child_process";
 import * as path from "node:path";
+import { log } from "@brianjenkins94/util/logger";
 import { createGunzip, createGzip } from "node:zlib";
 import { isCI } from "@brianjenkins94/util/env";
 import * as fs from "@brianjenkins94/util/fs";
@@ -72,6 +73,9 @@ for (const workspace of workspaces) {
 	if (packageJson["private"] === true) {
 		continue;   // never publish private packages (the monorepo root, example/fixture packages, …)
 	}
+
+	// One span per published workspace: times its build/version/tar work and nests the steps below.
+	using span = log.span("publish", { "workspace": workspace });
 
 	// Directories of workspaces nested UNDER this one — excluded from the source build so a parent
 	// (especially the repo root `.`) never ships a nested package's files. Absolute, for the .mjs/.cjs
@@ -203,7 +207,7 @@ for (const workspace of workspaces) {
 		const packageJson = JSON.parse(archiveFiles["package.json"]?.toString() ?? "{}");
 
 		archiveVersion = packageJson["version"];
-		console.log("archiveVersion for", workspace, ":", archiveVersion);
+		span.info("archiveVersion", { "version": archiveVersion });
 	}
 
 	// Drop `scripts` from the published archive — they're build/dev tooling, and a lifecycle
@@ -251,7 +255,7 @@ for (const workspace of workspaces) {
 
 	// Build every run; publish only when the emitted artifact differs from the last published one.
 	if (archiveFiles && Object.keys(files).length === Object.keys(archiveFiles).length && Object.entries(files).every(([key, value]) => archiveFiles[key] !== undefined && value.equals(archiveFiles[key]))) {
-		console.log("No changes for", workspace, "- skipping release");
+		span.info("No changes - skipping release");
 		continue;
 	}
 
@@ -261,12 +265,12 @@ for (const workspace of workspaces) {
 
 		version = [major, parseInt(minor) + 1, 0].join(".");
 		files["package.json"] = Buffer.from(buildPackageJson(version));
-		console.log("Bumping version for", workspace, ":", version);
+		span.info("Bumping version", { "version": version });
 	}
 
 	// Ensure a release exists for this package.
 	const isDraft = () => new Promise(function(resolve, reject) {
-		console.log("Checking if release draft exists for", workspace + "@" + version);
+		span.info("Checking for release draft", { "release": workspace + "@" + version });
 		const gh = spawn("gh", ["release", "view", workspace + "@" + version, "--json", "isDraft", "--jq", ".isDraft"]);
 
 		const chunks = [];
@@ -276,7 +280,7 @@ for (const workspace of workspaces) {
 		});
 
 		gh.on("close", function(code) {
-			console.log("gh release view exit code for", workspace, ":", code, "output:", Buffer.concat(chunks).toString());
+			span.info("gh release view", { "code": code, "output": Buffer.concat(chunks).toString() });
 			resolve(code === 0 && Buffer.concat(chunks).toString().trim() === "true");
 		});
 	});
@@ -302,12 +306,12 @@ for (const workspace of workspaces) {
 	const tarPath = path.join(outputDirectory, path.basename(workspace) + "@" + version + ".tgz");
 	const writeStream = fs.createWriteStream(tarPath);
 
-	console.log("Writing tar to:", tarPath);
+	span.info("Writing tar", { "path": tarPath });
 
 	writeStream.on("finish", async function() {
 		if (isCI) {
 			await fs.copyFile(tarPath, path.join(outputDirectory, path.basename(workspace) + "@latest.tgz"));
-			console.log("Copied to latest for", workspace);
+			span.info("Copied to latest");
 		}
 
 		// Also publish to the npm registry when a publishing token is present (so `npx @owner/pkg` works).

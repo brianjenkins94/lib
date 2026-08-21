@@ -1,4 +1,5 @@
 import { OAuth2Client } from "googleapis-common";
+import { log } from "@brianjenkins94/util/logger";
 import { drive as driveApi } from "googleapis/build/src/apis/drive";
 
 export class Drive {
@@ -89,7 +90,7 @@ export class Drive {
 			"supportsAllDrives": true
 		});
 
-		console.log(response);
+		log.debug("drive upload response", { "response": response });
 
 		return "https://drive.google.com/file/d/" + fileId + "/view?usp=sharing";
 	}

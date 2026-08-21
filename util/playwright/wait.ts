@@ -1,15 +1,16 @@
 import type { Page } from "playwright";
+import { log } from "@brianjenkins94/util/logger";
 
 import { sleep } from "@brianjenkins94/util/sleep";
 
 export function waitForNavigation(page: Page, targetUrl, options = { "timeout": 30_000 }) {
 	if (options["timeout"] === 0) {
 		return new Promise<void>(function recurse(resolve, reject) {
-			console.log("Waiting for navigation...");
+			log.debug("Waiting for navigation...");
 
 			setTimeout(function() {
 				if (page.url().startsWith(targetUrl)) {
-					console.log("Navigation success!");
+					log.debug("Navigation success!");
 
 					resolve();
 				} else {

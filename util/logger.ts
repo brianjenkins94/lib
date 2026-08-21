@@ -204,6 +204,9 @@ export class Span extends Logger {
 /** Root logger: `log.span(...)` opens a top-level span, `log.child(...)` binds context, `log.info(...)` logs at the root. */
 export const log = new Logger();
 
+/** Sugar for a context-bound sub-logger: `logger({ reqId })` === `log.child({ reqId })`. */
+export const logger = (context: Attrs): Logger => log.child(context);
+
 // ── Application output (the stdout counterpart to the stderr logger) ───────────────────────────--
 
 function toLine(args: unknown[]): string {

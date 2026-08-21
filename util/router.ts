@@ -2,7 +2,12 @@ import * as path from "node:path";
 import * as url from "node:url";
 import * as fs from "@brianjenkins94/util/fs";
 import { mapAsync } from "./array";
+import { logger } from "./logger";
 import { getViteDevServer as getBaseViteDevServer } from "./vite/dev";
+
+// Diagnostics go through the logger (→ stderr), never console.log (→ stdout): binding onto a stdio MCP
+// server would otherwise corrupt its JSON-RPC stream.
+const log = logger({ "source": "router" });
 
 let watcherAttached = false;
 const routeModules = new Map();
@@ -175,7 +180,7 @@ export async function bind(targets, routeMap) {
 			if (tool !== undefined && targets.mcp !== undefined) {
 				if (/\[[^\]]+\]/u.test(relativePath)) {
 					// Tools take structured `inputSchema` args, not path params — `[id]`/`[...x]` files are HTTP-only.
-					console.warn("Skipping tool in " + filePath + " — parameterized files can't be tools");
+					log.warn("Skipping tool in " + filePath + " — parameterized files can't be tools");
 				} else {
 					const prefix = basePath.split(/[/\\]/u).filter(Boolean).join("_");
 					const derived = relativePath.split(/[/\\]/u).filter(Boolean).join("_").replace(/-/gu, "_");
@@ -217,7 +222,7 @@ export async function bind(targets, routeMap) {
 		});
 
 		for (const { method, pathName, middlewares, routeHandler } of httpRoutes) {
-			console.log("Binding " + method.toUpperCase() + " " + pathName);
+			log.info("Binding " + method.toUpperCase() + " " + pathName);
 
 			targets.http[method](pathName, ...middlewares, routeHandler);
 		}
@@ -228,7 +233,7 @@ export async function bind(targets, routeMap) {
 		mcpTools.sort((a, b) => a.name.localeCompare(b.name));
 
 		for (const { name, config, handler } of mcpTools) {
-			console.log("Binding tool " + name);
+			log.info("Binding tool " + name);
 
 			targets.mcp.registerTool(name, config, handler);
 		}

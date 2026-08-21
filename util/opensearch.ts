@@ -1,4 +1,5 @@
 import type { Client } from "@opensearch-project/opensearch";
+import { log } from "./logger";
 
 export async function _search(client: Client, { index = undefined, aggs = undefined, range = undefined, filters = undefined, query = {}, scroll = undefined, size = undefined, sort = undefined, search_after = undefined, _source = undefined, filter_path = undefined, ...options } = {}) {
 	range ??= {
@@ -71,7 +72,7 @@ export async function _search(client: Client, { index = undefined, aggs = undefi
 	const hits = response.body["hits"]?.["hits"] ?? [];
 
 	if (aggregations !== undefined) {
-		console.info(`Received ${(aggregations["buckets"]?.length) || hits.length} buckets in ${(response.body["took"] / 1000).toFixed(3)}s.`);
+		log.info(`Received ${(aggregations["buckets"]?.length) || hits.length} buckets in ${(response.body["took"] / 1000).toFixed(3)}s.`);
 	}
 
 	return {
@@ -377,7 +378,7 @@ export async function *streamSearch(client: Client, { index = undefined, range =
 			break;
 		}
 
-		console.info(`Received ${hits.length} buckets in ${(body["took"] / 1000).toFixed(3)}s.`);
+		log.info(`Received ${hits.length} buckets in ${(body["took"] / 1000).toFixed(3)}s.`);
 
 		yield hits;
 
@@ -423,7 +424,7 @@ export async function *streamScrollSearch(client: Client, { index = undefined, r
 	});
 
 	if (hits.length > 0) {
-		console.info(`Received ${hits.length} buckets in ${(took / 1000).toFixed(3)}s.`);
+		log.info(`Received ${hits.length} buckets in ${(took / 1000).toFixed(3)}s.`);
 
 		yield hits;
 	}
@@ -442,7 +443,7 @@ export async function *streamScrollSearch(client: Client, { index = undefined, r
 		scrollId = response.body["_scroll_id"];
 		hits = response.body["hits"]?.["hits"] ?? [];
 
-		console.info(`Received ${Object.values(response.body?.aggregations ?? {}).reduce((count, { buckets }) => count + buckets.length, 0) || hits.length} buckets in ${(response.body["took"] / 1000).toFixed(3)}s.`);
+		log.info(`Received ${Object.values(response.body?.aggregations ?? {}).reduce((count, { buckets }) => count + buckets.length, 0) || hits.length} buckets in ${(response.body["took"] / 1000).toFixed(3)}s.`);
 
 		if (hits.length > 0) {
 			yield hits;
@@ -501,7 +502,7 @@ export async function poll(client: Client, { index = undefined, /* filters = und
 		});
 
 		for (const hit of hits) {
-			console.log(hit);
+			log.debug("hit", { "hit": hit });
 
 			// Record sort values for search_after
 			if (hit.sort?.length === 2) {
