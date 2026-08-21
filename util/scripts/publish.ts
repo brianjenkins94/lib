@@ -109,6 +109,7 @@ for (const workspace of workspaces) {
 				},
 				"build": {
 					"ssr": true,
+					"target": "esnext",
 					"rollupOptions": {
 						"input": entryPoints,
 						"external": (id) => !id.startsWith(".") && !path.isAbsolute(id),
