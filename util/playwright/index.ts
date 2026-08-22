@@ -184,25 +184,33 @@ async function fetchFactory(baseUrl?, defaultOptions = {}) {
 
 	const args = contents.substring(contents.indexOf("(") + 1, contents.indexOf(")"));
 	const functionBody = bundle + `
-		// Must be [serializable](https://playwright.dev/docs/evaluating#evaluation-argument).
-		try { return Array.from(new Uint8Array(await globalThis.__fido[id].arrayBuffer())); }
-		finally { delete globalThis.__fido[id]; }
+		const __fidoResponse = globalThis.__fido[id];
+		try {
+			return {
+				"status": __fidoResponse.status,
+				"statusText": __fidoResponse.statusText,
+				"headers": Object.fromEntries(__fidoResponse.headers.entries()),
+				"body": Array.from(new Uint8Array(await __fidoResponse.arrayBuffer()))
+			};
+		} finally { delete globalThis.__fido[id]; }
 	`;
 
 	const AsyncFunction = async function() { }.constructor;
 
 	return async function(page, url, query?, options?) {
 		// @ts-expect-error
-		const body = await page.evaluate(new AsyncFunction(args, functionBody), {
+		const result = await page.evaluate(new AsyncFunction(args, functionBody), {
 			"url": url instanceof Request ? url.url : url,
 			"query": query,
 			"options": options,
 			"id": randomUUID()
 		});
 
-		const response = new Response(new Uint8Array(body));
-
-		return response;
+		return new Response([101, 204, 205, 304].includes(result.status) ? null : new Uint8Array(result.body), {
+			"status": result.status,
+			"statusText": result.statusText,
+			"headers": result.headers
+		});
 	};
 }
 
