@@ -14,7 +14,6 @@
     "@clack/prompts": "latest",
     "@modelcontextprotocol/sdk": "latest",
     "@opensearch-project/opensearch": "latest",
-    "@pinojs/redact": "latest",
     "cmd-ts": "latest",
     "ejs": "latest",
     "googleapis": "latest",
