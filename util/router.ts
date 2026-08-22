@@ -66,8 +66,8 @@ async function getViteDevServer(root) {
  * watcher above). None of these know anything about HTTP or MCP.
  * ------------------------------------------------------------------------------------------------ */
 
-/** Absolute paths of every handler file under `directory`. */
-async function discover(directory) {
+/** Absolute paths of every handler file under `directory`. Exported so `util/mcp` walks the same tree. */
+export async function discover(directory) {
 	return (await Array.fromAsync(fs.glob("**/*.ts*", { "cwd": directory }))).map((filePath) => path.join(directory, filePath));
 }
 
@@ -80,7 +80,7 @@ function routePath(filePath, directory) {
 }
 
 /** The nearest package root above `directory` (the base the Vite SSR graph resolves module URLs against). */
-function moduleRoot(directory) {
+export function moduleRoot(directory) {
 	return path.dirname(fs.closest(directory, "package.json"));
 }
 
@@ -89,8 +89,12 @@ function moduleRoot(directory) {
  * statically-imported (ESM-cached) one; in development it's loaded through the Vite SSR server and
  * cached in `routeModules` until the watcher invalidates it. Called per request / per tool invocation
  * so an edit is live without re-binding.
+ *
+ * Exported as the shared resolver: `util/mcp` resolves each tool file's `default` export through this
+ * same dev/prod loader (and, in dev, the same Vite server + watcher invalidation above), so MCP tools
+ * hot-reload exactly like HTTP routes.
  */
-async function resolveExport(root, filePath, exportName) {
+export async function resolveExport(root, filePath, exportName) {
 	if (process.env["NODE_ENV"] === "production") {
 		return (await import(url.pathToFileURL(filePath).toString()))[exportName];
 	}
