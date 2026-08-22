@@ -150,8 +150,7 @@ export async function render(template, data = {}, { useVite = false, root = unde
 					"minify": false
 				},
 				"define": {
-					"import.meta.url": "location.pathname",
-					"process": "{ \"env\": {} }"
+					"import.meta.url": "location.pathname"
 				},
 				"plugins": [
 					polyfillNode(),

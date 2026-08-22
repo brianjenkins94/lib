@@ -1,70 +1,96 @@
 import type { Browser, BrowserContext, Page } from "playwright";
 import { spawn } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import * as path from "node:path";
-import { chromium } from "playwright";
 import { mapSeries } from "@brianjenkins94/util/array";
-
 import { __root, isWindows } from "@brianjenkins94/util/env";
+
 import { defaultConditionCallback } from "@brianjenkins94/util/fido";
 import * as fs from "@brianjenkins94/util/fs";
 import { sleep } from "@brianjenkins94/util/sleep";
 import { polyfillNode } from "@brianjenkins94/util/vite/plugins/polyfillNode";
 import { virtualFileSystem } from "@brianjenkins94/util/vite/plugins/virtualFileSystem";
+import { chromium } from "playwright";
 
 const browsers = {
 	"Brave": {
-		"path": isWindows ? (fs.existsSync(path.join(process.env["ProgramW6432"], "BraveSoftware", "Brave-Browser", "Application", "brave.exe")) ? path.join(process.env["ProgramW6432"], "BraveSoftware", "Brave-Browser", "Application", "brave.exe") : path.join(path.join(process.env["LOCALAPPDATA"], "BraveSoftware", "Brave-Browser", "Application", "brave.exe"))) : path.join("/", "Applications", "Brave Browser.app", "Contents", "MacOS", "Brave Browser"),
-		"args": isWindows ? ["/F", "/IM", "brave.exe", "/T"] : ["-INT", "\"Brave Browser\""]
+		"binary": isWindows
+			? (fs.existsSync(path.join(process.env["ProgramW6432"] ?? "", "BraveSoftware", "Brave-Browser", "Application", "brave.exe"))
+					? path.join(process.env["ProgramW6432"] ?? "", "BraveSoftware", "Brave-Browser", "Application", "brave.exe")
+					: path.join(process.env["LOCALAPPDATA"] ?? "", "BraveSoftware", "Brave-Browser", "Application", "brave.exe"))
+			: path.join("/", "Applications", "Brave Browser.app", "Contents", "MacOS", "Brave Browser"),
+		"killArgs": isWindows ? ["/F", "/IM", "brave.exe", "/T"] : ["-INT", "\"Brave Browser\""],
+		"profile": isWindows
+			? path.join(process.env["LOCALAPPDATA"] ?? "", "BraveSoftware", "Brave-Browser", "User Data")
+			: path.join(process.env["HOME"] ?? "", "Library", "Application Support", "BraveSoftware", "Brave-Browser")
 	},
 	"Chrome": {
-		"path": isWindows ? path.join(process.env["ProgramW6432"], "Google", "Chrome", "Application", "chrome.exe") : path.join("/", "Applications", "Google Chrome.app", "Contents", "MacOS", "Google Chrome"),
-		"args": isWindows ? ["/F", "/IM", "chrome.exe", "/T"] : ["-INT", "\"Google Chrome\""]
+		"binary": isWindows
+			? path.join(process.env["ProgramW6432"] ?? "", "Google", "Chrome", "Application", "chrome.exe")
+			: path.join("/", "Applications", "Google Chrome.app", "Contents", "MacOS", "Google Chrome"),
+		"killArgs": isWindows ? ["/F", "/IM", "chrome.exe", "/T"] : ["-INT", "\"Google Chrome\""],
+		"profile": isWindows
+			? path.join(process.env["LOCALAPPDATA"] ?? "", "Google", "Chrome", "User Data")
+			: path.join(process.env["HOME"] ?? "", "Library", "Application Support", "Google", "Chrome")
 	}
 };
 
-export async function attach(endpointURL = "http://localhost:9222", options = { "timeout": 15_000 }) {
-	if (new URL(endpointURL).hostname === "localhost") {
-		for (const browser of Object.values(browsers).filter(({ path }) => fs.existsSync(path))) {
-			try {
-				await fetch(endpointURL);
-			} catch (error) {
-				const shell = spawn(isWindows ? "taskkill" : "killall", browser.args, {
-					"shell": true
-				});
+export async function attach(endpointURL = "http://127.0.0.1:9222", { timeout = 15_000 } = {}) {
+	const url = new URL(endpointURL);
+	const port = url.port || "9222";
 
-				const code = await new Promise(function(resolve, reject) {
-					shell.on("error", function(error) {
-						console.warn(error);
-					});
+	if (url.hostname === "localhost") {
+		url.hostname = "127.0.0.1";
+		endpointURL = url.toString();
+	}
 
-					shell.on("close", function(code) {
-						resolve(code);
-					});
-				});
+	if (url.hostname === "127.0.0.1") {
+		try {
+			await fetch(endpointURL);
+		} catch (error) {
+			const target = Object.values(browsers).find(({ binary }) => fs.existsSync(binary));
 
-				if (code === 0 || (isWindows ? code === 128 : code === 1)) {
-					spawn(browser.path, [
-						// https://chromium.googlesource.com/chromium/src/+/master/docs/user_data_dir.md#Windows
-						//"--enable-logging=stderr --v=1",
-						"--remote-debugging-port=9222",
-						"--restore-last-session"
-						//"--user-data-dir=" + (isWindows ? path.join(process.env["LOCALAPPDATA"], "Google", "Chrome", "User Data") : path.join(process.env["HOME"], "Library", "Application Support", "Google", "Chrome"))
-						//"--profile-directory=Default"
-					], {
-						"detached": true
-					});
+			if (target === undefined) {
+				throw new Error(`No Brave/Chrome found to launch. Start one with --remote-debugging-port=${port} and an explicit --user-data-dir.`, { "cause": error });
+			}
 
-					await sleep(1000);
+			await new Promise((resolve) => {
+				const shell = spawn(isWindows ? "taskkill" : "killall", target.killArgs, { "shell": true });
+
+				shell.on("error", resolve);
+				shell.on("close", resolve);
+			});
+
+			await sleep(2500);
+
+			spawn(target.binary, [
+				`--user-data-dir=${target.profile}`,
+				`--remote-debugging-port=${port}`,
+				"--restore-last-session"
+			], { "detached": true, "stdio": "ignore" }).unref();
+
+			const deadline = Date.now() + 30_000;
+
+			while (true) {
+				try {
+					await fetch(endpointURL);
 
 					break;
-				} else {
-					console.warn("Command exited with non-zero exit-code: " + code);
+				} catch {
+					if (Date.now() > deadline) {
+						throw new Error(`Relaunched ${target.binary} but ${endpointURL} never came up.`, { "cause": error });
+					}
+
+					await sleep(500);
 				}
 			}
 		}
 	}
 
-	const browser = await chromium.connectOverCDP(endpointURL, options);
+	const browser = await chromium.connectOverCDP(endpointURL, { "timeout": timeout })
+		.catch(function(error: unknown) {
+			throw new Error(`Couldn't reach a CDP browser at ${endpointURL}. Start Chrome/Brave with --remote-debugging-port=${port} and an explicit --user-data-dir.`, { "cause": error });
+		});
 
 	return {
 		"browser": browser,
@@ -104,7 +130,7 @@ export async function launch(url, options?) {
 	return page;
 }
 
-const contents = async function({ url, query, options }) {
+const contents = async function({ url, query, options, id }) {
 	if (!globalThis.fetch.toString().includes("[native code]")) {
 		console.warn("`fetch` appears to have been overwritten.");
 
@@ -115,7 +141,8 @@ const contents = async function({ url, query, options }) {
 		globalThis.fetch = iframe.contentWindow.fetch;
 	}
 
-	globalThis["__response"] = await fido[options["method"].toLowerCase()](url, query, options);
+	globalThis["__fido"] ??= {};
+	globalThis["__fido"][id] = await fido[options["method"].toLowerCase()](url, query, options);
 }.toString();
 
 let vite;
@@ -141,12 +168,11 @@ async function fetchFactory(baseUrl?, defaultOptions = {}) {
 			"write": false
 		},
 		"define": {
-			"import.meta.url": "location.pathname",
-			"import.meta.resolve": "undefined",
-			"process": "{ \"env\": {} }"
+			"import.meta.url": "('file://' + location.pathname)",
+			"import.meta.resolve": "undefined"
 		},
 		"plugins": [
-			polyfillNode(["fs", "path", "url"]),
+			polyfillNode(["fs", "path", "url", "util"]),
 			virtualFileSystem({
 				"index.ts": [
 					"import { fido } from \"./util/fido\";",
@@ -159,7 +185,8 @@ async function fetchFactory(baseUrl?, defaultOptions = {}) {
 	const args = contents.substring(contents.indexOf("(") + 1, contents.indexOf(")"));
 	const functionBody = bundle + `
 		// Must be [serializable](https://playwright.dev/docs/evaluating#evaluation-argument).
-		return Array.from(new Uint8Array(await globalThis.__response.arrayBuffer()));
+		try { return Array.from(new Uint8Array(await globalThis.__fido[id].arrayBuffer())); }
+		finally { delete globalThis.__fido[id]; }
 	`;
 
 	const AsyncFunction = async function() { }.constructor;
@@ -169,7 +196,8 @@ async function fetchFactory(baseUrl?, defaultOptions = {}) {
 		const body = await page.evaluate(new AsyncFunction(args, functionBody), {
 			"url": url instanceof Request ? url.url : url,
 			"query": query,
-			"options": options
+			"options": options,
+			"id": randomUUID()
 		});
 
 		const response = new Response(new Uint8Array(body));
