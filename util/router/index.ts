@@ -1,75 +1,17 @@
 import * as path from "node:path";
 import * as url from "node:url";
-import * as fs from "@brianjenkins94/util/fs";
-import { mapAsync } from "./array";
-import { logger } from "./logger";
-import { getViteDevServer as getBaseViteDevServer } from "./vite/dev";
+import { mapAsync } from "../array";
+import { logger } from "../logger";
+import { discover, getViteDevServer, moduleRoot, resolveExport } from "./core";
 
 // Diagnostics go through the logger (→ stderr), never console.log (→ stdout): binding onto a stdio MCP
 // server would otherwise corrupt its JSON-RPC stream.
 const log = logger({ "source": "router" });
 
-let watcherAttached = false;
-const routeModules = new Map();
-
-// TODO: Review
-function hasDependency(moduleNode, filePath, seen = new Set()) {
-	if (moduleNode === undefined || moduleNode === null) {
-		return false;
-	}
-
-	if (seen.has(moduleNode)) {
-		return false;
-	}
-
-	seen.add(moduleNode);
-
-	if (moduleNode.file !== null && moduleNode.file.replace(/\\/gu, "/") === filePath) {
-		return true;
-	}
-
-	for (const importedModule of moduleNode.importedModules ?? []) {
-		if (hasDependency(importedModule, filePath, seen)) {
-			return true;
-		}
-	}
-
-	return false;
-}
-
-async function getViteDevServer(root) {
-	const viteDevServer = await getBaseViteDevServer(root);
-
-	if (!watcherAttached) {
-		watcherAttached = true;
-
-		for (const event of ["change", "unlink"]) {
-			viteDevServer.watcher.on(event, async function(changedFilePath) {
-				for (const [routeFilePath] of routeModules) {
-					const moduleNode = await viteDevServer.moduleGraph.getModuleByUrl("/" + path.relative(root, routeFilePath).replace(/\\/gu, "/"));
-
-					if (hasDependency(moduleNode, changedFilePath)) {
-						routeModules.delete(routeFilePath);
-					}
-				}
-			});
-		}
-	}
-
-	return viteDevServer;
-}
-
-/* ------------------------------------------------------------------------------------------------ *
- * Protocol-agnostic core. `bindRoutes` (HTTP) and `bindTools` (MCP) both sit on these: file
- * discovery, the file → address mapping, the package root, and — the valuable part — the dev/prod
- * module resolver that hot-reloads a handler through the Vite SSR graph (cache invalidated by the
- * watcher above). None of these know anything about HTTP or MCP.
- * ------------------------------------------------------------------------------------------------ */
-
-/** Absolute paths of every handler file under `directory`. Exported so `util/mcp` walks the same tree. */
-export async function discover(directory) {
-	return (await Array.fromAsync(fs.glob("**/*.ts*", { "cwd": directory }))).map((filePath) => path.join(directory, filePath));
-}
+// The protocol-agnostic core (file discovery + dev/prod module resolver + package-root lookup) lives in
+// ./core so util/mcp can reuse it WITHOUT importing this HTTP binder. Re-exported here so existing
+// `@brianjenkins94/util/router` importers of discover/moduleRoot/resolveExport keep working.
+export { discover, moduleRoot, resolveExport } from "./core";
 
 /** File → route path relative to its directory (an `index` file collapses to its dirname; `[id]`/`[...x]` brackets kept intact). */
 function routePath(filePath, directory) {
@@ -79,40 +21,12 @@ function routePath(filePath, directory) {
 	return baseName === "index" ? pathName : path.join(pathName, baseName);
 }
 
-/** The nearest package root above `directory` (the base the Vite SSR graph resolves module URLs against). */
-export function moduleRoot(directory) {
-	return path.dirname(fs.closest(directory, "package.json"));
-}
-
-/**
- * Resolve the CURRENT value of a named export, hot-reloading in dev. In production the module is the
- * statically-imported (ESM-cached) one; in development it's loaded through the Vite SSR server and
- * cached in `routeModules` until the watcher invalidates it. Called per request / per tool invocation
- * so an edit is live without re-binding.
- *
- * Exported as the shared resolver: `util/mcp` resolves each tool file's `default` export through this
- * same dev/prod loader (and, in dev, the same Vite server + watcher invalidation above), so MCP tools
- * hot-reload exactly like HTTP routes.
- */
-export async function resolveExport(root, filePath, exportName) {
-	if (process.env["NODE_ENV"] === "production") {
-		return (await import(url.pathToFileURL(filePath).toString()))[exportName];
-	}
-
-	const normalizedFilePath = path.resolve(filePath).replace(/\\/gu, "/");
-	const moduleUrl = "/" + path.relative(root, normalizedFilePath).replace(/\\/gu, "/");
-
-	const module = await (routeModules.get(normalizedFilePath) ?? routeModules.set(normalizedFilePath, (await getViteDevServer(root)).ssrLoadModule(moduleUrl)).get(normalizedFilePath));
-
-	return module[exportName];
-}
-
 /* ------------------------------------------------------------------------------------------------ *
  * Unified binder. ONE walk over the handler tree; each file is imported once and its exports are
  * dispatched by SHAPE:
  *
  *   verb functions (`get`/`post`/`all`/… + optional `middlewares`) → HTTP routes on `targets.http`
- *   a `tool` object (`{ name?, description, inputSchema?, handler }`) → an MCP tool on `targets.mcp`
+ *   a `defineTool` DEFAULT export ({ name, config, handler })       → an MCP tool on `targets.mcp`
  *
  * A single file can export both and be served over both transports (colocation) — the HTTP route and
  * the MCP tool are two projections of one capability that share the file (and usually a shared inner
@@ -122,9 +36,20 @@ export async function resolveExport(root, filePath, exportName) {
  *   targets.http — anything with `server[method](path, ...middlewares, handler)` (e.g. an Express app)
  *   targets.mcp  — anything with `registerTool(name, { description, inputSchema }, callback)`
  *                  (e.g. @modelcontextprotocol/sdk's McpServer)
+ *
+ * Isolation: an MCP tool is registered through util/mcp's shared registrar (context + MRTR confirmation),
+ * imported LAZILY below — only when `targets.mcp` is set AND a tool was found — so an HTTP-only consumer
+ * (bindRoutes) never loads the MCP SDK. The default-export shape is checked inline (no import) so even the
+ * discovery pass stays SDK-free until there's an actual tool to register.
  * ------------------------------------------------------------------------------------------------ */
 
 const VERB = /^(?:all|connect|del|get|head|options|patch|post|put|trace)/u;
+
+/** True if a module's default export looks like a `defineTool` result (checked inline to keep this file
+ *  SDK-free until registration). Mirrors util/mcp/tool's `isMcpTool`. */
+function looksLikeTool(value) {
+	return value !== undefined && value !== null && typeof value === "object" && typeof value.handler === "function" && typeof value.config === "object";
+}
 
 export async function bind(targets, routeMap) {
 	const httpRoutes = [];
@@ -178,10 +103,8 @@ export async function bind(targets, routeMap) {
 				}
 			}
 
-			// --- MCP: a `tool` object export ---
-			const { tool } = module;
-
-			if (tool !== undefined && targets.mcp !== undefined) {
+			// --- MCP: a `defineTool` default export ---
+			if (targets.mcp !== undefined && looksLikeTool(module.default)) {
 				if (/\[[^\]]+\]/u.test(relativePath)) {
 					// Tools take structured `inputSchema` args, not path params — `[id]`/`[...x]` files are HTTP-only.
 					log.warn("Skipping tool in " + filePath + " — parameterized files can't be tools");
@@ -190,11 +113,10 @@ export async function bind(targets, routeMap) {
 					const derived = relativePath.split(/[/\\]/u).filter(Boolean).join("_").replace(/-/gu, "_");
 
 					mcpTools.push({
-						"name": tool.name ?? [prefix, derived].filter(Boolean).join("_"),
-						"config": { "description": tool.description, "inputSchema": tool.inputSchema ?? {} },
-						"handler": async function(...args) {
-							return (await resolveExport(root, filePath, "tool")).handler(...args);
-						}
+						"name": module.default.name || [prefix, derived].filter(Boolean).join("_"),
+						"config": module.default.config,
+						"root": root,
+						"filePath": filePath
 					});
 				}
 			}
@@ -232,14 +154,18 @@ export async function bind(targets, routeMap) {
 		}
 	}
 
-	// MCP: exact-name keyed — order is irrelevant; sort only for stable logs.
-	if (targets.mcp !== undefined) {
+	// MCP: exact-name keyed — order is irrelevant; sort only for stable logs. The registrar (context +
+	// MRTR) is imported here, lazily, so HTTP-only consumers never pull the MCP SDK. Each tool re-resolves
+	// its handler per invocation (hot-reload) through the shared `resolveExport`.
+	if (targets.mcp !== undefined && mcpTools.length > 0) {
+		const { registerResolvingTool } = await import("@brianjenkins94/util/mcp/tool");
+
 		mcpTools.sort((a, b) => a.name.localeCompare(b.name));
 
-		for (const { name, config, handler } of mcpTools) {
+		for (const { name, config, root, filePath } of mcpTools) {
 			log.info("Binding tool " + name);
 
-			targets.mcp.registerTool(name, config, handler);
+			registerResolvingTool(targets.mcp, name, config, () => resolveExport(root, filePath, "default"));
 		}
 	}
 }

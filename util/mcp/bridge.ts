@@ -1,74 +1,58 @@
 /**
- * The dev bridge: a Vite/HTTP MCP server with a stdio front-end.
+ * The streaming `/mcp` transport, plus the dev bridge that fronts it with stdio.
  *
- * Why Vite (not cache-busted re-import): breakpoints. The inspector binds a breakpoint to a file
- * URL; `import('./tool.ts?v=123')` is a new URL each time, so editor breakpoints never attach. Vite
- * SSR keeps stable module identity + source maps, so breakpoints in server.ts and tools/*.ts bind —
- * and edits hot-reload. The shared plumbing (this package) is externalized so Vite doesn't try to
- * transform itself; only the consumer's server.ts + tools/ (inside the Vite root) get transformed.
+ * `mountMcp(app, …)` mounts a session-keyed StreamableHTTP `/mcp` endpoint onto an EXISTING HTTP app
+ * (Express or util/server) — no stdio, no listener of its own. It is the PRODUCTION transport half of
+ * colocation: a long-running web server binds its HTTP routes AND its `defineTool`s onto one McpServer
+ * (via `util/router` `bind({ http, mcp })`), then `mountMcp` exposes that server at `/mcp` on the same
+ * app — HTTP routes and MCP tools in one process, no stdio to fight the web server's stdout.
  *
- * Streaming + stateful (was: JSON, per-request rebuild). Elicitation is a server→client request: it
- * rides the tool call's SSE stream, and the human's reply comes back as a SEPARATE POST that must
- * reach the SAME server instance — so `/mcp` now runs a persistent, session-keyed StreamableHTTP
- * transport instead of a fresh one per request. Hot-reload is preserved a level down: the registered
- * tool list is fixed at session start, but each INVOCATION reloads its tool module (see makeToolCallback
- * + currentTools), so tool-body edits still take effect live. Changing a tool's schema, or adding/
- * removing a tool file, needs a restart.
+ * `runBridge` is the DEV consumer of `mountMcp`: it stands up its own `util/server` app, mounts `/mcp`,
+ * and adds a stdio front-end so Claude (and `curl localhost:PORT/mcp`) hit the same endpoint. Its edge
+ * over cache-busted re-import is breakpoints + hot-reload: tools resolve through `util/router/core`'s
+ * Vite SSR resolver (stable module identity + source maps), so editor breakpoints in tools/*.ts bind
+ * and tool-body edits take effect per invocation.
  *
  * Quine: tsx runs server.ts → serveMcp → bootstrapOrRun (util/vite/dev) creates Vite and re-enters
  * server.ts through SSR → serveMcp (second pass) → runBridge actually boots. The two passes are told
- * apart by a module-level flag in bootstrapOrRun, NOT import.meta.env.SSR. stdio is bridged to /mcp so
- * Claude — and `curl localhost:PORT/mcp` — both hit the same hot-reloading endpoint.
+ * apart by a module-level flag in bootstrapOrRun, NOT import.meta.env.SSR.
  */
 
 import type { EntryMeta, ServeOptions } from "./index";
 import * as path from "node:path";
 import * as url from "node:url";
 import { createServer } from "@brianjenkins94/util/server";
-import { getViteDevServer } from "@brianjenkins94/util/vite/dev";
+import { discover, getViteDevServer, resolveExport } from "@brianjenkins94/util/router/core";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { isInitializeRequest } from "@modelcontextprotocol/sdk/types.js";
-import { eachToolFile, registerResolvingTool, silenceStdout } from "./index";
+import { silenceStdout } from "./index.js";
+import { isMcpTool, registerResolvingTool } from "./tool.js";
 
-// The dev quine (bootstrapOrRun) lives in util/vite/dev — shared with the express app; serveMcp imports
-// it from there directly. Node-module deps — including @brianjenkins94/util itself — are externalized by
-// Vite's SSR default, so no ssr.external is needed (the old override existed only for the file:-link era).
-
-/** Vite root-relative module URL (what ssrLoadModule wants), e.g. /server.ts or /tools/list.ts. */
-function viteUrl(root: string, absPath: string): string {
-	return "/" + path.relative(root, absPath).replace(/\\/gu, "/");
+export interface MountOptions {
+	/**
+	 * Build the McpServer for a new session. Called once per initialize (the SDK binds one server per
+	 * transport), so a fresh server is connected to each session's transport — which is also what makes
+	 * the dev bridge's hot-reload work (each session gets the current tools). A production colocation
+	 * server that doesn't hot-reload can rebuild-and-`bind` here, or close over a prebuilt server and
+	 * re-register its tools onto a fresh instance.
+	 */
+	"buildServer": () => McpServer | Promise<McpServer>;
+	/** Dev-only: map an error's stack back to TS source (Vite `ssrFixStacktrace`). Omitted in production. */
+	"fixStack"?: (error: Error) => void;
 }
 
-/** Second pass (Vite SSR): boot POST/GET/DELETE /mcp (persistent streaming session) + the stdio bridge. */
-export async function runBridge(meta: EntryMeta, options: ServeOptions): Promise<void> {
-	silenceStdout();
-
-	const root = path.dirname(url.fileURLToPath(meta.url));
-	const vite = await getViteDevServer(root);
-	const toolsDir = options.toolsDir ?? path.join(root, "tools");
-	const port = options.port ?? 3000;
-
-	// Reload every tool module fresh: ssrLoadModule returns the new code after an edit (Vite invalidates
-	// it) and the cached module otherwise, so this is cheap. Called once at session start to register the
-	// tools, and again per invocation (via makeToolCallback's resolve) so a tool-body edit runs the new
-	// code even though the server/session is now persistent.
-	const currentTools = () => eachToolFile(toolsDir, (abs) => vite.ssrLoadModule(viteUrl(root, abs)));
-
-	async function buildServer(): Promise<McpServer> {
-		const server = new McpServer({ "name": options.name, "version": options.version });
-
-		for (const tool of await currentTools()) {
-			registerResolvingTool(server, tool.name, tool.config, async () => (await currentTools()).find((candidate) => candidate.name === tool.name));
-		}
-
-		return server;
-	}
-
-	// One StreamableHTTP transport per MCP session. A single stdio front-end drives one session; a second
-	// front-end that bridges to this same HTTP server (EADDRINUSE path below) initializes its own.
+/**
+ * Mount POST/GET/DELETE `/mcp` (a persistent, session-keyed StreamableHTTP transport) onto `app`. The
+ * caller owns the app and its `listen` — this only wires the routes and the per-session transport map.
+ * Streaming (SSE) is the transport default so a tool call's response stream can carry a server→client
+ * elicitation request back to the client (do NOT set enableJsonResponse).
+ */
+export function mountMcp(app: any, options: MountOptions): void {
+	// One StreamableHTTP transport per MCP session. A stdio front-end (runBridge) drives one session; a
+	// browser client or a second bridging front-end initializes its own.
 	const sessions = new Map<string, StreamableHTTPServerTransport>();
 
 	async function handle(request: any, response: any, body?: unknown): Promise<void> {
@@ -77,13 +61,11 @@ export async function runBridge(meta: EntryMeta, options: ServeOptions): Promise
 
 		if (transport === undefined && body !== undefined && isInitializeRequest(body)) {
 			transport = new StreamableHTTPServerTransport({
-				// Streaming (SSE) is the transport default — required so a tool call's response stream can
-				// carry the server→client elicitation request back to the client (do not set enableJsonResponse).
 				"sessionIdGenerator": () => crypto.randomUUID(),
 				"onsessioninitialized": (id: string) => { sessions.set(id, transport); }
 			});
 			transport.onclose = () => { if (transport.sessionId !== undefined) { sessions.delete(transport.sessionId); } };
-			await (await buildServer()).connect(transport);
+			await (await options.buildServer()).connect(transport);
 		}
 
 		if (transport === undefined) {
@@ -98,19 +80,52 @@ export async function runBridge(meta: EntryMeta, options: ServeOptions): Promise
 		await transport.handleRequest(request, response, body);
 	}
 
-	const app = createServer();
-
 	app.post("/mcp", async (request: any, response: any) => {
 		try {
 			await handle(request, response, await request.json());
 		} catch (error) {
-			vite.ssrFixStacktrace?.(error as Error); // map the stack back to TS source for readable dev errors
+			options.fixStack?.(error as Error); // map the stack back to TS source for readable dev errors
 			throw error;
 		}
 	});
 	// GET = the server→client SSE stream; DELETE = explicit session teardown. Both route by session id.
 	app.get("/mcp", (request: any, response: any) => handle(request, response));
 	app.delete("/mcp", (request: any, response: any) => handle(request, response));
+}
+
+/** Second pass (Vite SSR): boot `/mcp` (via mountMcp) + the stdio bridge. */
+export async function runBridge(meta: EntryMeta, options: ServeOptions): Promise<void> {
+	silenceStdout();
+
+	const root = path.dirname(url.fileURLToPath(meta.url));
+	const vite = await getViteDevServer(root);
+	const toolsDir = options.toolsDir ?? path.join(root, "tools");
+	const port = options.port ?? 3000;
+
+	// Reload every tool module fresh through the shared Vite SSR resolver: `resolveExport` returns the new
+	// code after an edit (the core watcher invalidates it) and the cached module otherwise. Registration
+	// reads each tool's name/config now; each INVOCATION re-resolves the handler, so tool-body edits run
+	// live even though the session is persistent. Adding/removing a tool file, or changing its schema,
+	// needs a restart. A fresh server is built per session (the SDK binds one server per transport).
+	const buildServer = async (): Promise<McpServer> => {
+		const server = new McpServer({ "name": options.name, "version": options.version });
+
+		for (const filePath of await discover(toolsDir)) {
+			const tool = await resolveExport(root, filePath, "default");
+
+			if (!isMcpTool(tool)) {
+				continue;
+			}
+
+			registerResolvingTool(server, tool.name, tool.config, () => resolveExport(root, filePath, "default"));
+		}
+
+		return server;
+	};
+
+	const app = createServer();
+
+	mountMcp(app, { "buildServer": buildServer, "fixStack": (error) => vite.ssrFixStacktrace?.(error) });
 
 	await new Promise<void>((resolve, reject) => {
 		const httpServer = app.listen(port, () => { resolve(); });
