@@ -1,6 +1,6 @@
 import objectScan from "object-scan";
 
-export function createRedactor(patterns: string[], censor: unknown | ((value: unknown, key: (string | number)[]) => unknown) = "<redacted>") {
+export function createRedactor(patterns: string[], censor: string | ((value: unknown, key: (string | number)[]) => unknown) = "<redacted>") {
 	const redact = objectScan(patterns, {
 		"breakFn": function({ isCircular }) {
 			return isCircular;
