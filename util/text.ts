@@ -28,6 +28,22 @@ export function toTitleCase(string) {
 	});
 }
 
+export function humanize(name: string): string {
+	const words = name.replace(/([a-z0-9])([A-Z])/gu, "$1 $2").replace(/[_-]+/gu, " ").toLowerCase().trim().split(/\s+/u);
+
+	return words[0] === undefined || words[0] === "" ? name : words[0].charAt(0).toUpperCase() + words[0].substring(1) + (words.length > 1 ? " " + words.slice(1).join(" ") : "");
+}
+
+export function slugify(text: string, maxLength?: number): string {
+	const slug = text.toLowerCase().replace(/[^a-z0-9]+/gu, "-").replace(/-+/gu, "-").replace(/^-|-$/gu, "");
+
+	return maxLength === undefined ? slug : slug.substring(0, maxLength).replace(/-$/u, "");
+}
+
+export function bracesToColons(path: string): string {
+	return path.replace(/\{([^}]+)\}/gu, ":$1");
+}
+
 export function dedent(input) {
 	input = input
 		.replace(/^\t+/gmu, function(match) {
