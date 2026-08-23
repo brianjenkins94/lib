@@ -1,11 +1,15 @@
 import * as http from "node:http";
 import * as path from "node:path";
-import { log } from "./logger";
 import * as fs from "@brianjenkins94/util/fs";
 import mime from "mime/lite";
-import { match, pathToRegexp } from "path-to-regexp";
+import { log } from "./logger";
 
 import { render } from "./render";
+
+// TODO: Extract?
+function toPattern(route) {
+	return route.replace(/^[A-Z]+ /u, "").replace(/\*([A-Za-z_]\w*)/gu, ":$1*");
+}
 
 export function createServer(router = {}) {
 	const server = http.createServer(async function(request, response) {
@@ -23,13 +27,15 @@ export function createServer(router = {}) {
 		let body;
 
 		try {
+			const pathname = request.url.split("?")[0];
+
 			const [pathName] = Object.keys(router).filter(function(route) {
-				return route.startsWith(request.method) && pathToRegexp(route.replace(/^[A-Z]+ /u, "")).regexp.test(request.url.split("?")[0]);
+				return route.startsWith(request.method) && new URLPattern({ "pathname": toPattern(route) }).test({ "pathname": pathname });
 			});
 
 			if (router[pathName] !== undefined) {
 				request["query"] = Object.fromEntries(new URLSearchParams(request.url.split("?")[1]).entries());
-				request["params"] = match(pathName.replace(/^[A-Z]+ /u, ""))(request.url)?.["params"];
+				request["params"] = new URLPattern({ "pathname": toPattern(pathName) }).exec({ "pathname": pathname })?.["pathname"].groups;
 
 				response["json"] = function(body) {
 					return {
@@ -60,14 +66,28 @@ export function createServer(router = {}) {
 					};
 				};
 
+				let body;
+
+				function read() {
+					body ??= Array.fromAsync(request).then((chunks) => Buffer.concat(chunks));
+
+					return body;
+				}
+
+				request["bytes"] = function() {
+					return read();
+				};
+
+				request["arrayBuffer"] = async function() {
+					return new Uint8Array(await read()).buffer;
+				};
+
+				request["text"] = async function() {
+					return (await read()).toString();
+				};
+
 				request["json"] = async function() {
-					const chunks = [];
-
-					for await (const chunk of request) {
-						chunks.push(chunk);
-					}
-
-					return JSON.parse(Buffer.concat(chunks).toString());
+					return JSON.parse(await request["text"]());
 				};
 
 				({ statusCode, headers, body } = await router[pathName](request, response) ?? {});

@@ -27,12 +27,15 @@
     "node-stdlib-browser": "latest",
     "object-scan": "latest",
     "papaparse": "latest",
-    "path-to-regexp": "latest",
     "playwright": "latest",
     "pluralize": "latest",
     "tar-stream": "latest",
     "vite": "latest",
     "vite-plugin-node-polyfills": "latest",
     "zod": "latest"
+  },
+  "engines": {
+    "node": ">=24.0.0",
+    "npm": ">=10.0.0"
   }
 }
