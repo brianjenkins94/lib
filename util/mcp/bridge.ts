@@ -24,7 +24,7 @@
 import type { EntryMeta, ServeOptions } from "./index";
 import * as path from "node:path";
 import * as url from "node:url";
-import { createServer } from "../server.js";
+import { createServer } from "@brianjenkins94/util/server";
 import { getViteDevServer } from "@brianjenkins94/util/vite/dev";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";

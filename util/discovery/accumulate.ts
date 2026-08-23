@@ -4,7 +4,7 @@
  * Postman) and it groups by endpoint and merges request + per-status response bodies into JSON Schemas
  * via the shared schema engine ([[../schema]]).
  */
-import { inferFromValue, mergeSchemas, toJsonSchema } from "../schema.js";
+import { inferFromValue, mergeSchemas, toJsonSchema } from "@brianjenkins94/util/schema";
 
 /** One observed request/response pair, normalized across sources. */
 export interface Observation {

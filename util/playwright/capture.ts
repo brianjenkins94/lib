@@ -1,5 +1,5 @@
 import type { BrowserContext, Response } from "playwright";
-import type { Observation } from "../discovery/accumulate.js";
+import type { Observation } from "@brianjenkins94/util/discovery/accumulate";
 
 // This CDP adapter emits the pipeline's native `Observation` (see ../discovery/accumulate) directly, so a
 // consumer can feed capture straight into accumulate() with no per-consumer field rename in between.

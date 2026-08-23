@@ -15,7 +15,7 @@
  * particular API or its secrets.
  */
 import type { Observation } from "./accumulate.js";
-import { PersistentStore } from "../store.js";
+import { PersistentStore } from "@brianjenkins94/util/store";
 
 export interface ObservationStoreOptions {
 	/** File the capped corpus is persisted to (created on first write; missing = start empty). */
