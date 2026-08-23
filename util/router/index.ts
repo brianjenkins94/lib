@@ -1,7 +1,7 @@
 import * as path from "node:path";
 import * as url from "node:url";
-import { mapAsync } from "../array";
-import { logger } from "../logger";
+import { mapAsync } from "@brianjenkins94/util/array";
+import { logger } from "@brianjenkins94/util/logger";
 import { discover, getViteDevServer, moduleRoot, resolveExport } from "./core";
 
 // Diagnostics go through the logger (→ stderr), never console.log (→ stdout): binding onto a stdio MCP
