@@ -106,7 +106,7 @@ export function createServer(router = {}) {
 				statusCode = 500;
 			}
 
-			console.error(error.stack);
+			log.error(request.method + " " + originalUrl + " failed", { "error": error?.message, "stack": error?.stack });
 
 			if (!response.headersSent) {
 				response.writeHead(statusCode, headers);
