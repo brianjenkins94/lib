@@ -66,12 +66,12 @@ export function createServer(router = {}) {
 					};
 				};
 
-				let body;
+				let bodyPromise;
 
 				function read() {
-					body ??= Array.fromAsync(request).then((chunks) => Buffer.concat(chunks));
+					bodyPromise ??= Array.fromAsync(request).then((chunks) => Buffer.concat(chunks));
 
-					return body;
+					return bodyPromise;
 				}
 
 				request["bytes"] = function() {
