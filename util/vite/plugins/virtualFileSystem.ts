@@ -43,6 +43,10 @@ export function virtualFileSystem(files = {}) {
 				};
 			} else if (Array.isArray(external)) {
 				function shouldBeExternal() {
+					if (id.startsWith("/")) {
+						return true;
+					}
+
 					return external.length > 0 ? new RegExp(`^(${external.join("|")})(/.*)?$`).test(id) : true;
 				}
 

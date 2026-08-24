@@ -56,7 +56,7 @@ async function transform(root, route) {
 	return path.join(root, "dist", result.output[0].fileName);
 }
 
-export async function render(template, data = {}, { useVite = false, root = undefined, route = undefined, ...options } = {}) {
+export async function render(template, data = {}, { useVite = false, root = undefined, route = undefined, base = "/", ...options } = {}) {
 	// Convert the object values to strings
 	data = await mapEntries(data, async function([key, value]) {
 		if (typeof value !== "function" && typeof value === "object") {
@@ -82,7 +82,7 @@ export async function render(template, data = {}, { useVite = false, root = unde
 
 				const result = await vite.build({
 					"mode": "production",
-					"root": path.join(root, route),
+					"root": root,
 					"build": {
 						"rollupOptions": {
 							"input": "index.tsx",
@@ -106,8 +106,7 @@ export async function render(template, data = {}, { useVite = false, root = unde
 					// TODO: Is this still needed?
 					// Undo import_
 					.replace(/import_.+?\./gu, "")
-					// Remove remaining non-relative imports
-					.replace(/^(import .*? from (?:'|")[^\\.]+?(?:'|");)$/gmu, "");
+					.replace(/^(import .*? from (?:'|")[^\\./]+?(?:'|");)$/gmu, "");
 			}
 		}
 
@@ -141,9 +140,10 @@ export async function render(template, data = {}, { useVite = false, root = unde
 			const result = await vite.build({
 				"mode": "production",
 				"root": root,
-				"base": "/otto-parts/", // TODO: Make this customizable.
+				"base": base,
 				"build": {
 					"emptyOutDir": false,
+					"target": "ESNext",
 					"rollupOptions": {
 						"input": "index.html"
 					},
@@ -168,8 +168,7 @@ export async function render(template, data = {}, { useVite = false, root = unde
 							"configResolved": async function(config) {
 								__root = config.root;
 
-								// TODO: Improve
-								external = config.build.rollupOptions.external ?? Object.keys(JSON.parse(await fs.readFile(path.join(__root, "package.json")))["devDependencies"]);
+								external = config.build.rollupOptions.external ?? Object.keys(JSON.parse(await fs.readFile(fs.closest(__root, "package.json")))["devDependencies"] ?? {});
 							},
 							"transform": async function(code, id) {
 								if (id.endsWith(".html")) {
