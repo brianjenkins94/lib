@@ -53,9 +53,9 @@ export function dedent(input) {
 	const indentationWidth = (/^ {2,}/mu.exec(input) ?? [""])[0].length;
 
 	return input
-		.replace(/^\s*\n(?=\s*\S)/mu, "")
+		.replace(/^(?:[^\S\n]*\n)+(?=[^\S\n]*\S)/mu, "")
 		.replace(new RegExp("^( {" + indentationWidth + "})", "gmu"), "")
-		.replace(/^\n|(?<=\n+) +$/gu, "");
+		.replace(/^\n|(?<=\n) +$/gu, "");
 		//.replace(/^ +/gmu, function(match) {
 		//  return "\t".repeat(match.length / 4);
 		//});
