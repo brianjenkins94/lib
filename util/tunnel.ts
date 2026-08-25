@@ -4,13 +4,15 @@ import net from "node:net";
 export class Tunnel {
 	private readonly sockets = new Set();
 	private readonly localUrl;
+	private readonly subdomain;
 	private remotePort;
 	private closed = false;
 	private ready = false;
 	public url;
 
-	constructor(localUrl) {
+	constructor(localUrl, subdomain) {
 		this.localUrl = localUrl;
+		this.subdomain = subdomain;
 	}
 
 	async open(n = 10) {
@@ -26,10 +28,16 @@ export class Tunnel {
 		}
 
 		if (this.url === undefined) {
-			const response = await (await fetch("http://localtunnel.me/?new")).json();
+			const response = await (await fetch("http://localtunnel.me/" + (this.subdomain ?? "?new"))).json();
 
 			this.remotePort = response.port;
 			this.url = response.url;
+
+			// A requested subdomain is best-effort: if it's taken (or declined) the server
+			// hands back a random one, so re-creation is no longer stable — surface that.
+			if (this.subdomain !== undefined && new URL(this.url).hostname.split(".")[0] !== this.subdomain) {
+				console.warn(`[tunnel] requested subdomain "${this.subdomain}" unavailable; using ${this.url}`);
+			}
 		}
 
 		for (let x = 0; x < n; x++) {
