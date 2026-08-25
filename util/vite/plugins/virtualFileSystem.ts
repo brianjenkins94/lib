@@ -3,7 +3,7 @@ import * as path from "node:path";
 import * as fs from "@brianjenkins94/util/fs";
 
 export function virtualFileSystem(files = {}) {
-	let __root;
+	let root;
 
 	let input;
 
@@ -13,26 +13,26 @@ export function virtualFileSystem(files = {}) {
 		"name": "virtual-file-system",
 		"enforce": "pre",
 		"configResolved": async function(config) {
-			__root = config.root;
+			({ root } = config);
 
 			files = Object.entries(files).reduce((files, [fileName, value]) => {
-				files[path.join(__root, fileName)] = value;
+				files[path.join(root, fileName)] = value;
 
 				return files;
 			}, {});
 
-			input = files[path.join(__root, config.build.rollupOptions.input)];
+			input = files[path.join(root, config.build.rollupOptions.input)];
 
 			// TODO: Improve
-			external = config.build.rollupOptions.external ?? Object.keys(JSON.parse(await fs.readFile(fs.closest(__root, "package.json")))["devDependencies"]);
+			external = config.build.rollupOptions.external ?? Object.keys(JSON.parse(await fs.readFile(fs.closest(root, "package.json")))["devDependencies"]);
 		},
 		"resolveId": async function(id, importer, { isEntry }) {
 			if (id.includes("?")) {
 				return;
 			}
 
-			if (Object.keys(files).includes(path.join(__root, id))) {
-				return path.join(__root, id);
+			if (Object.keys(files).includes(path.join(root, id))) {
+				return path.join(root, id);
 			}
 
 			if (typeof external === "function") {

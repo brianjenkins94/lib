@@ -3,6 +3,7 @@ import * as fs from "@brianjenkins94/util/fs";
 import * as ejs from "ejs";
 import { jsxToString } from "jsx-async-runtime";
 import { mapEntries } from "./array";
+import { getViteDevServer } from "./vite/dev";
 import { polyfillNode } from "./vite/plugins/polyfillNode";
 import { virtualFileSystem } from "./vite/plugins/virtualFileSystem";
 
@@ -56,7 +57,7 @@ async function transform(root, route) {
 	return path.join(root, "dist", result.output[0].fileName);
 }
 
-export async function render(template, data = {}, { useVite = false, root = undefined, route = undefined, base = "/", ...options } = {}) {
+export async function render(template, data = {}, { useVite = false, root = undefined, route = undefined, base = "/", url = undefined, outDir = undefined, ...options } = {}) {
 	// Convert the object values to strings
 	data = await mapEntries(data, async function([key, value]) {
 		if (typeof value !== "function" && typeof value === "object") {
@@ -136,13 +137,16 @@ export async function render(template, data = {}, { useVite = false, root = unde
 			throw error;
 		}
 
-		if (useVite) {
+		if (useVite && process.env["NODE_ENV"] === "production") {
+			vite ??= await import("vite");
+
 			const result = await vite.build({
 				"mode": "production",
 				"root": root,
 				"base": base,
 				"build": {
 					"emptyOutDir": false,
+					"outDir": outDir,
 					"target": "ESNext",
 					"rollupOptions": {
 						"input": "index.html"
@@ -158,17 +162,13 @@ export async function render(template, data = {}, { useVite = false, root = unde
 						"index.html": html
 					}),
 					(function transform() {
-						let __root;
-
 						let external;
 
 						return {
 							"name": "transform",
 							"enforce": "post",
 							"configResolved": async function(config) {
-								__root = config.root;
-
-								external = config.build.rollupOptions.external ?? Object.keys(JSON.parse(await fs.readFile(fs.closest(__root, "package.json")))["devDependencies"] ?? {});
+								external = config.build.rollupOptions.external ?? Object.keys(JSON.parse(await fs.readFile(fs.closest(root, "package.json")))["devDependencies"] ?? {});
 							},
 							"transform": async function(code, id) {
 								if (id.endsWith(".html")) {
@@ -188,8 +188,28 @@ export async function render(template, data = {}, { useVite = false, root = unde
 			});
 
 			html = result.output.find(({ fileName }) => fileName === "index.html").source;
+		} else if (useVite) {
+			html = await (await getViteDevServer(root)).transformIndexHtml(url ?? "/", html);
 		}
 
 		return html;
 	}
+}
+
+/**
+ * Express view engine adapter over `render`: `server.engine("ejs", ejsEngine(root, outDir))`.
+ * Plain `render` by default; when a route sets `useVite: true` in the render options it runs
+ * the full-page Vite pass (dev = the shared server's `transformIndexHtml`, prod = a build into
+ * `outDir`). `route` is threaded through as the Vite url.
+ */
+export function ejsEngine(root, outDir) {
+	return async function(filePath, options, callback) {
+		try {
+			callback(null, await render(filePath, options, options["useVite"] === true
+				? { "useVite": true, root, "base": "/", "url": options["route"], outDir }
+				: { root, "route": options["route"] }));
+		} catch (error) {
+			callback(error);
+		}
+	};
 }

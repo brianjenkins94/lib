@@ -10,7 +10,13 @@ import { log } from "@brianjenkins94/util/logger";
 import * as path from "node:path";
 import * as url from "node:url";
 import * as fs from "@brianjenkins94/util/fs";
-import { createServer as createViteServer } from "vite";
+import { createServer as createViteServer, mergeConfig } from "vite";
+import { jsxToString } from "jsx-async-runtime";
+
+import { defaults } from "./defaults";
+
+/** Close tags jsx-async-runtime emits for HTML void elements — invalid HTML5, so strip them. */
+const VOID_CLOSE_TAGS = /<\/(?:meta|link|br|hr|img|input|area|base|col|embed|source|track|wbr)>/gu;
 
 /**
  * The shared Vite dev server (middleware mode, custom appType) — one per process. This is the base
@@ -20,13 +26,18 @@ import { createServer as createViteServer } from "vite";
 let viteDevServer: ViteDevServer | undefined;
 
 export async function getViteDevServer(root: string): Promise<ViteDevServer> {
-	viteDevServer ??= await createViteServer({
+	// Start from the shared repo defaults (esnext, logLevel, worker format, …) so the
+	// dev server matches the build configs instead of re-specifying its own base.
+	viteDevServer ??= await createViteServer(mergeConfig(defaults, {
 		"root": root,
 		"appType": "custom",
-		"server": { "middlewareMode": true },
+		// allowedHosts: this dev server is often mounted on an app reached through a
+		// tunnel/proxy (e.g. a *.loca.lt webhook), and Vite's default host check would
+		// 403 those requests. It's a dev-only server, so trust any host.
+		"server": { "middlewareMode": true, "allowedHosts": true },
 		"esbuild": { "jsx": "automatic", "jsxImportSource": "jsx-async-runtime" },
 		"publicDir": false
-	});
+	}));
 
 	return viteDevServer;
 }
@@ -83,4 +94,32 @@ export async function serve(appRoot: string, port = 5173): Promise<void> {
 			}
 		});
 	}).listen(port, () => { log.info(`${path.basename(appRoot)} → http://localhost:${port}/`); });
+}
+
+/** An Express view engine callback. */
+type ViewEngine = (filePath: string, options: object, callback: (error: unknown, html?: string) => void) => Promise<void>;
+
+/**
+ * Express view engine for full-page TSX views, rendered through `vite` — the shared dev server
+ * server.ts also mounts as middleware, passed in so the sharing is explicit. A view's default
+ * export returns the whole <html> document; we SSR-load it, stringify the JSX, strip the void-
+ * element close tags jsx-async-runtime emits (parse5 in `transformIndexHtml` rejects `</meta>`
+ * etc.), then run the transform. A `route` prop, if present, is the transform url. Wire with
+ * `server.engine("tsx", tsxEngine(await getViteDevServer(root)))`.
+ */
+export function tsxEngine(vite: ViteDevServer): ViewEngine {
+	return async function(filePath, options, callback) {
+		try {
+			const props = options as Record<string, unknown>;
+			const moduleId = "/" + path.relative(vite.config.root, filePath).replace(/\\/gu, "/");
+
+			const { "default": Page } = await vite.ssrLoadModule(moduleId);
+			const document = "<!doctype html>\n" + (await jsxToString(await Page(props))).replace(VOID_CLOSE_TAGS, "");
+
+			callback(null, await vite.transformIndexHtml((props["route"] as string) ?? "/", document));
+		} catch (error) {
+			vite.ssrFixStacktrace?.(error as Error);
+			callback(error);
+		}
+	};
 }
