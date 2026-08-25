@@ -106,6 +106,12 @@ export class PersistentStore {
 		return this.save();
 	}
 
+	public delete(key: string) {
+		delete this._cache[key];
+
+		return this.save();
+	}
+
 	public *keys() {
 		this.clearExpire();
 
