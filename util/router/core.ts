@@ -53,7 +53,7 @@ export async function getViteDevServer(root) {
 		for (const event of ["change", "unlink"]) {
 			viteDevServer.watcher.on(event, async function(changedFilePath) {
 				for (const [routeFilePath] of routeModules) {
-					const moduleNode = await viteDevServer.moduleGraph.getModuleByUrl("/" + path.relative(root, routeFilePath).replace(/\\/gu, "/"));
+					const moduleNode = await viteDevServer.moduleGraph.getModuleByUrl("/" + path.relative(viteDevServer.config.root, routeFilePath).replace(/\\/gu, "/"));
 
 					if (hasDependency(moduleNode, changedFilePath)) {
 						routeModules.delete(routeFilePath);
@@ -89,9 +89,14 @@ export async function resolveExport(root, filePath, exportName) {
 	}
 
 	const normalizedFilePath = path.resolve(filePath).replace(/\\/gu, "/");
-	const moduleUrl = "/" + path.relative(root, normalizedFilePath).replace(/\\/gu, "/");
+	const viteDevServer = await getViteDevServer(root);
+	// Resolve the URL against the Vite server's ACTUAL root, not `root` (a mount's package root). The dev
+	// server is a shared singleton rooted at whoever created it first (e.g. a harness at the repo root),
+	// which diverges from a mount's package root when a nested package.json exists — and ssrLoadModule
+	// resolves the URL against THAT root, so the URL has to match it.
+	const moduleUrl = "/" + path.relative(viteDevServer.config.root, normalizedFilePath).replace(/\\/gu, "/");
 
-	const module = await (routeModules.get(normalizedFilePath) ?? routeModules.set(normalizedFilePath, (await getViteDevServer(root)).ssrLoadModule(moduleUrl)).get(normalizedFilePath));
+	const module = await (routeModules.get(normalizedFilePath) ?? routeModules.set(normalizedFilePath, viteDevServer.ssrLoadModule(moduleUrl)).get(normalizedFilePath));
 
 	return module[exportName];
 }
