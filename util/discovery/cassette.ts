@@ -80,7 +80,7 @@ export async function scrubCassetteFile(file: string, scrub: (cassette: Cassette
 
 	if (cassette === undefined) { return; }
 
-	await fs.writeFile(file, JSON.stringify(scrub(cassette), undefined, "\t") + "\n");
+	return fs.writeFile(file, JSON.stringify(scrub(cassette), undefined, "\t") + "\n");
 }
 
 /** The replay side: the recorded `responseBody` for the first entry matching `method` + a path-pattern

@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import * as os from "node:os";
 import * as path from "node:path";
 import { log } from "@brianjenkins94/util/logger";
 import { createGunzip, createGzip } from "node:zlib";
@@ -34,6 +35,53 @@ async function collectBuiltFiles(workspaceRoot: string, patterns: string[]): Pro
 	}
 
 	return result;
+}
+
+/**
+ * Emit `.d.ts` for a source package so the tarball ships type declarations alongside the esbuild-transpiled
+ * `.js` (which carries none). Runs `tsc --emitDeclarationOnly` into a temp dir via a throwaway tsconfig that
+ * extends the repo's — inheriting `paths`, `lib`, `target` — then returns the declarations keyed
+ * workspace-relative POSIX (`fs.d.ts`, `discovery/cassette.d.ts`) to fold into the file map. Type errors
+ * don't block emit (tsc is best-effort). Alias imports like `@brianjenkins94/util/logger` survive verbatim:
+ * in the published `@brianjenkins94/util` package they resolve as self-referential subpath imports, so no
+ * rewriting is needed. `nestedDirs` (repo-relative) are excluded so a parent never ships a child's types.
+ */
+async function emitDeclarations(workspace: string, nestedDirs: string[]): Promise<Record<string, Buffer>> {
+	const slug = workspace.replace(/[\\/]/gu, "-").replace(/^\.$/u, "root");
+	const outDir = path.join(os.tmpdir(), `dts-${slug}-${process.pid}`);
+	const configPath = path.join(__root, `.tsconfig.dts.${slug}.json`);
+
+	await fs.writeFile(configPath, JSON.stringify({
+		"extends": "./tsconfig.json",
+		"compilerOptions": { "noEmit": false, "declaration": true, "emitDeclarationOnly": true, "skipLibCheck": true, "outDir": outDir, "rootDir": path.join(__root, workspace) },
+		"include": [path.join(workspace, "**", "*.ts").replace(/\\/gu, "/")],
+		"exclude": ["node_modules", "**/node_modules", ...nestedDirs.map((dir) => dir + "/**")]
+	}));
+
+	try {
+		// tsc exits non-zero on type errors but still emits declarations — resolve on close regardless.
+		await new Promise<void>(function(resolve) {
+			const tsc = spawn("npx", ["tsc", "-p", configPath], { "cwd": __root, "shell": true });
+
+			tsc.on("close", () => resolve());
+			tsc.on("error", () => resolve());
+		});
+
+		const declarations: Record<string, Buffer> = {};
+
+		for await (const entry of fs.glob(path.join(outDir, "**", "*.d.ts"), { "withFileTypes": true })) {
+			if (!entry.isFile()) { continue; }
+
+			const absolute = path.join(entry.parentPath, entry.name);
+
+			declarations[path.relative(outDir, absolute).replace(/\\/gu, "/")] = await fs.readFile(absolute, { "encoding": null });
+		}
+
+		return declarations;
+	} finally {
+		await fs.rm(outDir, { "recursive": true, "force": true });
+		await fs.rm(configPath, { "force": true });
+	}
 }
 
 const workspaces = Object.entries(await build(process.argv.length > 2 ? process.argv.slice(2) : undefined)).filter(([key, value]) => value === 0).map(([key]) => key);
@@ -162,6 +210,9 @@ for (const workspace of workspaces) {
 
 			files[path.relative(path.join(__root, workspace), absolute).replace(/\\/gu, "/")] = await fs.readFile(absolute, { "encoding": null });
 		}
+
+		// Ship `.d.ts` for the transpiled sources — the esbuild/vite output above carries no types.
+		Object.assign(files, await emitDeclarations(workspace, nestedDirs));
 	}
 
 	const binFiles = Object.keys(files).filter(isBin);
@@ -223,8 +274,11 @@ for (const workspace of workspaces) {
 	} : {
 		...publishable,
 		"name": `@${process.env["GITHUB_REPOSITORY_OWNER"]}/${packageJson["name"]}`,
-		"exports": Object.fromEntries(Object.keys(files).filter((key) => key !== "package.json").map((key) => {
-			const target = "./" + key;
+		"exports": Object.fromEntries(Object.keys(files).filter((key) => key !== "package.json" && !key.endsWith(".d.ts")).map((key) => {
+			// Pair each entry with its emitted declaration (if any) so TypeScript consumers get types;
+			// hand-written .mjs/.cjs have no sibling .d.ts and stay a bare target string.
+			const dtsKey = key.replace(/\.[^.]+$/u, ".d.ts");
+			const target = files[dtsKey] !== undefined ? { "types": "./" + dtsKey, "default": "./" + key } : "./" + key;
 			const directory = path.dirname(key).replace(/\\/gu, "/");
 			const baseName = path.basename(key, path.extname(key));
 
