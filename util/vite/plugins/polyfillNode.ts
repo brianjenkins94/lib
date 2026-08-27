@@ -19,13 +19,52 @@ function isFunctional(builtin: string): boolean {
 	return stdlib[builtin] !== undefined && !/mock[/\\]empty/u.test(stdlib[builtin]);
 }
 
+/**
+ * A dynamic import whose specifier is preceded by an `@external` block comment names an OPTIONAL
+ * dependency the consuming app may not install — the same axis as an un-polyfillable builtin: an
+ * import that
+ * would otherwise break a browser bundle of the lib. We collect the annotated specifiers from
+ * source, then externalize each ONLY IF it doesn't resolve — so a consumer that DOES install the
+ * dep still gets it bundled and working, while one that doesn't gets a harmless unreached runtime
+ * import instead of a build-time "failed to resolve import" error. (Bundlers have no cross-tool
+ * ignore comment — `@vite-ignore`/`webpackIgnore` are each honored only by their own tool — so an
+ * annotation like this only means anything paired with a plugin that reads it; this is that plugin.)
+ */
+const OPTIONAL_IMPORT = /import\(\s*((?:\/\*[\s\S]*?\*\/\s*)*)["']([^"']+)["']/gu;
+
 export function polyfillNode(builtins = builtinModules): PluginOption {
 	const polyfill = builtins.filter(isFunctional);
 	const stub = builtins.filter((builtin) => !isFunctional(builtin));
 
 	const filter = new RegExp(`^(?:${NAMESPACE})?(${stub.join("|")})(/.*)?$`, "u");
 
+	// Specifiers seen with an `@external` annotation, filled by the transform hook below.
+	const optional = new Set<string>();
+
 	return [
+		{
+			"name": "external-optional-deps",
+			"enforce": "pre",
+			"transform": function(code: string) {
+				for (const [, comments, id] of code.matchAll(OPTIONAL_IMPORT)) {
+					if (/@external/u.test(comments)) {
+						optional.add(id);
+					}
+				}
+
+				return null;
+			},
+			"resolveId": async function(id: string, importer: string | undefined) {
+				if (!optional.has(id)) {
+					return undefined;
+				}
+
+				// Installed → let normal resolution bundle it; absent → leave it a runtime import.
+				const resolved = await this.resolve(id, importer, { "skipSelf": true });
+
+				return resolved === null ? { "id": id, "external": true } : undefined;
+			}
+		} as PluginOption,
 		...(polyfill.length > 0 ? nodePolyfills({ "include": polyfill, "protocolImports": true }) : []),
 		...(stub.length > 0 ? [{
 			"name": "node-stdlib-browser-alias",

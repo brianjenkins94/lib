@@ -107,9 +107,7 @@ async function attemptParse(response: Response): Promise<any> {
 		};
 	} else if (SaxesParser !== null && mimeType?.endsWith("xml")) {
 		try {
-			const saxesModule = "saxes";
-
-			SaxesParser ??= (await import(/* @vite-ignore */ saxesModule))["default"]["SaxesParser"];
+			SaxesParser ??= (await import(/* @external */ "saxes"))["default"]["SaxesParser"];
 
 			body ??= new TextDecoder().decode(await arrayBuffer);
 
