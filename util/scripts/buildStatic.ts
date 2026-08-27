@@ -5,7 +5,7 @@ import { log } from "@brianjenkins94/util/logger";
 import * as fs from "@brianjenkins94/util/fs";
 import { build } from "vite";
 import { jsxToString } from "jsx-async-runtime";
-import { getViteDevServer } from "../vite/dev";
+import { getViteDevServer } from "@brianjenkins94/util/vite/dev";
 
 /** jsx-async-runtime emits close tags for HTML void elements; parse5 rejects them, so strip them. */
 const VOID_CLOSE_TAGS = /<\/(?:meta|link|br|hr|img|input|area|base|col|embed|source|track|wbr)>/gu;
