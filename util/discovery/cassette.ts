@@ -1,7 +1,7 @@
-import * as fs from "node:fs";
+import type { Observation } from "./accumulate.js";
 import * as path from "node:path";
-import { log } from "./logger";
-import type { Observation } from "./discovery/accumulate";
+import * as fs from "@brianjenkins94/util/fs";
+import { log } from "@brianjenkins94/util/logger";
 
 /**
  * A record/replay "cassette": captured request/response {@link Observation}s (as `playwright/capture`
@@ -20,18 +20,27 @@ export interface MergeOptions {
 	"scrub"?: (cassette: Cassette) => Cassette;
 }
 
+/** Read a cassette file, or `undefined` if it doesn't exist yet (an invalid/unreadable one still throws). */
+async function readCassette(file: string): Promise<Cassette | undefined> {
+	try {
+		return JSON.parse(await fs.readFile(file)) as Cassette;
+	} catch (error) {
+		if ((error as NodeJS.ErrnoException).code === "ENOENT") { return undefined; }
+
+		throw error;
+	}
+}
+
 /**
  * Merge freshly-captured observations into the committed cassette at `file`: one entry per
  * `method + pathPattern`, SUCCESSFUL responses only (status < 400), size-capped, sorted for a stable
  * diff, and scrubbed. Creates the file's directory if needed. Returns the number added/updated.
  */
-export function mergeCassette(file: string, observations: Observation[], options: MergeOptions = {}): number {
+export async function mergeCassette(file: string, observations: Observation[], options: MergeOptions = {}): Promise<number> {
 	const byKey = new Map<string, Observation>();
 
-	if (fs.existsSync(file)) {
-		for (const observation of JSON.parse(fs.readFileSync(file, "utf8")) as Cassette) {
-			byKey.set(observation.method + " " + observation.pathPattern, observation);
-		}
+	for (const observation of await readCassette(file) ?? []) {
+		byKey.set(observation.method + " " + observation.pathPattern, observation);
 	}
 
 	let added = 0;
@@ -52,24 +61,26 @@ export function mergeCassette(file: string, observations: Observation[], options
 		}
 
 		byKey.set(observation.method + " " + observation.pathPattern, observation);
-		added++;
+		added += 1;
 	}
 
 	let merged: Cassette = [...byKey.values()].sort((a, b) => (a.method + a.pathPattern).localeCompare(b.method + b.pathPattern));
 
 	if (options.scrub !== undefined) { merged = options.scrub(merged); }
 
-	fs.mkdirSync(path.dirname(file), { "recursive": true });
-	fs.writeFileSync(file, JSON.stringify(merged, undefined, "\t") + "\n");
+	await fs.mkdir(path.dirname(file), { "recursive": true });
+	await fs.writeFile(file, JSON.stringify(merged, undefined, "\t") + "\n");
 
 	return added;
 }
 
 /** Re-scrub a committed cassette in place (e.g. after tightening the redaction rules). No-op if absent. */
-export function scrubCassetteFile(file: string, scrub: (cassette: Cassette) => Cassette): void {
-	if (!fs.existsSync(file)) { return; }
+export async function scrubCassetteFile(file: string, scrub: (cassette: Cassette) => Cassette): Promise<void> {
+	const cassette = await readCassette(file);
 
-	fs.writeFileSync(file, JSON.stringify(scrub(JSON.parse(fs.readFileSync(file, "utf8")) as Cassette), undefined, "\t") + "\n");
+	if (cassette === undefined) { return; }
+
+	await fs.writeFile(file, JSON.stringify(scrub(cassette), undefined, "\t") + "\n");
 }
 
 /** The replay side: the recorded `responseBody` for the first entry matching `method` + a path-pattern

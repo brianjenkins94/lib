@@ -1,5 +1,4 @@
 import { execFileSync } from "node:child_process";
-import { existsSync } from "node:fs";
 import * as path from "node:path";
 import * as url from "node:url";
 import * as fs from "@brianjenkins94/util/fs";
@@ -208,7 +207,7 @@ export async function release(options: ReleaseOptions = {}): Promise<{ "tag": st
 // Run directly (the `util-release` bin): load `release.config.{ts,js}` from cwd if present (its default
 // export is ReleaseOptions, or a function returning them), else run tag-only against `package.json`.
 if (process.argv[1] !== undefined && import.meta.url === url.pathToFileURL(await fs.realpath(process.argv[1])).toString()) {
-	const configPath = ["release.config.ts", "release.config.js"].map((name) => path.resolve(process.cwd(), name)).find((file) => existsSync(file));
+	const configPath = ["release.config.ts", "release.config.js"].map((name) => path.resolve(process.cwd(), name)).find((file) => fs.existsSync(file));
 	const config = configPath === undefined ? {} : (await import(url.pathToFileURL(configPath).toString())).default as ReleaseOptions | (() => ReleaseOptions | Promise<ReleaseOptions>);
 
 	await release(typeof config === "function" ? await config() : config);
