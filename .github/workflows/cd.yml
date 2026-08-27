@@ -61,7 +61,8 @@
         }
       },
       "steps": [
-        { "uses": "actions/checkout@v4" },
+        # fetch-depth 0 + tags so notes.ts can `git log`/`git diff` the range since the last published tag.
+        { "uses": "actions/checkout@v4", "with": { "fetch-depth": 0, "fetch-tags": true } },
         { "uses": "./.github/actions/setup" },
         {
           "working-directory": "${{ matrix.package }}",
@@ -72,7 +73,7 @@
           "env": {
             "GH_TOKEN": "${{ secrets.GITHUB_TOKEN }}"
           },
-          "run": "echo \"TAG_NAME=$(.github/workflows/scripts/tag.sh \"${{ matrix.package }}\")\" >> \"$GITHUB_OUTPUT\""
+          "run": "echo \"TAG_NAME=$(npx tsx .github/workflows/scripts/tag.ts \"${{ matrix.package }}\")\" >> \"$GITHUB_OUTPUT\""
         },
         {
           "uses": "softprops/action-gh-release@v2",
@@ -81,6 +82,19 @@
             "tag_name": "${{ steps.tag.outputs.TAG_NAME }}",
             "token": "${{ secrets.GITHUB_TOKEN }}"
           }
+        },
+        {
+          # AI release notes from the code diff, regenerated each run over <last published tag>..HEAD and
+          # written to the draft body (guarded by a marker so hand-edits aren't clobbered). continue-on-error
+          # so a missing CLAUDE_CODE_OAUTH_TOKEN (or any hiccup) never blocks the release itself.
+          "name": "Draft AI release notes",
+          "continue-on-error": true,
+          "timeout-minutes": 5,
+          "env": {
+            "GH_TOKEN": "${{ secrets.GITHUB_TOKEN }}",
+            "CLAUDE_CODE_OAUTH_TOKEN": "${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}"
+          },
+          "run": "npm install -g @anthropic-ai/claude-code && npx tsx .github/workflows/scripts/notes.ts \"${{ matrix.package }}\" \"${{ steps.tag.outputs.TAG_NAME }}\""
         }
       ],
       "timeout-minutes": 15
@@ -96,10 +110,10 @@
           "env": {
             "GH_TOKEN": "${{ secrets.GITHUB_TOKEN }}"
           },
-          "run": ".github/workflows/scripts/publish.sh $(jq --raw-output '.[]' <<< '${{ needs.list-packages.outputs.packages }}')"
+          "run": "npx tsx .github/workflows/scripts/publish.ts $(jq --raw-output '.[]' <<< '${{ needs.list-packages.outputs.packages }}')"
         },
         {
-          # Ship even when a sibling package failed: publish.sh promoted the successes and exited non-zero
+          # Ship even when a sibling package failed: publish.ts promoted the successes and exited non-zero
           # only at the very end, so the docs/ tarballs that DID build are ready — deploy them regardless.
           "if": "${{ !cancelled() }}",
           "uses": "actions/upload-pages-artifact@v3",
@@ -133,7 +147,7 @@
       "steps": [
         { "uses": "actions/checkout@v4" },
         { "uses": "./.github/actions/setup" },
-        { "run": ".github/workflows/scripts/smoke.sh $(jq --raw-output '.[]' <<< '${{ needs.list-packages.outputs.packages }}')" }
+        { "run": "npx tsx .github/workflows/scripts/smoke.ts $(jq --raw-output '.[]' <<< '${{ needs.list-packages.outputs.packages }}')" }
       ],
       "timeout-minutes": 15
     }

@@ -20,13 +20,15 @@ interface Asset { "name": string }
 
 const SEMVER = /^(\d+)\.(\d+)\.(\d+)$/u;
 
-function parse(version: string): [number, number, number] | null {
+/** Parse `X.Y.Z` into a `[major, minor, patch]` tuple, or null if it isn't plain semver. */
+export function parse(version: string): [number, number, number] | null {
 	const match = SEMVER.exec(version);
 
 	return match === null ? null : [Number(match[1]), Number(match[2]), Number(match[3])];
 }
 
-function compare(a: [number, number, number], b: [number, number, number]): number {
+/** Compare two `[major, minor, patch]` tuples: negative if a < b, positive if a > b, 0 if equal. */
+export function compare(a: [number, number, number], b: [number, number, number]): number {
 	for (let index = 0; index < 3; index += 1) {
 		if (a[index] !== b[index]) { return a[index] - b[index]; }
 	}

@@ -22,11 +22,6 @@
       "required": false,
       "default": "true"
     },
-    "pat": {
-      "description": "Optional token exposed as PAT during install — e.g. for a postinstall that clones a private asset repo.",
-      "required": false,
-      "default": ""
-    },
     "install-flags": {
       "description": "Extra flags appended to `pnpm install` (e.g. '--prod' to skip devDependencies).",
       "required": false,
@@ -63,7 +58,6 @@
       },
       {
         "shell": "bash",
-        "env": { "PAT": "${{ inputs.pat }}" },
         "run": "pnpm install ${{ inputs.install-flags }} --config.minimumReleaseAge=${{ inputs.release-age }}"
       }
     ]
