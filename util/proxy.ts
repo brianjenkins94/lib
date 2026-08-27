@@ -10,7 +10,7 @@ export function createProxy(to) {
 	return server.web;
 }
 
-const UNSAFE_HEADERS = [
+export const UNSAFE_HEADERS = [
 	"connection",
 	"content-encoding", // Not unsafe, but Node.js fetch (undici) always decodes the response.
 	"content-length",

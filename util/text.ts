@@ -18,6 +18,10 @@ export function titleCaseToKebabCase(string) {
 	return string.replace(/([a-z0-9])\s+([a-z])/gui, "$1-$2").toLowerCase();
 }
 
+export function escapeHtml(value: string): string {
+	return value.replace(/[&<>"']/gu, (character) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "\"": "&quot;", "'": "&#39;" }[character] ?? character));
+}
+
 export function equalsIgnoreCase(a, b) {
 	return a.localeCompare(b, undefined, { "sensitivity": "base" }) === 0;
 }

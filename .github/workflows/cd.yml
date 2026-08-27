@@ -1,13 +1,23 @@
 {
   "name": "cd",
   "on": {
-    "workflow_dispatch": null
+    "workflow_dispatch": null,
+    # Fire automatically when CI finishes on main. workflow_run runs on the built-in GITHUB_TOKEN —
+    # no PAT/`gh workflow run` dispatch hand-off needed. The entry + deploy jobs gate on CI success.
+    "workflow_run": {
+      "workflows": ["ci"],
+      "types": ["completed"],
+      "branches": ["main"]
+    }
   },
   "concurrency": {
     "group": "${{ github.workflow }}-${{ github.ref }}"
   },
+  # contents:write lets the built-in GITHUB_TOKEN cut + promote releases (no PAT needed); pages + id-token
+  # are for the Pages deploy. lib's cd is terminal — no release-triggered workflow depends on the release
+  # event cascading, which a GITHUB_TOKEN-created release wouldn't fire anyway.
   "permissions": {
-    "contents": "read",
+    "contents": "write",
     "pages": "write",
     "id-token": "write"
   },
@@ -24,6 +34,8 @@
     #   "timeout-minutes": 15
     #},
     "list-packages": {
+      # Only after a manual dispatch or a successful CI run on main (workflow_run fires on failure too).
+      "if": "${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}",
       "runs-on": "ubuntu-latest",
       "steps": [
         { "uses": "actions/checkout@v4" },
@@ -50,18 +62,7 @@
       },
       "steps": [
         { "uses": "actions/checkout@v4" },
-        { "uses": "actions/setup-node@v4", "with": { "node-version": "lts/*" } },
-        { "uses": "pnpm/action-setup@v4", "with": { "version": "latest", "run_install": false } },
-        {
-          "uses": "actions/cache@v4",
-          "with": {
-            "path": "~/.pnpm-store",
-            "key": "pnpm-store-${{ runner.os }}-${{ hashFiles('**/pnpm-lock.yaml') }}",
-            "restore-keys": "pnpm-store-${{ runner.os }}-"
-          }
-        },
-        { "run": "pnpm config set --location=project --json allowBuilds \"{ \\\"esbuild\\\": true }\"" },
-        { "run": "pnpm install --config.minimumReleaseAge=10080" },
+        { "uses": "./.github/actions/setup" },
         {
           "working-directory": "${{ matrix.package }}",
           "run": "pnpm run --if-present build"
@@ -69,7 +70,7 @@
         {
           "id": "tag",
           "env": {
-            "GH_TOKEN": "${{ secrets.PAT }}"
+            "GH_TOKEN": "${{ secrets.GITHUB_TOKEN }}"
           },
           "run": "echo \"TAG_NAME=$(.github/workflows/scripts/tag.sh \"${{ matrix.package }}\")\" >> \"$GITHUB_OUTPUT\""
         },
@@ -78,7 +79,7 @@
           "with": {
             "draft": true,
             "tag_name": "${{ steps.tag.outputs.TAG_NAME }}",
-            "token": "${{ secrets.PAT }}"
+            "token": "${{ secrets.GITHUB_TOKEN }}"
           }
         }
       ],
@@ -89,22 +90,11 @@
       "needs": ["list-packages", "release"],
       "steps": [
         { "uses": "actions/checkout@v4" },
-        { "uses": "actions/setup-node@v4", "with": { "node-version": "lts/*" } },
-        { "uses": "pnpm/action-setup@v4", "with": { "version": "latest", "run_install": false } },
-        {
-          "uses": "actions/cache@v4",
-          "with": {
-            "path": "~/.pnpm-store",
-            "key": "pnpm-store-${{ runner.os }}-${{ hashFiles('**/pnpm-lock.yaml') }}",
-            "restore-keys": "pnpm-store-${{ runner.os }}-"
-          }
-        },
-        { "run": "pnpm config set --location=project --json allowBuilds \"{ \\\"esbuild\\\": true }\"" },
-        { "run": "pnpm install --config.minimumReleaseAge=10080" },
+        { "uses": "./.github/actions/setup" },
         { "run": "jq -r '.[]' <<< '${{ needs.list-packages.outputs.packages }}' | while read -r pkg; do curl --location --fail --show-error --silent --create-dirs --output \"docs/$pkg@latest.tgz\" \"https://${GITHUB_REPOSITORY_OWNER}.github.io/${GITHUB_REPOSITORY#*/}/$pkg@latest.tgz\" || rm -f \"docs/$pkg@latest.tgz\"; done" },
         {
           "env": {
-            "GH_TOKEN": "${{ secrets.PAT }}"
+            "GH_TOKEN": "${{ secrets.GITHUB_TOKEN }}"
           },
           "run": ".github/workflows/scripts/publish.sh $(jq --raw-output '.[]' <<< '${{ needs.list-packages.outputs.packages }}')"
         },
@@ -122,8 +112,10 @@
     },
     "deploy": {
       "runs-on": "ubuntu-latest",
-      # !cancelled() (not the implicit success()) so a partial-failure publish still deploys the successes.
-      "if": "${{ !cancelled() }}",
+      # !cancelled() (not the implicit success()) so a partial-failure publish still deploys the successes;
+      # AND gated on CI success so a workflow_run fired by a FAILED ci doesn't deploy (deploy uses
+      # !cancelled(), which would otherwise run through the skipped upstream jobs).
+      "if": "${{ !cancelled() && (github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success') }}",
       "environment": {
         "name": "github-pages",
         "url": "${{ steps.deployment.outputs.page_url }}"
@@ -140,10 +132,7 @@
       "if": "needs.list-packages.outputs.packages != '' && needs.list-packages.outputs.packages != '[]'",
       "steps": [
         { "uses": "actions/checkout@v4" },
-        { "uses": "actions/setup-node@v4", "with": { "node-version": "lts/*" } },
-        { "uses": "pnpm/action-setup@v4", "with": { "version": "latest", "run_install": false } },
-        { "run": "pnpm config set --location=project --json allowBuilds \"{ \\\"esbuild\\\": true }\"" },
-        { "run": "pnpm install --config.minimumReleaseAge=10080" },
+        { "uses": "./.github/actions/setup" },
         { "run": ".github/workflows/scripts/smoke.sh $(jq --raw-output '.[]' <<< '${{ needs.list-packages.outputs.packages }}')" }
       ],
       "timeout-minutes": 15

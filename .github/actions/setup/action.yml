@@ -1,0 +1,71 @@
+{
+  "name": "setup",
+  "description": "Shared Node + pnpm setup: setup-node, pnpm, pnpm-store cache, the allowBuilds allowlist, and a supply-chain-cooldown install. Run AFTER actions/checkout (install needs the working tree).",
+  "inputs": {
+    "node-version": {
+      "description": "Node version for setup-node.",
+      "required": false,
+      "default": "lts/*"
+    },
+    "release-age": {
+      "description": "pnpm minimumReleaseAge in minutes — the supply-chain quarantine window (default 7 days).",
+      "required": false,
+      "default": "10080"
+    },
+    "allow-builds": {
+      "description": "JSON object for `pnpm config set --json allowBuilds` (which dependencies may run install scripts).",
+      "required": false,
+      "default": "{ \"esbuild\": true }"
+    },
+    "strict-dep-builds": {
+      "description": "Set to 'false' to allow non-allowlisted dependency builds (pnpm strict-dep-builds).",
+      "required": false,
+      "default": "true"
+    },
+    "pat": {
+      "description": "Optional token exposed as PAT during install — e.g. for a postinstall that clones a private asset repo.",
+      "required": false,
+      "default": ""
+    },
+    "install-flags": {
+      "description": "Extra flags appended to `pnpm install` (e.g. '--prod' to skip devDependencies).",
+      "required": false,
+      "default": ""
+    }
+  },
+  "runs": {
+    "using": "composite",
+    "steps": [
+      {
+        "uses": "actions/setup-node@v4",
+        "with": { "node-version": "${{ inputs.node-version }}" }
+      },
+      {
+        "uses": "pnpm/action-setup@v4",
+        "with": { "version": "latest", "run_install": false }
+      },
+      {
+        "uses": "actions/cache@v4",
+        "with": {
+          "path": "~/.pnpm-store",
+          "key": "pnpm-store-${{ runner.os }}-${{ hashFiles('**/pnpm-lock.yaml') }}",
+          "restore-keys": "pnpm-store-${{ runner.os }}-"
+        }
+      },
+      {
+        "shell": "bash",
+        "run": "pnpm config set --location=project --json allowBuilds '${{ inputs.allow-builds }}'"
+      },
+      {
+        "if": "${{ inputs.strict-dep-builds == 'false' }}",
+        "shell": "bash",
+        "run": "pnpm config set --location=project strict-dep-builds false"
+      },
+      {
+        "shell": "bash",
+        "env": { "PAT": "${{ inputs.pat }}" },
+        "run": "pnpm install ${{ inputs.install-flags }} --config.minimumReleaseAge=${{ inputs.release-age }}"
+      }
+    ]
+  }
+}
