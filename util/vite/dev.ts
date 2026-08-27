@@ -14,6 +14,7 @@ import { createServer as createViteServer, mergeConfig } from "vite";
 import { jsxToString } from "jsx-async-runtime";
 
 import { defaults } from "./defaults";
+import { polyfillNodeEsbuild } from "./plugins/polyfillNode";
 
 /** Close tags jsx-async-runtime emits for HTML void elements — invalid HTML5, so strip them. */
 const VOID_CLOSE_TAGS = /<\/(?:meta|link|br|hr|img|input|area|base|col|embed|source|track|wbr)>/gu;
@@ -36,6 +37,7 @@ export async function getViteDevServer(root: string): Promise<ViteDevServer> {
 		// 403 those requests. It's a dev-only server, so trust any host.
 		"server": { "middlewareMode": true, "allowedHosts": true },
 		"esbuild": { "jsx": "automatic", "jsxImportSource": "jsx-async-runtime" },
+		"optimizeDeps": { "esbuildOptions": { "plugins": [polyfillNodeEsbuild(["fs", "path", "url", "util"])] } },
 		"publicDir": false
 	}));
 

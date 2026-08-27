@@ -1,7 +1,7 @@
 import * as path from "node:path";
 import * as url from "node:url";
 
-const __filename = url.fileURLToPath(import.meta.url);
+const __filename = import.meta.url.startsWith("file:") ? url.fileURLToPath(import.meta.url) : import.meta.url;
 const __dirname = path.dirname(__filename);
 
 export const __root = path.join(__dirname, "..");

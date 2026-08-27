@@ -81,7 +81,9 @@ async function attemptParse(response: Response): Promise<any> {
 		}
 	}
 
-	if (contentType?.endsWith("json")) {
+	const mimeType = contentType?.split(";")[0].trim();
+
+	if (mimeType?.endsWith("json")) {
 		try {
 			body ??= JSON.parse(new TextDecoder().decode(await arrayBuffer));
 
@@ -93,7 +95,7 @@ async function attemptParse(response: Response): Promise<any> {
 				return JSON.stringify(body, undefined, 2);
 			};
 		} catch (error) { }
-	} else if (contentType?.startsWith("text") && !contentType?.endsWith("xml")) {
+	} else if (mimeType?.startsWith("text") && !mimeType?.endsWith("xml")) {
 		body ??= new TextDecoder().decode(await arrayBuffer);
 
 		response.json = async function() {
@@ -103,9 +105,9 @@ async function attemptParse(response: Response): Promise<any> {
 		response.text = async function() {
 			return body;
 		};
-	} else if (SaxesParser !== null && contentType?.endsWith("xml")) {
+	} else if (SaxesParser !== null && mimeType?.endsWith("xml")) {
 		try {
-			SaxesParser ??= (await import("saxes"))["default"]["SaxesParser"];
+			SaxesParser ??= (await import(/* @vite-ignore */ "saxes"))["default"]["SaxesParser"];
 
 			body ??= new TextDecoder().decode(await arrayBuffer);
 
@@ -295,9 +297,7 @@ function fetchFactory(baseUrl?, defaultOptions = {}) {
 	}
 
 	if (limiter !== false && limiter === undefined) {
-		// 100 requests/minute
 		limiter = new Bottleneck({
-			"minTime": Math.floor(60_000 / 100),
 			"reservoir": 100,
 			"reservoirRefreshAmount": 100,
 			"reservoirRefreshInterval": 60_000
