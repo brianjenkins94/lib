@@ -1,5 +1,6 @@
 import type { PluginOption } from "vite";
 import type { Plugin as EsbuildPlugin } from "esbuild";
+import type { Plugin as RolldownPlugin } from "rolldown";
 import { builtinModules } from "node:module";
 import * as url from "node:url";
 import stdlib from "node-stdlib-browser";
@@ -173,6 +174,74 @@ export function polyfillNodeEsbuild(builtins = builtinModules): EsbuildPlugin {
 
 				return { "contents": contents || "export default {};", "loader": "js" };
 			});
+		}
+	};
+}
+
+/**
+ * The Rolldown counterpart of {@link polyfillNodeEsbuild}, for `optimizeDeps.rolldownOptions.plugins`.
+ *
+ * Vite 8's dep optimizer pre-bundles with ROLLDOWN, not esbuild: it stubs esbuild plugins and throws
+ * "Not implemented" the instant one touches the esbuild `build` object, so `polyfillNodeEsbuild` dies in
+ * its `setup`. Rolldown runs Rollup-style plugins, so this gives the optimizer the same treatment through
+ * `resolveId`/`load`/`transform`:
+ *  - functional builtins → resolved to their node-stdlib-browser polyfill (so `node:url`'s `fileURLToPath`,
+ *    `node:util`, `buffer`, … work);
+ *  - un-polyfillable ones (`fs`, …) → a `\0`-virtual module of no-op named exports, so `{ readFileSync }` links;
+ *  - `process`, read as a free global at module load by node-leaning deps (fido → `process.platform`) → a
+ *    minimal INLINE shim.
+ *
+ * The `process` shim is inlined deliberately: `optimizeDeps.rolldownOptions.inject` is rejected by Vite
+ * ("Invalid key: Expected never"), and injecting it by IMPORTING node-stdlib-browser's shim adds a dep edge
+ * that churns Vite's optimizer into a 504-loop. Only `process` is covered — the only free global these deps
+ * read; a dep that needs a real `Buffer` would want `stdlib.buffer`'s `Buffer` given the same treatment.
+ */
+export function polyfillNodeRolldown(builtins = builtinModules): RolldownPlugin {
+	const STUB = "\0polyfill-node-stub:";
+	// Strip an optional `node:` prefix and any subpath (`fs/promises` → `fs`) to the base builtin.
+	const base = (id: string): string => id.replace(/^node:/u, "").split("/")[0];
+	const filter = new RegExp(`^(?:node:)?(?:${builtins.join("|")})(?:/.*)?$`, "u");
+	// A minimal browser `process`, inlined (no import edge to churn the optimizer); `var` so it's a
+	// harmless no-op in a module that already has one.
+	const PROCESS_SHIM = `var process = globalThis.process ?? { "env": {}, "argv": [], "platform": "browser", "version": "", "versions": {}, "cwd": () => "/", "nextTick": (fn) => queueMicrotask(fn) };\n`;
+
+	return {
+		"name": "polyfill-node-rolldown",
+		"resolveId": async function(id) {
+			if (!filter.test(id)) {
+				return null;
+			}
+
+			const name = base(id);
+
+			if (isFunctional(name)) {
+				const resolved = await this.resolve(stdlib[name], undefined, { "skipSelf": true });
+
+				return resolved === null ? null : resolved.id;
+			}
+
+			// Known-but-un-polyfillable (fs, …) → the stub loader below.
+			return stdlib[name] !== undefined ? STUB + name : null;
+		},
+		"load": async function(id) {
+			if (!id.startsWith(STUB)) {
+				return null;
+			}
+
+			// Import the REAL builtin (runs in Node here) to mirror its named exports as no-ops.
+			const real = await import(id.slice(STUB.length)).catch(() => ({}));
+
+			return Object.entries(real).map(function([key, value]) {
+				return `export ${key === "default" ? "default" : `const ${key} =`} ${typeof value === "function" ? "() => {}" : "undefined"};`;
+			}).join("\n") || "export default {};";
+		},
+		"transform": function(code, id) {
+			// Skip the polyfills themselves; inject only where `process` is read as a free global.
+			if (id.includes("node-stdlib-browser") || !(/(?<![\w.$])process\b/u).test(code)) {
+				return null;
+			}
+
+			return { "code": PROCESS_SHIM + code, "map": null };
 		}
 	};
 }

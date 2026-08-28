@@ -14,6 +14,10 @@ export function pascalCaseToKebabCase(string) {
 	return string.replace(/([a-z0-9])([A-Z])/gu, "$1-$2").toLowerCase();
 }
 
+export function pascalCaseToScreamingSnakeCase(string) {
+	return string.replace(/([a-z0-9])([A-Z])/gu, "$1_$2").toUpperCase();
+}
+
 export function titleCaseToKebabCase(string) {
 	return string.replace(/([a-z0-9])\s+([a-z])/gui, "$1-$2").toLowerCase();
 }

@@ -10,11 +10,11 @@ import { log } from "@brianjenkins94/util/logger";
 import * as path from "node:path";
 import * as url from "node:url";
 import * as fs from "@brianjenkins94/util/fs";
-import { createServer as createViteServer, mergeConfig } from "vite";
+import { createServer as createViteServer, mergeConfig, version as viteVersion } from "vite";
 import { jsxToString } from "jsx-async-runtime";
 
 import { defaults } from "./defaults";
-import { polyfillNodeEsbuild } from "./plugins/polyfillNode";
+import { polyfillNodeEsbuild, polyfillNodeRolldown } from "./plugins/polyfillNode";
 
 /** Close tags jsx-async-runtime emits for HTML void elements — invalid HTML5, so strip them. */
 const VOID_CLOSE_TAGS = /<\/(?:meta|link|br|hr|img|input|area|base|col|embed|source|track|wbr)>/gu;
@@ -37,7 +37,11 @@ export async function getViteDevServer(root: string): Promise<ViteDevServer> {
 		// 403 those requests. It's a dev-only server, so trust any host.
 		"server": { "middlewareMode": true, "allowedHosts": true },
 		"esbuild": { "jsx": "automatic", "jsxImportSource": "jsx-async-runtime" },
-		"optimizeDeps": { "esbuildOptions": { "plugins": [polyfillNodeEsbuild(["fs", "path", "url", "util"])] } },
+		// Vite 8 pre-bundles deps with Rolldown (it stubs esbuild plugins → "Not implemented"); earlier
+		// Vite uses esbuild. Wire the polyfill to whichever optimizer this Vite runs.
+		"optimizeDeps": Number(viteVersion.split(".")[0]) >= 8
+			? { "rolldownOptions": { "plugins": [polyfillNodeRolldown(["fs", "path", "url", "util"])] } }
+			: { "esbuildOptions": { "plugins": [polyfillNodeEsbuild(["fs", "path", "url", "util"])] } },
 		"publicDir": false
 	}));
 
