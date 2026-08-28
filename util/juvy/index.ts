@@ -10,8 +10,8 @@
  * (SCREAMING_SNAKE) and CLI flag (--kebab); minimal specs; `sensitive`. No fs; `.parse()` lazy-loads
  * `node:util` (native parseArgs) only when called, so the config core itself has zero dependencies.
  */
-import { pascalCaseToKebabCase, pascalCaseToScreamingSnakeCase } from "../text"; // browser-safe (pure string ops)
-import { getRuntime } from "../env"; // shared runtime detection (env pulls node:path/url — polyfilled at bundle time)
+import { pascalCaseToKebabCase, pascalCaseToScreamingSnakeCase } from "@brianjenkins94/util/text"; // browser-safe (pure string ops)
+import { getRuntime } from "@brianjenkins94/util/env"; // shared runtime detection (env pulls node:path/url — polyfilled at bundle time)
 
 // ---------------------------------------------------------------------------------------------------------
 // Helpers — no hand-rolled deep clone: config DATA uses native structuredClone (handles Date/RegExp/Map/Set),
@@ -20,7 +20,7 @@ import { getRuntime } from "../env"; // shared runtime detection (env pulls node
 
 function getByPath(object: any, path: string[]): any {
 	return path.reduce((node, key) => {
-		if (node == null || !Object.prototype.hasOwnProperty.call(node, key)) {
+		if (node === null || node === undefined || !Object.prototype.hasOwnProperty.call(node, key)) {
 			throw new TypeError(`cannot read '${key}' of ${JSON.stringify(node)}`);
 		}
 
@@ -57,7 +57,7 @@ function isURL(value: string): boolean {
 	// Accept a full URL; if it parses only once a scheme is prepended, it was a bare host (`example.com`) — still
 	// a URL. Genuinely-malformed values (whitespace, empty) fail both and are rejected.
 	for (const candidate of [value, `https://${value}`]) {
-		try { new URL(candidate); return true; } catch { /* try the next candidate */ }
+		if (URL.canParse(candidate)) { return true; }
 	}
 
 	return false;
@@ -135,7 +135,7 @@ interface SchemaNode {
 }
 
 function isNode(x: any): x is SchemaNode {
-	return x != null && typeof x === "object" && "_juvyProperties" in x;
+	return x !== null && typeof x === "object" && "_juvyProperties" in x;
 }
 
 function resolveFormat(prop: PropertySchema, fullName: string): FormatFn {
@@ -234,7 +234,7 @@ export function juvy(schema: Schema, options: JuvyOptions = {}): Juvy {
 		assert(name !== "__proto__" && name !== "constructor" && name !== "prototype", `'${fullName}': reserved key`);
 
 		// A nested namespace = a plain object with no `default`.
-		if (node != null && typeof node === "object" && !Array.isArray(node) && Object.keys(node).length > 0 && !("default" in (node as object))) {
+		if (node !== null && typeof node === "object" && !Array.isArray(node) && Object.keys(node).length > 0 && !("default" in (node as object))) {
 			props[name] = { "_juvyProperties": {} };
 
 			for (const key of Object.keys(node as object)) {
@@ -245,7 +245,7 @@ export function juvy(schema: Schema, options: JuvyOptions = {}): Juvy {
 		}
 
 		// Shorthand: `key: value` → `{ default: value }`.
-		const prop: PropertySchema = (node != null && typeof node === "object" && !Array.isArray(node) && "default" in (node as object))
+		const prop: PropertySchema = (node !== null && typeof node === "object" && !Array.isArray(node) && "default" in (node as object))
 			? { ...(node as PropertySchema) } // shallow — we add fields; `format`/validator fn stays by reference
 			: { "default": node };
 
@@ -301,7 +301,7 @@ export function juvy(schema: Schema, options: JuvyOptions = {}): Juvy {
 				for (const [key, value] of Object.entries(from)) {
 					const path = prefix ? `${prefix}.${key}` : key;
 
-					if (value != null && typeof value === "object" && !Array.isArray(value) && propByPath[path] === undefined) {
+					if (value !== null && typeof value === "object" && !Array.isArray(value) && propByPath[path] === undefined) {
 						overlay(value, path); // descend into namespaces
 					} else {
 						api.set(path, value);
@@ -346,7 +346,7 @@ export function juvy(schema: Schema, options: JuvyOptions = {}): Juvy {
 
 						if (propByPath[path] !== undefined || seen.has(path)) { continue; }
 
-						if (value != null && typeof value === "object" && !Array.isArray(value)) { walk(value, path); } else { errors.push(`'${path}' is not declared in the schema`); }
+						if (value !== null && typeof value === "object" && !Array.isArray(value)) { walk(value, path); } else { errors.push(`'${path}' is not declared in the schema`); }
 					}
 				})(instance, "");
 			}
@@ -373,7 +373,7 @@ export function juvy(schema: Schema, options: JuvyOptions = {}): Juvy {
 			try {
 				({ values, positionals } = parseArgs({ "args": argv, "options": parseOptions, "allowPositionals": true, "strict": true }));
 			} catch (error) {
-				throw new Error((error as Error).message.replace(/\.\s+To [\s\S]*/u, "."));
+				throw new Error((error as Error).message.replace(/\.\s+To [\s\S]*/u, "."), { "cause": error });
 			}
 
 			const byFlag = new Map(flagSpecs.map((spec) => [spec.flag, spec.path]));
