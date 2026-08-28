@@ -107,7 +107,7 @@ async function attemptParse(response: Response): Promise<any> {
 		};
 	} else if (SaxesParser !== null && mimeType?.endsWith("xml")) {
 		try {
-			SaxesParser ??= (await import(/* @external */ "saxes"))["default"]["SaxesParser"];
+			SaxesParser ??= (await import(/*! @external */ "saxes"))["default"]["SaxesParser"];
 
 			body ??= new TextDecoder().decode(await arrayBuffer);
 

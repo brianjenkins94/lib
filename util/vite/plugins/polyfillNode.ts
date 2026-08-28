@@ -20,15 +20,20 @@ function isFunctional(builtin: string): boolean {
 }
 
 /**
- * A dynamic import whose specifier is preceded by an `@external` block comment names an OPTIONAL
- * dependency the consuming app may not install — the same axis as an un-polyfillable builtin: an
- * import that
- * would otherwise break a browser bundle of the lib. We collect the annotated specifiers from
- * source, then externalize each ONLY IF it doesn't resolve — so a consumer that DOES install the
- * dep still gets it bundled and working, while one that doesn't gets a harmless unreached runtime
- * import instead of a build-time "failed to resolve import" error. (Bundlers have no cross-tool
- * ignore comment — `@vite-ignore`/`webpackIgnore` are each honored only by their own tool — so an
- * annotation like this only means anything paired with a plugin that reads it; this is that plugin.)
+ * A dynamic import whose specifier is preceded by a `@external` LEGAL block comment (`/*! … *\/`)
+ * names an OPTIONAL dependency the consuming app may not install — the same axis as an
+ * un-polyfillable builtin: an import that would otherwise break a browser bundle of the lib. We
+ * collect the annotated specifiers from source, then externalize each ONLY IF it doesn't resolve —
+ * so a consumer that DOES install the dep still gets it bundled and working, while one that doesn't
+ * gets a harmless unreached runtime import instead of a build-time "failed to resolve import" error.
+ * (Bundlers have no cross-tool ignore comment — `@vite-ignore`/`webpackIgnore` are each honored only
+ * by their own tool — so an annotation like this only means anything paired with a plugin that reads
+ * it; this is that plugin.)
+ *
+ * The `/*!` (legal-comment) form is REQUIRED, not stylistic: a plain `/* … *\/` is dropped when util
+ * itself is published (its source is Rolldown-bundled, minify:false — which still strips ordinary
+ * comments but preserves legal ones), so the annotation would never reach a consumer's build and the
+ * specifier would never be externalized. Keep every `@external` marker a `/*!` comment.
  */
 const OPTIONAL_IMPORT = /import\(\s*((?:\/\*[\s\S]*?\*\/\s*)*)["']([^"']+)["']/gu;
 

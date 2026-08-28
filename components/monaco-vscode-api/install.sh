@@ -2,9 +2,17 @@
 
 CWD=$(pwd)
 
+REPO=https://github.com/CodinGame/monaco-vscode-api.git
+
+VERSION=$(git ls-remote --tags --refs --sort=-v:refname "$REPO" 'v[0-9]*' | grep -oE 'v[0-9]+\.[0-9]+\.[0-9]+$' | head -1)
+
+VERSION=${VERSION#v}
+
+[ -n "$VERSION" ] || { echo "install.sh: could not resolve latest CodinGame/monaco-vscode-api release tag" >&2; exit 1; }
+
 rm -rf demo/ monaco-vscode-api/
 
-git clone --no-checkout --depth 1 --filter=tree:0 --sparse https://github.com/CodinGame/monaco-vscode-api.git || exit 1
+git clone --no-checkout --depth 1 --filter=tree:0 --sparse --branch "v$VERSION" "$REPO" || exit 1
 
 cd monaco-vscode-api/
 
