@@ -2,7 +2,7 @@ import * as path from "node:path";
 import * as url from "node:url";
 import { log } from "@brianjenkins94/util/logger";
 import * as fs from "@brianjenkins94/util/fs";
-import { createServer, serveStatic } from "../server";
+import { createServer, serveStatic } from "@brianjenkins94/util/server";
 
 type Server = ReturnType<typeof createServer>;
 
@@ -84,7 +84,7 @@ if (process.argv[1] !== undefined && import.meta.url === url.pathToFileURL(await
 	for (let index = 0; index < args.length; index++) {
 		const arg = args[index];
 
-		if (arg === "--port" || arg === "-p") { port = Number(args[++index]); } else if (arg === "--base" || arg === "-b") { base = args[++index]; } else if (!arg.startsWith("-")) { dir = arg; }
+		if (arg === "--port" || arg === "-p") { port = Number(args[index += 1]); } else if (arg === "--base" || arg === "-b") { base = args[index += 1]; } else if (!arg.startsWith("-")) { dir = arg; }
 	}
 
 	const config = await discoverServeConfig();
