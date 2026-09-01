@@ -1,128 +1,12 @@
 import * as util from "node:util";
 import { Bottleneck } from "@brianjenkins94/util/bottleneck";
-import { log } from "./logger";
-import { PersistentStore } from "./store";
+import { isBrowser } from "@brianjenkins94/util/env";
+import { log } from "@brianjenkins94/util/logger";
+import { attemptParse } from "./parse";
+import { poll } from "./poll";
+import { backoff, defaultRetry } from "./retry";
 
-let SaxesParser;
-
-// FROM: https://github.com/tomas/needle/blob/cfc51beac3c209d7eeca2f1ba546f67d9aa780ea/lib/parsers.js#L9
-function parseXml(xmlString) {
-	const parser = new SaxesParser();
-
-	return new Promise(function(resolve, reject) {
-		let object;
-		let current;
-
-		parser.on("error", function(error) {
-			reject(error);
-		});
-
-		parser.on("text", function(text) {
-			if (current !== undefined) {
-				current.value += text;
-			}
-		});
-
-		parser.on("opentag", function({ name, attributes }) {
-			const element = {
-				"name": name ?? "",
-				"value": "",
-				"attributes": attributes
-			};
-
-			if (current !== undefined) {
-				element["parent"] = current;
-
-				current["children"] ??= [];
-
-				current.children.push(element);
-			} else {
-				object = element;
-			}
-
-			current = element;
-		});
-
-		parser.on("closetag", function() {
-			if (current.parent !== undefined) {
-				const previous = current;
-
-				current = current.parent;
-
-				delete previous.parent;
-			}
-		});
-
-		parser.on("end", function() {
-			resolve(object);
-		});
-
-		parser.write(xmlString).close();
-	});
-}
-
-async function attemptParse(response: Response): Promise<any> {
-	const arrayBuffer = response.arrayBuffer();
-
-	let body;
-
-	response.arrayBuffer = async function() {
-		return arrayBuffer;
-	};
-
-	let contentType = response.headers?.get("Content-Type");
-	const contentLength = response.headers.get("Content-Length");
-
-	if (contentType === undefined && parseInt(contentLength) > 0) {
-		body = new TextDecoder().decode(await arrayBuffer);
-
-		if (/[^\r\n\x20-\x7E]/ui.test(body)) {
-			contentType = "text/plain";
-		}
-	}
-
-	const mimeType = contentType?.split(";")[0].trim();
-
-	if (mimeType?.endsWith("json")) {
-		try {
-			body ??= JSON.parse(new TextDecoder().decode(await arrayBuffer));
-
-			response.json = async function() {
-				return body;
-			};
-
-			response.text = async function() {
-				return JSON.stringify(body, undefined, 2);
-			};
-		} catch (error) { }
-	} else if (mimeType?.startsWith("text") && !mimeType?.endsWith("xml")) {
-		body ??= new TextDecoder().decode(await arrayBuffer);
-
-		response.json = async function() {
-			return JSON.parse(body);
-		};
-
-		response.text = async function() {
-			return body;
-		};
-	} else if (SaxesParser !== null && mimeType?.endsWith("xml")) {
-		try {
-			SaxesParser ??= (await import(/*! @external */ "saxes"))["default"]["SaxesParser"];
-
-			body ??= new TextDecoder().decode(await arrayBuffer);
-
-			body = parseXml(body);
-
-			response["xml"] = async function() {
-				return body;
-			};
-		} catch (error) {
-			SaxesParser = null;
-		}
-	}
-
-	return body;
-}
+export { defaultConditionCallback } from "./poll";
 
 function extendedFetch(url, { cache, cacheKey, debug, fetch, limiter, retry, ...options }): Promise<Response> {
 	if (debug && url instanceof Request) {
@@ -284,14 +168,16 @@ let cache;
 
 let limiter;
 
-function fetchFactory(baseUrl?, defaultOptions = {}) {
+async function fetchFactory(baseUrl?, defaultOptions = {}) {
 	defaultOptions["fetch"] ??= globalThis.fetch;
-	defaultOptions["retry"] ??= ({ method }) => method.toLowerCase() === "get";
+	defaultOptions["retry"] ??= defaultRetry;
 	defaultOptions["headers"] ??= {};
 	defaultOptions["debug"] ??= process.env["NODE_ENV"] !== "production";
 
 	if (defaultOptions["debug"] && defaultOptions["cache"]) {
-		cache ??= new PersistentStore();
+		if (!isBrowser) {
+			cache ??= new (await import(/*! @external */ "@brianjenkins94/util/store")).PersistentStore();
+		}
 
 		defaultOptions["cache"] = cache;
 	}
@@ -307,34 +193,7 @@ function fetchFactory(baseUrl?, defaultOptions = {}) {
 	defaultOptions["limiter"] ??= limiter;
 
 	if (defaultOptions["limiter"] instanceof Bottleneck && defaultOptions["retry"]) {
-		defaultOptions["limiter"].retryHandler = function(error, { "options": { id }, retryCount }) {
-			const { request, response } = error;
-
-			// Not a fido-shaped HTTP error (e.g. a network rejection)
-			if (request === undefined || response === undefined) {
-				return undefined;
-			}
-
-			if (defaultOptions["retry"] === false || (typeof defaultOptions["retry"] === "function" && defaultOptions["retry"]({ "method": request.method }) === false)) {
-				return undefined;
-			}
-
-			let [header, reset] = [...response.headers].find(([header]) => /Rate-Limit-(After|Reset)/ui.test(header)) ?? [];
-
-			reset *= 1000;
-
-			if (reset >= Date.now()) {
-				reset -= Date.now();
-			}
-
-			if (retryCount < 2) {
-				const jitter = Math.floor(Math.random() * 500);
-
-				return (reset || (2 ** (retryCount + 1)) * 1000) + jitter;
-			} else {
-				return undefined;
-			}
-		};
+		defaultOptions["limiter"].retryHandler = backoff(defaultOptions["retry"]);
 	}
 
 	return async function(url, query?, options = {}) {
@@ -381,76 +240,9 @@ function fetchFactory(baseUrl?, defaultOptions = {}) {
 	};
 }
 
-function nextPageUrl(request, response, body, collected) {
-	const link = response.headers.get("link");
-
-	if (typeof link === "string") {
-		const next = /<([^>]+)>\s*;\s*rel="?next"?/iu.exec(link);
-
-		if (next !== null) {
-			// The Link target may be a relative URI-reference (RFC 5988) — resolve it against this page's URL,
-			// or `new Request(next, …)` in the caller throws on a non-absolute URL.
-			return new URL(next[1], request.url).toString();
-		}
-	}
-
-	if (typeof body["totalCount"] === "number" && collected < body["totalCount"]) {
-		const url = new URL(request.url);
-
-		url.searchParams.set("page", String(Number(url.searchParams.get("page") ?? "1") + 1));
-
-		return url.toString();
-	}
-}
-
-export async function defaultConditionCallback(accumulator, { request, response }, callCount) {
-	const body = await response.json();
-
-	const items = Array.isArray(body) ? body : body["items"];
-
-	if (!Array.isArray(items) || items.length === 0) {
-		return accumulator;
-	}
-
-	accumulator.push(...items);
-
-	const next = nextPageUrl(request, response, body, accumulator.length);
-
-	return next === undefined
-		? accumulator
-		: new Request(next, { "headers": request["headers"], "body": request["body"] });
-}
-
-async function poll(url, query, { conditionCallback = defaultConditionCallback, initialValue = [], ...options }) {
-	if (typeof url === "string") {
-		url = new URL(url);
-	}
-
-	url.search = new URLSearchParams([
-		...new URLSearchParams(url.search),
-		...Object.entries(query)
-	]).toString();
-
-	const currentValue = initialValue;
-
-	let request = new Request(url.toString(), {
-		"method": options["method"] ?? "GET",
-		"headers": options["headers"],
-		"body": options["body"]
-	});
-
-	for (let callCount = 1; request instanceof Request; callCount++) {
-		const response = await this[request.method.toLowerCase()](request);
-
-		request = await conditionCallback(currentValue, { "request": request, "response": response }, callCount);
-	}
-
-	return request;
-}
-
 export function withDefaults(baseUrl, defaultOptions = {}) {
 	const fido = {
-		"fetch": (url, query?, options?) => (fido.fetch = fetchFactory(baseUrl, defaultOptions))(url, query, options),
+		"fetch": async (url, query?, options?) => (fido.fetch = await fetchFactory(baseUrl, defaultOptions))(url, query, options),
 		"get": (url, query?, options?) => fido.fetch(url, options === undefined && (query && Object.values(query).every((value) => typeof value !== "object") ? query : undefined), { ...(options ?? query), "method": "GET" }),
 		"post": (url, query?, options?) => fido.fetch(url, options === undefined && (query && Object.values(query).every((value) => typeof value !== "object") ? query : undefined), { ...(options ?? query), "method": "POST" }),
 		"put": (url, query?, options?) => fido.fetch(url, options === undefined && (query && Object.values(query).every((value) => typeof value !== "object") ? query : undefined), { ...(options ?? query), "method": "PUT" }),
@@ -476,7 +268,7 @@ export function withDefaults(baseUrl, defaultOptions = {}) {
 }
 
 export const fido = {
-	"fetch": (url, query?, options?) => (fido.fetch = fetchFactory())(url, query, options),
+	"fetch": async (url, query?, options?) => (fido.fetch = await fetchFactory())(url, query, options),
 	"get": (url, query?, options?) => fido.fetch(url, options === undefined && (query && Object.values(query).every((value) => typeof value !== "object") ? query : undefined), { ...(options ?? query), "method": "GET" }),
 	"post": (url, query?, options?) => fido.fetch(url, options === undefined && (query && Object.values(query).every((value) => typeof value !== "object") ? query : undefined), { ...(options ?? query), "method": "POST" }),
 	"put": (url, query?, options?) => fido.fetch(url, options === undefined && (query && Object.values(query).every((value) => typeof value !== "object") ? query : undefined), { ...(options ?? query), "method": "PUT" }),
