@@ -13,6 +13,18 @@ import * as fs from "@brianjenkins94/util/fs";
 import { createServer as createViteServer, mergeConfig, version as viteVersion } from "vite";
 import { jsxToString } from "jsx-async-runtime";
 
+/**
+ * Serialize a jsx-async-runtime node to HTML WITHOUT entity-escaping the content of `<style>`/`<script>` —
+ * HTML "raw text" elements whose text must stay literal (a `[data-x="y"]` selector would otherwise be
+ * corrupted into the undecodable `[data-x=&quot;y&quot;]`). The runtime escapes every text node, so flip its
+ * `jsxEscapeHTML` hook off for raw-text subtrees and thread this serializer through everything else.
+ */
+export async function jsxToHtml(node) {
+	const isRawText = node !== null && typeof node === "object" && !("html" in node) && (node.tag === "style" || node.tag === "script");
+
+	return jsxToString.call(isRawText ? { "jsxEscapeHTML": false } : { "jsxToString": jsxToHtml }, node);
+}
+
 import { defaults } from "./defaults";
 import { polyfillNodeEsbuild, polyfillNodeRolldown } from "./plugins/polyfillNode";
 
@@ -120,7 +132,7 @@ export function tsxEngine(vite: ViteDevServer): ViewEngine {
 			const moduleId = "/" + path.relative(vite.config.root, filePath).replace(/\\/gu, "/");
 
 			const { "default": Page } = await vite.ssrLoadModule(moduleId);
-			const document = "<!doctype html>\n" + (await jsxToString(await Page(props))).replace(VOID_CLOSE_TAGS, "");
+			const document = "<!doctype html>\n" + (await jsxToHtml(await Page(props))).replace(VOID_CLOSE_TAGS, "");
 
 			callback(null, await vite.transformIndexHtml((props["route"] as string) ?? "/", document));
 		} catch (error) {

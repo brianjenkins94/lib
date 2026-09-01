@@ -4,8 +4,7 @@ import * as url from "node:url";
 import { log } from "@brianjenkins94/util/logger";
 import * as fs from "@brianjenkins94/util/fs";
 import { build } from "vite";
-import { jsxToString } from "jsx-async-runtime";
-import { getViteDevServer } from "@brianjenkins94/util/vite/dev";
+import { getViteDevServer, jsxToHtml } from "@brianjenkins94/util/vite/dev";
 
 /** jsx-async-runtime emits close tags for HTML void elements; parse5 rejects them, so strip them. */
 const VOID_CLOSE_TAGS = /<\/(?:meta|link|br|hr|img|input|area|base|col|embed|source|track|wbr)>/gu;
@@ -74,7 +73,7 @@ export async function buildStatic(options: BuildStaticOptions): Promise<void> {
 	try {
 		for (const page of options.pages) {
 			const { "default": Page } = await vite.ssrLoadModule(page.module) as { "default": (props: object) => Promise<unknown> };
-			let html = "<!doctype html>\n" + (await jsxToString(await Page({}))).replace(VOID_CLOSE_TAGS, "");
+			let html = "<!doctype html>\n" + (await jsxToHtml(await Page({}))).replace(VOID_CLOSE_TAGS, "");
 
 			if (options.head !== undefined) { html = options.head(html, page); }
 

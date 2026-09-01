@@ -1,9 +1,8 @@
 import * as path from "node:path";
 import * as fs from "@brianjenkins94/util/fs";
 import * as ejs from "ejs";
-import { jsxToString } from "jsx-async-runtime";
 import { mapEntries } from "./array";
-import { getViteDevServer } from "./vite/dev";
+import { getViteDevServer, jsxToHtml } from "./vite/dev";
 import { polyfillNode } from "./vite/plugins/polyfillNode";
 import { virtualFileSystem } from "./vite/plugins/virtualFileSystem";
 
@@ -62,7 +61,7 @@ export async function render(template, data = {}, { useVite = false, root = unde
 	data = await mapEntries(data, async function([key, value]) {
 		if (typeof value !== "function" && typeof value === "object") {
 			if (isJsxAsyncRuntimeNode(value)) {
-				value = await jsxToString(value);
+				value = await jsxToHtml(value);
 			} else {
 				value = JSON.stringify(value);
 			}
