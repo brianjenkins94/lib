@@ -8,7 +8,7 @@ import { __root, isWindows } from "@brianjenkins94/util/env";
 import { defaultConditionCallback } from "@brianjenkins94/util/fido";
 import * as fs from "@brianjenkins94/util/fs";
 import { sleep } from "@brianjenkins94/util/sleep";
-import { polyfillNode } from "@brianjenkins94/util/vite/plugins/polyfillNode";
+import { externalOptionalDeps, polyfillNodeRolldown } from "@brianjenkins94/util/vite/plugins/polyfillNode";
 import { virtualFileSystem } from "@brianjenkins94/util/vite/plugins/virtualFileSystem";
 import { chromium } from "playwright";
 
@@ -161,7 +161,9 @@ async function fetchFactory(baseUrl?, defaultOptions = {}) {
 			"rolldownOptions": {
 				"input": "index.ts",
 				"treeshake": false,
-				"external": ["saxes"]
+				"external": ["saxes"],
+				// One self-contained chunk — the page's AsyncFunction body can't `import` a sibling chunk.
+				"output": { "codeSplitting": false }
 			},
 			"minify": false,
 			"modulePreload": { "polyfill": false },
@@ -172,7 +174,12 @@ async function fetchFactory(baseUrl?, defaultOptions = {}) {
 			"import.meta.resolve": "undefined"
 		},
 		"plugins": [
-			polyfillNode(["fs", "path", "url", "util"]),
+			// Honor `/*! @external */` on optional dynamic imports (e.g. the node-only store).
+			externalOptionalDeps(),
+			// `pre` so it redirects `node:*` before Vite externalizes builtins to its browser-external stub.
+			// It inlines the functional polyfills (path/url/util) into the one bundle and shims `process` — so
+			// output[0].code is fully self-contained, no external `import`s, runnable as an AsyncFunction body.
+			{ ...polyfillNodeRolldown(["path", "url", "util"]), "enforce": "pre" },
 			virtualFileSystem({
 				"index.ts": [
 					"import { fido } from \"./util/fido\";",

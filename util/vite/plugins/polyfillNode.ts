@@ -1,7 +1,7 @@
 import type { PluginOption } from "vite";
 import type { Plugin as EsbuildPlugin } from "esbuild";
 import type { Plugin as RolldownPlugin } from "rolldown";
-import { builtinModules } from "node:module";
+import { builtinModules, createRequire } from "node:module";
 import * as url from "node:url";
 import stdlib from "node-stdlib-browser";
 import { nodePolyfills } from "vite-plugin-node-polyfills";
@@ -38,39 +38,48 @@ function isFunctional(builtin: string): boolean {
  */
 const OPTIONAL_IMPORT = /import\(\s*((?:\/\*[\s\S]*?\*\/\s*)*)["']([^"']+)["']/gu;
 
+/**
+ * Externalize `@external`-annotated dynamic imports that a consuming app may not have installed:
+ * installed → let normal resolution bundle it; absent → leave it a harmless unreached runtime import.
+ * Split out of {@link polyfillNode} so a build using {@link polyfillNodeRolldown} can keep this behavior.
+ */
+export function externalOptionalDeps(): PluginOption {
+	// Specifiers seen with an `@external` annotation, filled by the transform hook below.
+	const optional = new Set<string>();
+
+	return {
+		"name": "external-optional-deps",
+		"enforce": "pre",
+		"transform": function(code: string) {
+			for (const [, comments, id] of code.matchAll(OPTIONAL_IMPORT)) {
+				if (/@external/u.test(comments)) {
+					optional.add(id);
+				}
+			}
+
+			return null;
+		},
+		"resolveId": async function(id: string, importer: string | undefined) {
+			if (!optional.has(id)) {
+				return undefined;
+			}
+
+			// Installed → let normal resolution bundle it; absent → leave it a runtime import.
+			const resolved = await this.resolve(id, importer, { "skipSelf": true });
+
+			return resolved === null ? { "id": id, "external": true } : undefined;
+		}
+	} as PluginOption;
+}
+
 export function polyfillNode(builtins = builtinModules): PluginOption {
 	const polyfill = builtins.filter(isFunctional);
 	const stub = builtins.filter((builtin) => !isFunctional(builtin));
 
 	const filter = new RegExp(`^(?:${NAMESPACE})?(${stub.join("|")})(/.*)?$`, "u");
 
-	// Specifiers seen with an `@external` annotation, filled by the transform hook below.
-	const optional = new Set<string>();
-
 	return [
-		{
-			"name": "external-optional-deps",
-			"enforce": "pre",
-			"transform": function(code: string) {
-				for (const [, comments, id] of code.matchAll(OPTIONAL_IMPORT)) {
-					if (/@external/u.test(comments)) {
-						optional.add(id);
-					}
-				}
-
-				return null;
-			},
-			"resolveId": async function(id: string, importer: string | undefined) {
-				if (!optional.has(id)) {
-					return undefined;
-				}
-
-				// Installed → let normal resolution bundle it; absent → leave it a runtime import.
-				const resolved = await this.resolve(id, importer, { "skipSelf": true });
-
-				return resolved === null ? { "id": id, "external": true } : undefined;
-			}
-		} as PluginOption,
+		externalOptionalDeps(),
 		...(polyfill.length > 0 ? nodePolyfills({ "include": polyfill, "protocolImports": true }) : []),
 		...(stub.length > 0 ? [{
 			"name": "node-stdlib-browser-alias",
@@ -215,9 +224,10 @@ export function polyfillNodeRolldown(builtins = builtinModules): RolldownPlugin 
 			const name = base(id);
 
 			if (isFunctional(name)) {
-				const resolved = await this.resolve(stdlib[name], undefined, { "skipSelf": true });
-
-				return resolved === null ? null : resolved.id;
+				// stdlib maps some builtins to a package DIRECTORY (path-browserify, util); resolving that with
+				// `this.resolve(dir, undefined)` yields the directory (rolldown then fails to load it). Node's
+				// require.resolve applies package `main`/`index` resolution, so it lands on the real entry file.
+				return createRequire(import.meta.url).resolve(stdlib[name]);
 			}
 
 			// Known-but-un-polyfillable (fs, …) → the stub loader below.
