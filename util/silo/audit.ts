@@ -140,7 +140,8 @@ export async function workspaceImporters(target: string, root: string): Promise<
 	for (const f of await files(path.resolve(target))) {
 		const ws = owningWorkspace(f, root);
 		const rel = path.relative(process.cwd(), f);
-		const byWs = out[ws] ??= {};
+		out[ws] ??= {};
+		const byWs = out[ws];
 
 		for (const spec of analyze(f).keys()) { (byWs[spec] ??= []).push(rel); }
 	}
@@ -181,7 +182,8 @@ export async function consumerSurface(target: string, root: string): Promise<Rec
 
 	for (const ws of Object.keys(surfaces).sort()) {
 		const wsDir = path.join(root, ws);   // resolve this workspace's deps local-first, then hoisted root
-		const cur: WsConsumer = out[ws] = {};
+		const cur: WsConsumer = {};
+		out[ws] = cur;
 
 		for (const [spec, use] of Object.entries(surfaces[ws]).sort((a, b) => a[0].localeCompare(b[0]))) {
 			const c = classify(spec, wsDir, root);

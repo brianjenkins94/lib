@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto";
 import * as path from "node:path";
 import { mapSeries } from "@brianjenkins94/util/array";
 import { __root, isWindows } from "@brianjenkins94/util/env";
-import { fire, launch } from "@brianjenkins94/util/exec";
+import { fire, launch as launchProcess } from "@brianjenkins94/util/exec";
 
 import { poll } from "@brianjenkins94/util/fido/poll";
 import * as fs from "@brianjenkins94/util/fs";
@@ -58,7 +58,7 @@ export async function attach(endpointURL = "http://127.0.0.1:9222", { timeout = 
 
 			await sleep(2500);
 
-			launch(target.binary, [
+			launchProcess(target.binary, [
 				`--user-data-dir=${target.profile}`,
 				`--remote-debugging-port=${port}`,
 				"--restore-last-session"
@@ -222,7 +222,7 @@ async function fetchFactory(baseUrl?, defaultOptions = {}) {
 
 		const result = signal === undefined ? await evaluated : await Promise.race([
 			evaluated,
-			new Promise<never>((_resolve, reject) => signal.addEventListener("abort", () => reject(signal.reason), { "once": true }))
+			new Promise<never>((_resolve, reject) => { signal.addEventListener("abort", () => reject(signal.reason), { "once": true }); })
 		]);
 
 		return new Response([101, 204, 205, 304].includes(result.status) ? null : new Uint8Array(result.body), {

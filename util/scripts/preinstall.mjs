@@ -31,7 +31,7 @@ const pass = [];
 const argv = process.argv.slice(2);
 
 for (let i = 0; i < argv.length; i++) {
-	if (argv[i] === "--cooldown") { days = Number(argv[++i]); } else if (argv[i].startsWith("--cooldown=")) { days = Number(argv[i].slice("--cooldown=".length)); } else { pass.push(argv[i]); }
+	if (argv[i] === "--cooldown") { i += 1; days = Number(argv[i]); } else if (argv[i].startsWith("--cooldown=")) { days = Number(argv[i].slice("--cooldown=".length)); } else { pass.push(argv[i]); }
 }
 
 if (!Number.isFinite(days) || days < 0) { days = 7; }

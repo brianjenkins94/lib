@@ -94,7 +94,7 @@ export function scoreSource(file: string, src: string): Provenance {
 		if (!lead || !/^\s*$/u.test(src.slice(lead.end, start))) { continue; }       // must sit directly above
 		if (!/(?:^|\n)[ \t]*$/u.test(src.slice(0, lead.start))) { continue; }        // …and start its own line
 		if (JSDOC_TAG.test(lead.text)) { continue; }
-		documented++;
+		documented += 1;
 		if (!docSample) { docSample = lead.text.replace(/\s+/gu, " ").trim().slice(0, 50); }
 	}
 
