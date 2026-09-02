@@ -42,7 +42,7 @@ export async function defaultConditionCallback(accumulator, { request, response 
 		: new Request(next, { "headers": request["headers"], "body": request["body"] });
 }
 
-export async function poll(url, query, { conditionCallback = defaultConditionCallback, initialValue = [], ...options }) {
+export async function poll(url, query, { conditionCallback = defaultConditionCallback, initialValue = [], signal, onProgress, ...options }) {
 	if (typeof url === "string") {
 		url = new URL(url);
 	}
@@ -61,9 +61,13 @@ export async function poll(url, query, { conditionCallback = defaultConditionCal
 	});
 
 	for (let callCount = 1; request instanceof Request; callCount++) {
-		const response = await this.fetch(request, undefined, { "method": request.method });
+		signal?.throwIfAborted();
+
+		const response = await this.fetch(request, undefined, { "method": request.method, "signal": signal });
 
 		request = await conditionCallback(currentValue, { "request": request, "response": response }, callCount);
+
+		onProgress?.(currentValue.length);
 	}
 
 	return request;

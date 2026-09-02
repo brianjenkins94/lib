@@ -29,7 +29,7 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { isInitializeRequest } from "@modelcontextprotocol/sdk/types.js";
 import { silenceStdout } from "./index.js";
-import { isMcpTool, registerResolvingTool } from "./tool.js";
+import { attachLogging, configureServerBroker, configureServerRuns, isMcpTool, registerResolvingTool } from "./tool.js";
 
 export interface MountOptions {
 	/**
@@ -108,7 +108,7 @@ export async function runBridge(meta: EntryMeta, options: ServeOptions): Promise
 	// live even though the session is persistent. Adding/removing a tool file, or changing its schema,
 	// needs a restart. A fresh server is built per session (the SDK binds one server per transport).
 	const buildServer = async (): Promise<McpServer> => {
-		const server = new McpServer({ "name": options.name, "version": options.version });
+		const server = new McpServer({ "name": options.name, "version": options.version }, { "capabilities": { "logging": {} } });
 
 		for (const filePath of await discover(toolsDir)) {
 			const tool = await resolveExport(root, filePath, "default");
@@ -119,6 +119,10 @@ export async function runBridge(meta: EntryMeta, options: ServeOptions): Promise
 
 			registerResolvingTool(server, tool.name, tool.config, () => resolveExport(root, filePath, "default"));
 		}
+
+		attachLogging(server);
+		configureServerRuns(server, root);   // `.silo/runs.jsonl` at the server root — records every invocation
+		if (options.broker !== false) { configureServerBroker(server); }   // runtime net gating for tool handlers
 
 		return server;
 	};

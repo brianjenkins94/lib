@@ -1,9 +1,9 @@
 import type { Browser, BrowserContext, Page } from "playwright";
-import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import * as path from "node:path";
 import { mapSeries } from "@brianjenkins94/util/array";
 import { __root, isWindows } from "@brianjenkins94/util/env";
+import { fire, launch } from "@brianjenkins94/util/exec";
 
 import { poll } from "@brianjenkins94/util/fido/poll";
 import * as fs from "@brianjenkins94/util/fs";
@@ -54,20 +54,15 @@ export async function attach(endpointURL = "http://127.0.0.1:9222", { timeout = 
 				throw new Error(`No Brave/Chrome found to launch. Start one with --remote-debugging-port=${port} and an explicit --user-data-dir.`, { "cause": error });
 			}
 
-			await new Promise((resolve) => {
-				const shell = spawn(isWindows ? "taskkill" : "killall", target.killArgs, { "shell": true });
-
-				shell.on("error", resolve);
-				shell.on("close", resolve);
-			});
+			await fire(isWindows ? "taskkill" : "killall", target.killArgs);   // best-effort kill; ignore the outcome
 
 			await sleep(2500);
 
-			spawn(target.binary, [
+			launch(target.binary, [
 				`--user-data-dir=${target.profile}`,
 				`--remote-debugging-port=${port}`,
 				"--restore-last-session"
-			], { "detached": true, "stdio": "ignore" }).unref();
+			], { "detached": true, "stdio": "ignore" });
 
 			const deadline = Date.now() + 30_000;
 
@@ -210,14 +205,25 @@ async function fetchFactory(baseUrl?, defaultOptions = {}) {
 	const AsyncFunction = async function() { }.constructor;
 
 	return async function(page, url, query?, options?) {
+		// `signal` is a live object — never serialize it into the page. Cancellation is honored Node-side:
+		// race the evaluate against the abort (a single read rejects), and `poll` also checks it between pages.
+		const { signal, ...rest } = options ?? {};
+
+		signal?.throwIfAborted();
+
 		// @ts-expect-error
-		const result = await page.evaluate(new AsyncFunction(args, functionBody), {
+		const evaluated = page.evaluate(new AsyncFunction(args, functionBody), {
 			"url": url instanceof Request ? url.url : url,
 			"query": query,
-			"options": options,
+			"options": rest,
 			"id": randomUUID(),
 			"tap": defaultOptions["tap"]
 		});
+
+		const result = signal === undefined ? await evaluated : await Promise.race([
+			evaluated,
+			new Promise<never>((_resolve, reject) => signal.addEventListener("abort", () => reject(signal.reason), { "once": true }))
+		]);
 
 		return new Response([101, 204, 205, 304].includes(result.status) ? null : new Uint8Array(result.body), {
 			"status": result.status,

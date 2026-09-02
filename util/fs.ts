@@ -1,11 +1,15 @@
 import type { Abortable } from "node:events";
 import type { OpenMode } from "node:fs";
-import { spawn } from "node:child_process";
 import * as fs from "node:fs";
 import * as path from "node:path";
 
+import { exec } from "@brianjenkins94/util/exec";
+
 export { createReadStream, createWriteStream, existsSync, writeFileSync } from "node:fs";
-export { appendFile, copyFile, cp, glob, mkdir, readdir, realpath, rename, rm, stat, unlink, writeFile } from "node:fs/promises";
+export { appendFile, copyFile, cp, glob, mkdir, mkdtemp, readdir, realpath, rename, rm, stat, unlink, writeFile } from "node:fs/promises";
+// The OS temp directory (where mkdtemp-based scratch dirs go) — colocated here so a consumer needing a
+// temp file reaches for one fs facade rather than mixing in node:os.
+export { tmpdir } from "node:os";
 
 interface ReadFileOptions {
 	"encoding"?: BufferEncoding;
@@ -100,26 +104,16 @@ export interface Workspace {
  * historical glob — lift it only when a deeper layout actually exists. Returns in git's order
  * (shallowest/lexical first).
  */
-export function findWorkspaces(cwd: string = process.cwd()): Promise<Workspace[]> {
-	return new Promise(function(resolve, reject) {
-		const gitLs = spawn("git", ["ls-files", "*/package.json", "*/*/package.json"], { "cwd": cwd });
+export async function findWorkspaces(cwd: string = process.cwd()): Promise<Workspace[]> {
+	const manifests = (await exec("git", ["ls-files", "*/package.json", "*/*/package.json"], { "cwd": cwd })).stdout.split("\n").filter(Boolean);
 
-		const chunks: Buffer[] = [];
+	return manifests.map(function(manifest) {
+		let packageJson: { "name"?: string; "private"?: boolean } = {};
 
-		gitLs.stdout.on("data", (chunk) => chunks.push(chunk));
-		gitLs.on("error", reject);
-		gitLs.on("close", function() {
-			const manifests = Buffer.concat(chunks).toString().trim().split("\n").filter(Boolean);
+		try {
+			packageJson = JSON.parse(fs.readFileSync(path.join(cwd, manifest), "utf8"));
+		} catch { /* unreadable/invalid manifest → nameless, non-private */ }
 
-			resolve(manifests.map(function(manifest) {
-				let packageJson: { "name"?: string; "private"?: boolean } = {};
-
-				try {
-					packageJson = JSON.parse(fs.readFileSync(path.join(cwd, manifest), "utf8"));
-				} catch { /* unreadable/invalid manifest → nameless, non-private */ }
-
-				return { "dir": path.dirname(manifest), "name": packageJson["name"], "private": packageJson["private"] === true };
-			}));
-		});
+		return { "dir": path.dirname(manifest), "name": packageJson["name"], "private": packageJson["private"] === true };
 	});
 }

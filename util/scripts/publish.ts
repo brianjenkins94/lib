@@ -1,7 +1,7 @@
-import { spawn } from "node:child_process";
 import * as os from "node:os";
 import * as path from "node:path";
 import { log } from "@brianjenkins94/util/logger";
+import { exec } from "@brianjenkins94/util/exec";
 import { createGunzip, createGzip } from "node:zlib";
 import { isCI } from "@brianjenkins94/util/env";
 import * as fs from "@brianjenkins94/util/fs";
@@ -59,13 +59,9 @@ async function emitDeclarations(workspace: string, nestedDirs: string[]): Promis
 	}));
 
 	try {
-		// tsc exits non-zero on type errors but still emits declarations — resolve on close regardless.
-		await new Promise<void>(function(resolve) {
-			const tsc = spawn("npx", ["tsc", "-p", configPath], { "cwd": __root, "shell": true });
-
-			tsc.on("close", () => resolve());
-			tsc.on("error", () => resolve());
-		});
+		// tsc exits non-zero on type errors but still emits declarations — best-effort, so ignore both the exit
+		// code and a spawn failure. exec auto-shells `npx` (a .cmd shim) on Windows.
+		await exec("npx", ["tsc", "-p", configPath], { "cwd": __root }).catch(() => {});
 
 		const declarations: Record<string, Buffer> = {};
 
@@ -326,21 +322,14 @@ for (const workspace of workspaces) {
 	}
 
 	// Ensure a release exists for this package.
-	const isDraft = () => new Promise(function(resolve, reject) {
+	const isDraft = async () => {
 		span.info("Checking for release draft", { "release": workspace + "@" + version });
-		const gh = spawn("gh", ["release", "view", workspace + "@" + version, "--json", "isDraft", "--jq", ".isDraft"]);
+		const gh = await exec("gh", ["release", "view", workspace + "@" + version, "--json", "isDraft", "--jq", ".isDraft"]);
 
-		const chunks = [];
+		span.info("gh release view", { "code": gh.exitCode, "output": gh.stdout });
 
-		gh.stdout.on("data", function(chunk) {
-			chunks.push(chunk);
-		});
-
-		gh.on("close", function(code) {
-			span.info("gh release view", { "code": code, "output": Buffer.concat(chunks).toString() });
-			resolve(code === 0 && Buffer.concat(chunks).toString().trim() === "true");
-		});
-	});
+		return gh.ok && gh.stdout === "true";
+	};
 
 	if (isCI && !(await isDraft())) {
 		console.error(`❌ Skipping ${workspace}: no GitHub release exists`);
@@ -376,11 +365,10 @@ for (const workspace of workspaces) {
 		// Auth is passed through the env so no .npmrc is required; the tarball's own publishConfig (access,
 		// provenance) is honored.
 		if (process.env["NPM_TOKEN"]) {
-			await new Promise(function(resolve) {
-				spawn("npm", ["publish", tarPath, "--access", "public"], {
-					"stdio": "inherit",
-					"env": { ...process.env, "npm_config_//registry.npmjs.org/:_authToken": process.env["NPM_TOKEN"] }
-				}).on("close", resolve);
+			// exec auto-shells `npm` (a .cmd shim) on Windows — the site that previously lacked shell:true.
+			await exec("npm", ["publish", tarPath, "--access", "public"], {
+				"stdio": "inherit",
+				"env": { ...process.env, "npm_config_//registry.npmjs.org/:_authToken": process.env["NPM_TOKEN"] }
 			});
 		}
 	});

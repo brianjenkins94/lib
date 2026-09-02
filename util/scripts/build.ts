@@ -1,6 +1,6 @@
-import { spawn } from "node:child_process";
 import * as url from "node:url";
 import { mapAsync, partition } from "@brianjenkins94/util/array";
+import { exec } from "@brianjenkins94/util/exec";
 import * as fs from "@brianjenkins94/util/fs";
 
 /**
@@ -12,18 +12,10 @@ import * as fs from "@brianjenkins94/util/fs";
 export async function build(workspaces?: string[]) {
 	workspaces ??= (await fs.findWorkspaces()).filter((workspace) => !workspace.private).map((workspace) => workspace.dir);
 
-	function buildOne(workspace) {
-		return new Promise(function(resolve, reject) {
-			const subprocess = spawn("pnpm", ["--ignore-workspace", "run", "--if-present", "build"], {
-				"cwd": workspace,
-				"shell": true
-				//"stdio": "inherit"
-			});
-
-			subprocess.on("close", function(code) {
-				resolve([workspace, code]);
-			});
-		});
+	// exec auto-shells `pnpm` (a .cmd shim) on Windows and — unlike the old hand-rolled Promise — rejects if
+	// pnpm can't be spawned at all, instead of hanging forever.
+	async function buildOne(workspace: string): Promise<[string, number]> {
+		return [workspace, (await exec("pnpm", ["--ignore-workspace", "run", "--if-present", "build"], { "cwd": workspace })).exitCode];
 	}
 
 	const [packages, rest] = partition(workspaces, (workspace) => workspace.split("/")[0] === "packages");

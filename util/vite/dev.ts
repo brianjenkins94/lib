@@ -4,7 +4,7 @@
  * a package that needs more imports `serve` here and composes its own dev script.
  */
 
-import type { ViteDevServer } from "vite";
+import type { Plugin, ViteDevServer } from "vite";
 import http from "node:http";
 import { log } from "@brianjenkins94/util/logger";
 import * as path from "node:path";
@@ -38,12 +38,15 @@ const VOID_CLOSE_TAGS = /<\/(?:meta|link|br|hr|img|input|area|base|col|embed|sou
  */
 let viteDevServer: ViteDevServer | undefined;
 
-export async function getViteDevServer(root: string): Promise<ViteDevServer> {
+export async function getViteDevServer(root: string, plugins: Plugin[] = []): Promise<ViteDevServer> {
 	// Start from the shared repo defaults (esnext, logLevel, worker format, …) so the
-	// dev server matches the build configs instead of re-specifying its own base.
+	// dev server matches the build configs instead of re-specifying its own base. `plugins` (empty by
+	// default) lets a consumer inject transforms on the FIRST call that creates the singleton — e.g. util/mcp
+	// injects the capability-gating builtin-rewrite for tool modules. A no-op in production (no dev server).
 	viteDevServer ??= await createViteServer(mergeConfig(defaults, {
 		"root": root,
 		"appType": "custom",
+		"plugins": plugins,
 		// allowedHosts: this dev server is often mounted on an app reached through a
 		// tunnel/proxy (e.g. a *.loca.lt webhook), and Vite's default host check would
 		// 403 those requests. It's a dev-only server, so trust any host.
@@ -75,14 +78,14 @@ let entered = false;
  *
  * Usage:  if (!(await bootstrapOrRun(import.meta.url, appRoot))) { ...app body... }
  */
-export async function bootstrapOrRun(metaUrl: string, root: string): Promise<boolean> {
+export async function bootstrapOrRun(metaUrl: string, root: string, plugins: Plugin[] = []): Promise<boolean> {
 	if (process.env["NODE_ENV"] === "production" || entered) {
 		return false;
 	}
 
 	entered = true;
 
-	const vite = await getViteDevServer(root);
+	const vite = await getViteDevServer(root, plugins);
 
 	await vite.ssrLoadModule("/" + path.relative(root, url.fileURLToPath(metaUrl)).replace(/\\/gu, "/"));
 

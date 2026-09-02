@@ -3,19 +3,15 @@
   "author": "Brian Jenkins",
   "license": "MIT",
   "type": "module",
-  "dependencies": {
-    "@antfu/eslint-config": "latest",
-    "@eslint/js": "latest",
-    "eslint": "latest",
-    "typescript-eslint": "latest"
-  },
   "peerDependencies": {
     "@badgateway/oauth2-client": "latest",
     "@clack/prompts": "latest",
     "@modelcontextprotocol/sdk": "latest",
     "@opensearch-project/opensearch": "latest",
+    "@wakaru/cli": "latest",
     "cmd-ts": "latest",
     "ejs": "latest",
+    "esbuild": "latest",
     "googleapis": "latest",
     "http-proxy-3": "latest",
     "hyperformula": "latest",
@@ -26,12 +22,15 @@
     "node-schedule": "latest",
     "node-stdlib-browser": "latest",
     "object-scan": "latest",
+    "oxc-parser": "latest",
     "papaparse": "latest",
     "playwright": "latest",
     "pluralize": "latest",
+    "rolldown": "latest",
     "tar-stream": "latest",
     "vite": "latest",
     "vite-plugin-node-polyfills": "latest",
+    "webcrack": "latest",
     "zod": "latest"
   },
   "engines": {

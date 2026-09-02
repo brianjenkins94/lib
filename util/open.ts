@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 
 import type { SpawnOptionsWithoutStdio } from "node:child_process";
-import { spawn } from "node:child_process";
 import * as path from "node:path";
+import { launch } from "@brianjenkins94/util/exec";
 import { log } from "./logger";
 import { unescape } from "node:querystring";
 import * as fs from "@brianjenkins94/util/fs";
@@ -53,11 +53,7 @@ export function open(target) {
 		options.detached = true;
 	}
 
-	const subprocess = spawn(command, args, options);
-
-	subprocess.unref();
-
-	return subprocess;
+	return launch(command, args, options);
 }
 
 async function serve() {

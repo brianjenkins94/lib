@@ -1,6 +1,6 @@
-import { spawn } from "node:child_process";
 import * as url from "node:url";
 import { mapAsync } from "@brianjenkins94/util/array";
+import { exec } from "@brianjenkins94/util/exec";
 import * as fs from "@brianjenkins94/util/fs";
 
 // Release-age floor: never install a version published within the last N days (default 7), to dodge the
@@ -19,31 +19,14 @@ const NPM_BEFORE = new Date(Date.now() - MINIMUM_RELEASE_AGE_DAYS * 86_400_000).
 export async function postinstall(workspaces?: string[]) {
 	workspaces ??= (await fs.findWorkspaces()).filter((workspace) => !workspace.private).map((workspace) => workspace.dir);
 
-	return mapAsync(workspaces, function(workspace) {
-		return new Promise(function(resolve, reject) {
-			const subprocess = spawn("pnpm", ["--ignore-workspace", "install", "--config.minimumReleaseAge=" + PNPM_MINIMUM_RELEASE_AGE], {
-				"cwd": workspace,
-				"shell": true
-				//"stdio": "inherit"
-			});
+	// exec auto-shells pnpm/npm (.cmd shims) on Windows; the pnpm→npm fallback is just "try pnpm, else npm".
+	return mapAsync(workspaces, async function(workspace: string) {
+		const pnpm = await exec("pnpm", ["--ignore-workspace", "install", "--config.minimumReleaseAge=" + PNPM_MINIMUM_RELEASE_AGE], { "cwd": workspace });
 
-			subprocess.on("close", function(code) {
-				if (code !== 0) {
-					// FROM: https://github.com/vercel/turborepo/blob/1ae620cdf454d0258a162a96976e3064433391a2/packages/turbo/bin/turbo#L29
-					const subprocess = spawn("npm", ["install", "--before=" + NPM_BEFORE, "--loglevel=error", "--prefer-offline", "--no-audit", "--progress=false"], {
-						"cwd": workspace,
-						"shell": true
-						//"stdio": "inherit"
-					});
+		if (pnpm.ok) { return pnpm.exitCode; }
 
-					subprocess.on("close", function(code) {
-						resolve(code);
-					});
-				} else {
-					resolve(code);
-				}
-			});
-		});
+		// FROM: https://github.com/vercel/turborepo/blob/1ae620cdf454d0258a162a96976e3064433391a2/packages/turbo/bin/turbo#L29
+		return (await exec("npm", ["install", "--before=" + NPM_BEFORE, "--loglevel=error", "--prefer-offline", "--no-audit", "--progress=false"], { "cwd": workspace })).exitCode;
 	});
 }
 

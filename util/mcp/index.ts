@@ -19,7 +19,7 @@ import * as url from "node:url";
 import { discover } from "@brianjenkins94/util/router/core";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
-import { registerTool, toolsFromDefault } from "./tool";
+import { attachLogging, configureServerRuns, registerTool, toolsFromDefault } from "./tool";
 
 // Re-export the tool model so `@brianjenkins94/util/mcp` stays the public authoring surface — a tool
 // file `import { defineTool, ok, fail } from "@brianjenkins94/util/mcp"` keeps working unchanged.
@@ -39,6 +39,9 @@ export interface ServeOptions {
 	"toolsDir"?: string;
 	/** Force the bridge on/off. Default: on unless NODE_ENV=production. */
 	"bridge"?: boolean;
+	/** Runtime capability broker: gate tools' node-side net calls (BERNARD/JUDICIAL + MRTR). Default: on.
+	 *  Set false to opt out; `JUDICIAL=allow` keeps it on but auto-approves (no prompts). */
+	"broker"?: boolean;
 }
 
 /**
@@ -70,7 +73,12 @@ async function runStdio(meta: EntryMeta, options: ServeOptions): Promise<void> {
 	silenceStdout();
 
 	const dir = options.toolsDir ?? path.join(path.dirname(url.fileURLToPath(meta.url)), "tools");
-	const server = new McpServer({ "name": options.name, "version": options.version });
+	const server = new McpServer({ "name": options.name, "version": options.version }, { "capabilities": { "logging": {} } });
+
+	// Point the run ledger at the server's own dir (`.silo/runs.jsonl`) — every tool invocation is recorded there.
+	// The capability broker is DEV-ONLY (it rides the Vite bridge's builtin-rewrite), so stdio/production does
+	// not gate — it trusts tools already reviewed in dev, and keeps the registration gate + ledger.
+	configureServerRuns(server, path.dirname(url.fileURLToPath(meta.url)));
 
 	const tools = await eachToolFile(dir, (abs) => import(url.pathToFileURL(abs).href));
 
@@ -79,6 +87,7 @@ async function runStdio(meta: EntryMeta, options: ServeOptions): Promise<void> {
 	}
 
 	await server.connect(new StdioServerTransport());
+	attachLogging(server);
 	process.stderr.write(`${options.name} MCP: stdio server ready\n`);
 }
 
@@ -106,7 +115,20 @@ export async function serveMcp(meta: EntryMeta, options: ServeOptions): Promise<
 		// tool files importing defineTool/ok, plain stdio, the no-op import above.)
 		const { bootstrapOrRun } = await import("@brianjenkins94/util/vite/dev");
 
-		if (await bootstrapOrRun(meta.url, path.dirname(url.fileURLToPath(meta.url)))) {
+		// Dev-only capability gating (bootstrapOrRun no-ops in production): inject the Vite plugin that rewrites
+		// a TOOL module's node:fs / node:child_process to the broker-gated shim, scoped to the tools dir. Off
+		// when the broker is disabled. The in-process, HMR-preserving replacement for a pre-bundle box.
+		const dir = path.dirname(url.fileURLToPath(meta.url));
+		const toolsDir = (options.toolsDir ?? path.join(dir, "tools")).replace(/\\/gu, "/");
+		const plugins: unknown[] = [];
+
+		if (options.broker !== false) {
+			const { gateBuiltins } = await import("@brianjenkins94/util/vite/plugins/gateBuiltins");
+
+			plugins.push(gateBuiltins({ "shouldGate": (importer: string) => importer.replace(/\\/gu, "/").includes(toolsDir) }));
+		}
+
+		if (await bootstrapOrRun(meta.url, dir, plugins as never)) {
 			return;
 		}
 

@@ -1,6 +1,7 @@
-import { execFileSync } from "node:child_process";
 import * as path from "node:path";
 import * as url from "node:url";
+
+import { exec, fire } from "@brianjenkins94/util/exec";
 import * as fs from "@brianjenkins94/util/fs";
 
 /**
@@ -54,46 +55,34 @@ export function decideVersion(pkgVersion: string, releases: Release[]): { "versi
 	return { "version": `${published[0]}.${published[1] + 1}.0`, "mode": "draft" };
 }
 
-/** Shell `gh` and return stdout. Auth comes from `GH_TOKEN` in the environment. */
-export function gh(args: string[]): string {
-	return execFileSync("gh", args, { "encoding": "utf8" });
+/** Shell `gh` and return stdout; throws if it fails. Auth comes from `GH_TOKEN` in the environment. */
+export async function gh(args: string[]): Promise<string> {
+	const result = await exec("gh", args);
+
+	if (!result.ok) { throw new Error(`gh ${args.join(" ")} failed: ${result.stderr}`); }
+
+	return result.stdout;
 }
 
 /** All releases (draft + published), newest API order, as `{ tagName, isDraft }`. */
-export function listReleases(limit = 200): Release[] {
-	return JSON.parse(gh(["release", "list", "--limit", String(limit), "--json", "tagName,isDraft"])) as Release[];
+export async function listReleases(limit = 200): Promise<Release[]> {
+	return JSON.parse(await gh(["release", "list", "--limit", String(limit), "--json", "tagName,isDraft"])) as Release[];
 }
 
-function releaseExists(tag: string): boolean {
-	try {
-		execFileSync("gh", ["release", "view", tag], { "stdio": "ignore" });
-
-		return true;
-	} catch {
-		return false;
-	}
-}
+const releaseExists = (tag: string): Promise<boolean> => fire("gh", ["release", "view", tag]);
 
 /** Create `tag` as a draft, or flip an existing release's draft state to match `mode` (idempotent). */
-export function ensureReleaseTag(tag: string, mode: "draft" | "promote"): void {
-	if (releaseExists(tag)) {
-		gh(["release", "edit", tag, `--draft=${String(mode === "draft")}`]);
+export async function ensureReleaseTag(tag: string, mode: "draft" | "promote"): Promise<void> {
+	if (await releaseExists(tag)) {
+		await gh(["release", "edit", tag, `--draft=${String(mode === "draft")}`]);
 	} else if (mode === "draft") {
-		gh(["release", "create", tag, "--draft", "--title", tag, "--notes", `Release ${tag}`]);
+		await gh(["release", "create", tag, "--draft", "--title", tag, "--notes", `Release ${tag}`]);
 	} else {
-		gh(["release", "create", tag, "--title", tag, "--notes", `Release ${tag}`]);
+		await gh(["release", "create", tag, "--title", tag, "--notes", `Release ${tag}`]);
 	}
 }
 
-function sameFile(a: string, b: string): boolean {
-	try {
-		execFileSync("cmp", ["-s", a, b]);
-
-		return true;
-	} catch {
-		return false;
-	}
-}
+const sameFile = (a: string, b: string): Promise<boolean> => fire("cmp", ["-s", a, b]);
 
 export interface DatedAsset {
 	/** Built artifact to upload. */
@@ -116,57 +105,57 @@ export async function syncDatedAsset(options: DatedAsset & { "tag": string; "mod
 	const tmp = options.tmp ?? path.join(process.cwd(), ".release-tmp");
 	await fs.mkdir(tmp, { "recursive": true });
 
-	const { assets } = JSON.parse(gh(["release", "view", tag, "--json", "assets"])) as { "assets": Asset[] };
+	const { assets } = JSON.parse(await gh(["release", "view", tag, "--json", "assets"])) as { "assets": Asset[] };
 	const canonical = `${base}.${ext}`;
 	const datedPattern = new RegExp(`^${base}\\.[0-9-]+\\.${ext}$`, "u");
 	const existingCanonical = assets.find((asset) => asset.name === canonical)?.name;
 	const existingDated = assets.find((asset) => datedPattern.test(asset.name))?.name;
 
-	function upload(name: string): void {
-		gh(["release", "upload", tag, path.join(tmp, name), "--clobber"]);
+	async function upload(name: string): Promise<void> {
+		await gh(["release", "upload", tag, path.join(tmp, name), "--clobber"]);
 		console.log(`  ${base}: uploaded ${name}`);
 	}
 
 	if (mode === "draft") {
 		// Drop any stale dated asset (e.g. from a prior always-dated build) and keep the canonical name.
-		if (existingDated !== undefined) { gh(["release", "delete-asset", tag, existingDated, "--yes"]); }
+		if (existingDated !== undefined) { await gh(["release", "delete-asset", tag, existingDated, "--yes"]); }
 
 		if (existingCanonical !== undefined) {
-			gh(["release", "download", tag, "--pattern", canonical, "--dir", tmp, "--clobber"]);
+			await gh(["release", "download", tag, "--pattern", canonical, "--dir", tmp, "--clobber"]);
 
-			if (sameFile(built, path.join(tmp, canonical))) {
+			if (await sameFile(built, path.join(tmp, canonical))) {
 				console.log(`  ${base}: unchanged — keeping ${canonical}`);
 
 				return;
 			}
 
-			gh(["release", "delete-asset", tag, canonical, "--yes"]);
+			await gh(["release", "delete-asset", tag, canonical, "--yes"]);
 		}
 
 		await fs.copyFile(built, path.join(tmp, canonical));
-		upload(canonical);
+		await upload(canonical);
 
 		return;
 	}
 
 	// promote: dated name. Drop any leftover canonical asset from the draft phase; keep an unchanged
 	// existing dated asset (don't re-date on a re-run); otherwise stamp today.
-	if (existingCanonical !== undefined) { gh(["release", "delete-asset", tag, existingCanonical, "--yes"]); }
+	if (existingCanonical !== undefined) { await gh(["release", "delete-asset", tag, existingCanonical, "--yes"]); }
 
 	if (existingDated !== undefined) {
-		gh(["release", "download", tag, "--pattern", existingDated, "--dir", tmp, "--clobber"]);
+		await gh(["release", "download", tag, "--pattern", existingDated, "--dir", tmp, "--clobber"]);
 
-		if (sameFile(built, path.join(tmp, existingDated))) {
+		if (await sameFile(built, path.join(tmp, existingDated))) {
 			console.log(`  ${base}: unchanged — keeping ${existingDated}`);
 
 			return;
 		}
 
-		gh(["release", "delete-asset", tag, existingDated, "--yes"]);
+		await gh(["release", "delete-asset", tag, existingDated, "--yes"]);
 	}
 
 	await fs.copyFile(built, path.join(tmp, `${base}.${date}.${ext}`));
-	upload(`${base}.${date}.${ext}`);
+	await upload(`${base}.${date}.${ext}`);
 }
 
 export interface ReleaseOptions {
@@ -185,11 +174,11 @@ export async function release(options: ReleaseOptions = {}): Promise<{ "tag": st
 	const root = process.cwd();
 	const pkgVersion = (JSON.parse(fs.readFileSync(path.join(root, options.versionFrom ?? "package.json"))) as { "version"?: string }).version ?? "0.0.0";
 
-	const { version, mode } = decideVersion(pkgVersion, listReleases());
+	const { version, mode } = decideVersion(pkgVersion, await listReleases());
 	const tag = `v${version}`;
 	console.log(`release ${tag} (${mode})`);
 
-	ensureReleaseTag(tag, mode);
+	await ensureReleaseTag(tag, mode);
 
 	if (options.assets !== undefined && options.assets.length > 0) {
 		const tmp = path.join(root, ".release-tmp");
