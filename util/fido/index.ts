@@ -164,33 +164,21 @@ async function sha1(string: string) {
 	).join("");
 }
 
-let cache;
-
-let limiter;
-
 async function fetchFactory(baseUrl?, defaultOptions = {}) {
 	defaultOptions["fetch"] ??= globalThis.fetch;
 	defaultOptions["retry"] ??= defaultRetry;
 	defaultOptions["headers"] ??= {};
 	defaultOptions["debug"] ??= process.env["NODE_ENV"] !== "production";
 
-	if (defaultOptions["debug"] && defaultOptions["cache"]) {
-		if (!isBrowser) {
-			cache ??= new (await import(/*! @external */ "@brianjenkins94/util/store")).PersistentStore();
-		}
-
-		defaultOptions["cache"] = cache;
+	if (defaultOptions["debug"] && defaultOptions["cache"] && !isBrowser) {
+		defaultOptions["cache"] = new (await import(/*! @external */ "@brianjenkins94/util/store")).PersistentStore();
 	}
 
-	if (limiter !== false && limiter === undefined) {
-		limiter = new Bottleneck({
-			"reservoir": 100,
-			"reservoirRefreshAmount": 100,
-			"reservoirRefreshInterval": 60_000
-		});
-	}
-
-	defaultOptions["limiter"] ??= limiter;
+	defaultOptions["limiter"] ??= new Bottleneck({
+		"reservoir": 100,
+		"reservoirRefreshAmount": 100,
+		"reservoirRefreshInterval": 60_000
+	});
 
 	if (defaultOptions["limiter"] instanceof Bottleneck && defaultOptions["retry"]) {
 		defaultOptions["limiter"].retryHandler = backoff(defaultOptions["retry"]);
@@ -229,7 +217,7 @@ async function fetchFactory(baseUrl?, defaultOptions = {}) {
 				"Cache": options["headers"]?.["Cache"] ?? options["headers"]?.["cache"] ?? (((options["debug"] ?? defaultOptions["debug"]) && options["method"] === "get") || "no-store"),
 				...options["headers"]
 			},
-			"cache": options["cache"] ?? cache,
+			"cache": options["cache"] ?? defaultOptions["cache"],
 			"cacheKey": options["method"] + ":" + url + (options["body"] !== undefined && !(options["body"] instanceof ReadableStream) ? ":" + await sha1(options["body"]) : ""),
 			"debug": options["debug"] ?? defaultOptions["debug"],
 			"limiter": options["limiter"] ?? defaultOptions["limiter"],

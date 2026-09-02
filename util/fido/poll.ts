@@ -61,7 +61,7 @@ export async function poll(url, query, { conditionCallback = defaultConditionCal
 	});
 
 	for (let callCount = 1; request instanceof Request; callCount++) {
-		const response = await this[request.method.toLowerCase()](request);
+		const response = await this.fetch(request, undefined, { "method": request.method });
 
 		request = await conditionCallback(currentValue, { "request": request, "response": response }, callCount);
 	}

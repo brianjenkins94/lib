@@ -5,7 +5,7 @@ import * as path from "node:path";
 import { mapSeries } from "@brianjenkins94/util/array";
 import { __root, isWindows } from "@brianjenkins94/util/env";
 
-import { defaultConditionCallback } from "@brianjenkins94/util/fido";
+import { poll } from "@brianjenkins94/util/fido/poll";
 import * as fs from "@brianjenkins94/util/fs";
 import { sleep } from "@brianjenkins94/util/sleep";
 import { externalOptionalDeps, polyfillNodeRolldown } from "@brianjenkins94/util/vite/plugins/polyfillNode";
@@ -130,7 +130,16 @@ export async function launch(url, options?) {
 	return page;
 }
 
-const contents = async function({ url, query, options, id }) {
+const contents = async function({ url, query, options, id, tap }) {
+	// Opt-in log streaming: when a `tap` (the name of a page global the Node host exposed via a CDP binding)
+	// is set — a connection-level default, see withDefaults — forward every in-page logger record to it. This
+	// is the explicit, consumer-owned way to stream fido's in-page spans out to Node; fido/the logger hardcode
+	// no such hook. Each `evaluate` gets its own `sinks`, so concurrent requests don't collide, and every
+	// record carries a span id, so many requests can share one tap and still be disentangled downstream.
+	if (tap && globalThis[tap]) {
+		sinks.push((record) => { try { globalThis[tap](record); } catch {} });
+	}
+
 	if (!globalThis.fetch.toString().includes("[native code]")) {
 		console.warn("`fetch` appears to have been overwritten.");
 
@@ -162,7 +171,6 @@ async function fetchFactory(baseUrl?, defaultOptions = {}) {
 				"input": "index.ts",
 				"treeshake": false,
 				"external": ["saxes"],
-				// One self-contained chunk — the page's AsyncFunction body can't `import` a sibling chunk.
 				"output": { "codeSplitting": false }
 			},
 			"minify": false,
@@ -174,15 +182,12 @@ async function fetchFactory(baseUrl?, defaultOptions = {}) {
 			"import.meta.resolve": "undefined"
 		},
 		"plugins": [
-			// Honor `/*! @external */` on optional dynamic imports (e.g. the node-only store).
 			externalOptionalDeps(),
-			// `pre` so it redirects `node:*` before Vite externalizes builtins to its browser-external stub.
-			// It inlines the functional polyfills (path/url/util) into the one bundle and shims `process` — so
-			// output[0].code is fully self-contained, no external `import`s, runnable as an AsyncFunction body.
 			{ ...polyfillNodeRolldown(["path", "url", "util"]), "enforce": "pre" },
 			virtualFileSystem({
 				"index.ts": [
 					"import { fido } from \"./util/fido\";",
+					"import { sinks } from \"@brianjenkins94/util/logger\";",
 					contents.substring(contents.indexOf("{", contents.indexOf(")") + 1) + 1, contents.lastIndexOf("}"))
 				].join("\n")
 			})
@@ -210,7 +215,8 @@ async function fetchFactory(baseUrl?, defaultOptions = {}) {
 			"url": url instanceof Request ? url.url : url,
 			"query": query,
 			"options": options,
-			"id": randomUUID()
+			"id": randomUUID(),
+			"tap": defaultOptions["tap"]
 		});
 
 		return new Response([101, 204, 205, 304].includes(result.status) ? null : new Uint8Array(result.body), {
@@ -221,43 +227,21 @@ async function fetchFactory(baseUrl?, defaultOptions = {}) {
 	};
 }
 
-export const fido = {
-	"fetch": async (page, url, query?, options?) => (fido.fetch = await fetchFactory())(page, url, query, options),
-	"get": (page, url, query?, options?) => fido.fetch(page, url, options === undefined && (query && Object.values(query).every((value) => typeof value !== "object") ? query : undefined), { ...(options ?? query), "method": "GET" }),
-	"post": (page, url, query?, options?) => fido.fetch(page, url, options === undefined && (query && Object.values(query).every((value) => typeof value !== "object") ? query : undefined), { ...(options ?? query), "method": "POST" }),
-	"put": (page, url, query?, options?) => fido.fetch(page, url, options === undefined && (query && Object.values(query).every((value) => typeof value !== "object") ? query : undefined), { ...(options ?? query), "method": "PUT" }),
-	"patch": (page, url, query?, options?) => fido.fetch(page, url, options === undefined && (query && Object.values(query).every((value) => typeof value !== "object") ? query : undefined), { ...(options ?? query), "method": "PATCH" }),
-	"delete": (page, url, query?, options?) => fido.fetch(page, url, options === undefined && (query && Object.values(query).every((value) => typeof value !== "object") ? query : undefined), { ...(options ?? query), "method": "DELETE" }),
-	"poll": (page, url, query?, options?) => (async function poll(page, url, query: Record<string, string> = {}, { conditionCallback = defaultConditionCallback, initialValue = [], ...options }) {
-		if (typeof url === "string") {
-			url = new URL(url);
-		}
+export function withDefaults(baseUrl?, defaultOptions = {}) {
+	const fido = {
+		"fetch": async (page, url, query?, options?) => (fido.fetch = await fetchFactory(baseUrl, defaultOptions))(page, url, query, options),
+		"get": (page, url, query?, options?) => fido.fetch(page, url, options === undefined && (query && Object.values(query).every((value) => typeof value !== "object") ? query : undefined), { ...(options ?? query), "method": "GET" }),
+		"post": (page, url, query?, options?) => fido.fetch(page, url, options === undefined && (query && Object.values(query).every((value) => typeof value !== "object") ? query : undefined), { ...(options ?? query), "method": "POST" }),
+		"put": (page, url, query?, options?) => fido.fetch(page, url, options === undefined && (query && Object.values(query).every((value) => typeof value !== "object") ? query : undefined), { ...(options ?? query), "method": "PUT" }),
+		"patch": (page, url, query?, options?) => fido.fetch(page, url, options === undefined && (query && Object.values(query).every((value) => typeof value !== "object") ? query : undefined), { ...(options ?? query), "method": "PATCH" }),
+		"delete": (page, url, query?, options?) => fido.fetch(page, url, options === undefined && (query && Object.values(query).every((value) => typeof value !== "object") ? query : undefined), { ...(options ?? query), "method": "DELETE" }),
+		"poll": (page, url, query?, options?) => poll.call({ "fetch": (url, query, options) => fido.fetch(page, url, query, options) }, url, (options === undefined && (query && Object.values(query).every((value) => typeof value !== "object") ? query : undefined)) ?? {}, { "method": "GET", ...(options ?? query) })
+	};
 
-		url.search = new URLSearchParams([
-			...new URLSearchParams(url.search).entries(),
-			...Object.entries(query)
-		]).toString();
+	return fido;
+}
 
-		const currentValue = initialValue;
-
-		let request = new Request(url.toString(), {
-			"method": options["method"] ?? "GET",
-			"headers": options["headers"],
-			"body": options["body"]
-		});
-
-		for (let callCount = 1; request instanceof Request; callCount++) {
-			const response = await fido[request.method.toLowerCase()](page, request);
-
-			request = await conditionCallback(currentValue, {
-				"request": request,
-				"response": response
-			}, callCount);
-		}
-
-		return request;
-	})(page, url, options === undefined && (query && Object.values(query).every((value) => typeof value !== "object") ? query : undefined), { "method": "GET", ...(options ?? query) })
-};
+export const fido = withDefaults();
 
 export function getHref(page) {
 	return page.evaluate(function() {
