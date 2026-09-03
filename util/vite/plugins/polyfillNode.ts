@@ -2,6 +2,8 @@ import type { PluginOption } from "vite";
 import type { Plugin as EsbuildPlugin } from "esbuild";
 import type { Plugin as RolldownPlugin } from "rolldown";
 import { builtinModules, createRequire } from "node:module";
+import * as fs from "node:fs/promises";
+import * as path from "node:path";
 import * as url from "node:url";
 import stdlib from "node-stdlib-browser";
 import { nodePolyfills } from "vite-plugin-node-polyfills";
@@ -70,6 +72,80 @@ export function externalOptionalDeps(): PluginOption {
 			return resolved === null ? { "id": id, "external": true } : undefined;
 		}
 	} as PluginOption;
+}
+
+/** Marks a package.json as a stub this tooling generated, so {@link ensureOptionalStubs} only ever
+ *  overwrites/keeps its own and a later real `npm install <dep>` (which replaces the folder) wins. */
+const STUB_MARKER = "@brianjenkins94/util:optional-external-stub";
+
+/**
+ * Dev-server companion to {@link externalOptionalDeps} for the ONE case that plugin can't reach: an
+ * `@external` optional dep that the app hasn't installed, imported from a package Vite PRE-BUNDLES.
+ *
+ * Vite's dep optimizer resolves the imports inside a `.vite/deps/*` chunk through an internal, on-disk-only
+ * path — it consults no plugin `resolveId`, no `resolve.alias`, and neither `optimizeDeps.include` nor
+ * `exclude` (all verified). And in dev a resolveId `external: true` is ignored unless the id is an external
+ * URL (import-analysis gates on `isExternalUrl`, not rollup's build-time flag). So the browser-side
+ * equivalent of the annotation's "harmless unreached runtime import" HAS to be a real on-disk module: a
+ * bare specifier only resolves out of a `node_modules/<name>`.
+ *
+ * This scans `packageDir` (the lib that ships the `@external` imports) for those specifiers and, for each
+ * bare one that doesn't resolve from `root`, writes an inert `node_modules/<name>` stub (default export `{}`
+ * — the consumer reads it inside a try/catch and degrades). It is idempotent, only ever creates/overwrites
+ * folders it marked itself, and never touches a real install (a folder it didn't mark is left alone; a real
+ * `npm install <dep>` replaces the folder and takes over). Dev-only: production builds go through
+ * {@link externalOptionalDeps}, which rollup honors.
+ */
+export async function ensureOptionalStubs(packageDir: string, root: string): Promise<void> {
+	const specifiers = new Set<string>();
+
+	// Walk the lib's shipped source for `@external`-annotated specifiers (skip its own node_modules).
+	async function collect(dir: string): Promise<void> {
+		const entries = await fs.readdir(dir, { "withFileTypes": true }).catch(() => []);
+
+		await Promise.all(entries.map(async function(entry) {
+			const full = path.join(dir, entry.name);
+
+			if (entry.isDirectory()) {
+				if (entry.name !== "node_modules") { await collect(full); }
+			} else if (entry.name.endsWith(".js")) {
+				const code = await fs.readFile(full, "utf8").catch(() => "");
+
+				for (const [, comments, id] of code.matchAll(OPTIONAL_IMPORT)) {
+					// Only a bare specifier resolves out of node_modules and so can be stubbed there.
+					if (/@external/u.test(comments) && id[0] !== "." && id[0] !== "/") { specifiers.add(id); }
+				}
+			}
+		}));
+	}
+
+	await collect(packageDir);
+
+	if (specifiers.size === 0) { return; }
+
+	const require = createRequire(path.join(root, "index.js"));
+
+	await Promise.all([...specifiers].map(async function(specifier) {
+		// Installed (or already stubbed) → resolvable → nothing to do.
+		try { require.resolve(specifier); return; } catch {}
+
+		const stubDir = path.join(root, "node_modules", specifier);
+		const manifest = path.join(stubDir, "package.json");
+
+		// Never clobber a folder we didn't create — only a prior stub of ours (or nothing) is ours to write.
+		const existing = await fs.readFile(manifest, "utf8").catch(() => null);
+		if (existing !== null && !existing.includes(STUB_MARKER)) { return; }
+
+		await fs.mkdir(stubDir, { "recursive": true });
+		await fs.writeFile(manifest, JSON.stringify({
+			"name": specifier,
+			"version": "0.0.0-stub",
+			"type": "module",
+			"exports": "./index.js",
+			"//": STUB_MARKER
+		}, undefined, "\t") + "\n");
+		await fs.writeFile(path.join(stubDir, "index.js"), "export default {};\n");
+	}));
 }
 
 export function polyfillNode(builtins = builtinModules): PluginOption {

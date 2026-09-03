@@ -122,6 +122,22 @@ function transformFields({ filters, fields }) {
 						return [];
 					}
 
+					// `{ field: { keyword: false } }` marks a numeric/keywordless field: its
+					// composite/terms source uses the bare field name. A numeric field (e.g.
+					// `ctxt_status_code`) has no `.keyword` sub-field, so the default
+					// `key + ".keyword"` source would make the aggregation fail. `keyword: true`
+					// is the explicit form of the default (analyzed string → `.keyword`).
+					if (typeof value["keyword"] === "boolean") {
+						return [
+							[key, {
+								"terms": {
+									"field": value["keyword"] ? key + ".keyword" : key,
+									"order": "asc"
+								}
+							}]
+						];
+					}
+
 					return [
 						[key, value]
 					];
@@ -344,7 +360,17 @@ export async function getUniqueFieldCombinations(client: Client, { index, range 
 
 		({ "aggregations": { "composite_terms": { buckets, "after_key": afterKey } } } = body);
 
-		results.push(...buckets.map(({ key, doc_count }) => ({ ...key, "doc_count": doc_count })));
+		results.push(...buckets.map(({ key, doc_count }) => ({ ...key, doc_count })));
+
+		// A page shorter than `size` is composite's own signal that there are no more buckets — stop
+		// WITHOUT issuing the `after`-paginated next request. This both saves a round-trip and avoids a
+		// cross-index gotcha: a numeric composite source (`{ field: { keyword: false } }`) puts a number
+		// into `after_key`, and on any shard where that field is UNMAPPED the source is treated as a
+		// keyword, so the numeric `after` value is rejected ("expected string, got Integer"). Not sending
+		// the doomed page-2 request sidesteps it whenever the results fit in one page.
+		if (buckets.length < size) {
+			break;
+		}
 	} while (afterKey !== undefined);
 
 	return results;
@@ -479,6 +505,39 @@ export async function scrollSearch(client: Client, { index = undefined, range = 
 	}
 
 	return results;
+}
+
+// Returns the min and max of a numeric/date field over the (optionally filtered) window.
+// `min`/`max` are the raw agg values (epoch millis for a date field); `minString`/`maxString`
+// are the `value_as_string` forms when the mapping provides them. `fields` accepts the same
+// spec array as the search helpers (used only to build the filter here). Handy for finding the
+// oldest document, e.g. `fieldBounds(client, { index, field: "@timestamp", range })`.
+export async function fieldBounds(client: Client, { index = undefined, field = "@timestamp", range = undefined, fields = [], ...options } = {}) {
+	let filters;
+
+	({ filters } = transformFields({ filters: undefined, fields }));
+
+	const { body } = await _search(client, {
+		...options,
+		"index": index,
+		"aggs": {
+			"min_value": { "min": { "field": field } },
+			"max_value": { "max": { "field": field } }
+		},
+		"filters": filters,
+		"range": range && {
+			"@timestamp": range
+		}
+	});
+
+	const aggregations = body["aggregations"] ?? {};
+
+	return {
+		"min": aggregations["min_value"]?.["value"] ?? null,
+		"max": aggregations["max_value"]?.["value"] ?? null,
+		"minString": aggregations["min_value"]?.["value_as_string"],
+		"maxString": aggregations["max_value"]?.["value_as_string"]
+	};
 }
 
 export async function poll(client: Client, { index = undefined, /* filters = undefined, */ ...options }) {
