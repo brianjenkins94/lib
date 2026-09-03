@@ -1,6 +1,7 @@
 import type { PluginOption } from "vite";
 import * as path from "node:path";
 import * as url from "node:url";
+import { isEntry } from "@brianjenkins94/util/env";
 import { log } from "@brianjenkins94/util/logger";
 import * as fs from "@brianjenkins94/util/fs";
 import { build } from "vite";
@@ -217,7 +218,7 @@ export async function discoverStaticConfig(root = process.cwd(), prefix = "app")
 // A config module's default export is the options object, or a function returning them. (A `.ts`
 // config requires running the bin under tsx; the zero-config path needs no `.ts` import, so it runs
 // under a plain `node` shebang.) Programmatic consumers just `import { buildStatic }`.
-if (process.argv[1] !== undefined && import.meta.url === url.pathToFileURL(await fs.realpath(process.argv[1])).toString()) {
+if (isEntry(import.meta)) {
 	const explicit = process.argv[2] !== undefined ? path.resolve(process.cwd(), process.argv[2]) : undefined;
 	const conventional = ["buildStatic.config.ts", "buildStatic.config.js"].map((name) => path.resolve(process.cwd(), name));
 	const configPath = explicit ?? (await Promise.all(conventional.map(exists))).flatMap((found, index) => found ? [conventional[index]] : [])[0];

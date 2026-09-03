@@ -1,5 +1,6 @@
 import * as path from "node:path";
 import * as url from "node:url";
+import { isEntry } from "@brianjenkins94/util/env";
 
 import { exec, fire } from "@brianjenkins94/util/exec";
 import * as fs from "@brianjenkins94/util/fs";
@@ -67,6 +68,11 @@ export async function gh(args: string[]): Promise<string> {
 /** All releases (draft + published), newest API order, as `{ tagName, isDraft }`. */
 export async function listReleases(limit = 200): Promise<Release[]> {
 	return JSON.parse(await gh(["release", "list", "--limit", String(limit), "--json", "tagName,isDraft"])) as Release[];
+}
+
+/** The tag GitHub marks `isLatest` (newest published, non-draft, non-prerelease), or "" when there is none yet. */
+export async function latestRelease(): Promise<string> {
+	return (await gh(["release", "list", "--json", "tagName,isLatest", "--jq", "[.[] | select(.isLatest)][0].tagName // empty"])).trim();
 }
 
 const releaseExists = (tag: string): Promise<boolean> => fire("gh", ["release", "view", tag]);
@@ -195,9 +201,12 @@ export async function release(options: ReleaseOptions = {}): Promise<{ "tag": st
 	return { tag, version, mode };
 }
 
-// Run directly (the `util-release` bin): load `release.config.{ts,js}` from cwd if present (its default
-// export is ReleaseOptions, or a function returning them), else run tag-only against `package.json`.
-if (process.argv[1] !== undefined && import.meta.url === url.pathToFileURL(await fs.realpath(process.argv[1])).toString()) {
+// Run directly (the `util-release` bin): `--latest` prints the latest published tag (for a workflow to
+// capture); otherwise load `release.config.{ts,js}` from cwd if present (its default export is
+// ReleaseOptions, or a function returning them), else run tag-only against `package.json`.
+if (isEntry(import.meta) && process.argv.includes("--latest")) {
+	console.log(await latestRelease());
+} else if (isEntry(import.meta)) {
 	const configPath = ["release.config.ts", "release.config.js"].map((name) => path.resolve(process.cwd(), name)).find((file) => fs.existsSync(file));
 	const config = configPath === undefined ? {} : (await import(url.pathToFileURL(configPath).toString())).default as ReleaseOptions | (() => ReleaseOptions | Promise<ReleaseOptions>);
 

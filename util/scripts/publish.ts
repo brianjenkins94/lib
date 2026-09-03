@@ -4,6 +4,7 @@ import { log } from "@brianjenkins94/util/logger";
 import { exec } from "@brianjenkins94/util/exec";
 import { createGunzip, createGzip } from "node:zlib";
 import { isCI } from "@brianjenkins94/util/env";
+import { HelpRequested, juvy } from "@brianjenkins94/util/juvy";
 import * as fs from "@brianjenkins94/util/fs";
 import { pascalCaseToKebabCase } from "@brianjenkins94/util/text";
 import tarStream from "tar-stream";
@@ -14,6 +15,34 @@ import { build } from "./build";
 const __root = process.cwd();
 
 const distDirectory = path.join(__root, "docs");
+
+// util-publish's inputs, resolved ONCE up front and read from `config` below: the `[workspaces...]` positional
+// plus the two values that used to be plucked from `process.env` unchecked. `owner` has no default on purpose —
+// the published name is `@<owner>/<pkg>`, and a missing var silently shipped `@undefined/util`. CI gets
+// GITHUB_REPOSITORY_OWNER from Actions; a local run must set it (`GITHUB_REPOSITORY_OWNER=brianjenkins94`).
+const config = juvy({
+	"workspaces": { "format": Array, "default": [], "positional": "rest", "env": false, "doc": "Workspaces to build + publish (default: every git-tracked publishable workspace)." },
+	"owner": { "format": String, "required": true, "env": "GITHUB_REPOSITORY_OWNER", "doc": "Scope of the published name, `@<owner>/<pkg>` ($GITHUB_REPOSITORY_OWNER — locally, e.g. GITHUB_REPOSITORY_OWNER=brianjenkins94)." },
+	"npmToken": { "format": String, "default": "", "env": "NPM_TOKEN", "sensitive": true, "doc": "npm publish token ($NPM_TOKEN); empty → GitHub-Pages tarball only, no npm publish." }
+});
+
+try {
+	await config.parse();
+	config.validate();
+} catch (error) {
+	if (error instanceof HelpRequested) {
+		process.stdout.write(error.message + "\n");
+		process.exit(0);
+	}
+
+	// Bad or missing inputs abort BEFORE any build runs. A hard exit is safe here — nothing is in flight yet;
+	// the `exitCode`-only rule at the bottom exists because tarball streams are.
+	process.stderr.write((error instanceof Error ? error.message : String(error)) + "\nRun with --help for the inputs.\n");
+	process.exit(1);
+}
+
+const owner: string = config.get("owner");
+const npmToken: string = config.get("npmToken");
 
 /**
  * Collect a pre-built package's shipped files (the directories in its package.json `files`),
@@ -80,11 +109,20 @@ async function emitDeclarations(workspace: string, nestedDirs: string[]): Promis
 	}
 }
 
-const workspaces = Object.entries(await build(process.argv.length > 2 ? process.argv.slice(2) : undefined)).filter(([key, value]) => value === 0).map(([key]) => key);
+const requested: string[] = config.get("workspaces");
 
-// Packages whose source build threw — collected so the run fails loudly at the end (see the catch below)
-// rather than silently shipping a stale tarball.
-const buildFailures: string[] = [];
+const buildResults = Object.entries(await build(requested.length > 0 ? requested : undefined));
+const workspaces = buildResults.filter(([key, value]) => value === 0).map(([key]) => key);
+
+// Packages whose build failed — collected so the run fails loudly at the end (see the catches below)
+// rather than silently shipping a stale tarball. A workspace whose own `build` script exited non-zero
+// counts from the start: dropping it quietly is how a broken package once fell through to publishing
+// the repo root instead.
+const buildFailures: string[] = buildResults.filter(([key, value]) => value !== 0).map(([key]) => key);
+
+for (const workspace of buildFailures) {
+	console.error(`❌ build script failed for ${workspace}`);
+}
 
 // All git-tracked workspaces (incl. private) — used to keep a parent's source build from slurping a
 // nested package's sources (e.g. silo's root tarball must NOT pull in examples/ci-demo or a private
@@ -103,7 +141,9 @@ function isPublishable(workspace) {
 	}
 }
 
-if (!workspaces.some((workspace) => workspace !== "." && isPublishable(workspace)) && isPublishable(".")) {
+// Decided over EVERY sub-workspace, not just the ones that built: a monorepo whose packages all failed to
+// build must fail, not fall back to publishing its root.
+if (!buildResults.some(([workspace]) => workspace !== "." && isPublishable(workspace)) && isPublishable(".")) {
 	workspaces.push(".");
 }
 
@@ -146,6 +186,13 @@ for (const workspace of workspaces) {
 		files = await collectBuiltFiles(path.join(__root, workspace).replace(/\\/gu, "/"), packageJson["files"]);
 	} else {
 		const entryPoints = packageJson["exports"] ?? (await Array.fromAsync(fs.glob(path.join(workspace, "**", "*.ts"), { "exclude": (entry) => entry.includes("node_modules") || isNested(entry) }))).map((entry) => path.join(__root, entry).replace(/\\/gu, "/"));
+
+		// Nothing to transpile and nothing pre-built: say so, instead of rolldown's opaque "must supply options.input".
+		if (entryPoints.length === 0) {
+			console.error(`❌ build failed for ${workspace}: no entry points (no \`exports\`, no .ts sources, no \`files\`) — mark it private or declare what it ships`);
+			buildFailures.push(workspace);
+			continue;
+		}
 
 		let result;
 
@@ -265,11 +312,11 @@ for (const workspace of workspaces) {
 
 	const buildPackageJson = (version) => JSON.stringify(preBuilt ? {
 		...publishable,
-		"name": `@${process.env["GITHUB_REPOSITORY_OWNER"]}/${packageJson["name"]}`,
+		"name": `@${owner}/${packageJson["name"]}`,
 		"version": version
 	} : {
 		...publishable,
-		"name": `@${process.env["GITHUB_REPOSITORY_OWNER"]}/${packageJson["name"]}`,
+		"name": `@${owner}/${packageJson["name"]}`,
 		"exports": Object.fromEntries(Object.keys(files).filter((key) => key !== "package.json" && !key.endsWith(".d.ts")).map((key) => {
 			// Pair each entry with its emitted declaration (if any) so TypeScript consumers get types;
 			// hand-written .mjs/.cjs have no sibling .d.ts and stay a bare target string.
@@ -364,11 +411,11 @@ for (const workspace of workspaces) {
 		// The GitHub-Pages tarball above is the default channel; npm is additive and opt-in via the token.
 		// Auth is passed through the env so no .npmrc is required; the tarball's own publishConfig (access,
 		// provenance) is honored.
-		if (process.env["NPM_TOKEN"]) {
+		if (npmToken !== "") {
 			// exec auto-shells `npm` (a .cmd shim) on Windows — the site that previously lacked shell:true.
 			await exec("npm", ["publish", tarPath, "--access", "public"], {
 				"stdio": "inherit",
-				"env": { ...process.env, "npm_config_//registry.npmjs.org/:_authToken": process.env["NPM_TOKEN"] }
+				"env": { ...process.env, "npm_config_//registry.npmjs.org/:_authToken": npmToken }
 			});
 		}
 	});

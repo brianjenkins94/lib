@@ -5,6 +5,7 @@ import * as path from "node:path";
 import { launch } from "@brianjenkins94/util/exec";
 import { log } from "./logger";
 import { unescape } from "node:querystring";
+import { isEntry } from "@brianjenkins94/util/env";
 import * as fs from "@brianjenkins94/util/fs";
 import mime from "mime/lite";
 
@@ -145,7 +146,7 @@ async function serve() {
 }
 
 /*
-if (import.meta.url === url.pathToFileURL(process.argv[1]).toString()) {
+if (isEntry(import.meta)) {
 	await serve();
 }
 */

@@ -2,13 +2,31 @@
  * juvy — a browser-safe config offering, based on convict 6.2.5, stripped to the isomorphic core.
  *
  * One offering, used in portions: config-only (works in the browser), + argv parsing (`.parse()`, via
- * `@pkgjs/parseargs`), + application structure (`.cli()`, via cmd-ts, lazy-loaded — separate module).
+ * `node:util`'s native parseArgs), + application structure (`.cli()`, via cmd-ts, lazy-loaded — separate module).
  *
  * The bespoke reason nothing off-the-shelf fits: the ENV SOURCE switches by runtime — Node reads
  * `process.env`, a browser/worker reads `globalThis` (so `window.MY_VAR` / `globalThis.MY_VAR`). Override
  * it with `{ env }`. Also folds in the `#379` convention: one canonical camelCase key derives its env var
  * (SCREAMING_SNAKE) and CLI flag (--kebab); minimal specs; `sensitive`. No fs; `.parse()` lazy-loads
  * `node:util` (native parseArgs) only when called, so the config core itself has zero dependencies.
+ *
+ * Rules worth knowing:
+ * - Types are inferred from the default when no `format` is given, and the inferred type COERCES exactly like an
+ *   explicit one: `{ port: 3000 }` + `PORT=8080` → 8080 (Number); `{ debug: false }` is a boolean `--debug` flag;
+ *   an Array default comma-splits. Booleans accept true/1/yes/on and false/0/no/off/""; anything else (and a
+ *   non-numeric string for a Number) is left as-is so `validate()` reports it rather than it silently becoming
+ *   `true`/`NaN`.
+ * - `required`: a leaf must be non-`undefined` after defaults + env + `load()` + `parse()`. A leaf with no
+ *   `default` (`{ default: undefined }`, or an object spec carrying `required: true` — which is what makes a
+ *   default-less object a leaf rather than a namespace) is required; `validate()` reports it as missing. Without
+ *   a `format`, such a leaf accepts any type. `required: true` alongside a default is a no-op.
+ * - Positionals: `positional: true` takes one argv positional (declaration order); `positional: "rest"` (or an
+ *   Array-typed `positional: true`, which is promoted to "rest") collects every remaining one — at most one,
+ *   and it must be the last positional. Extra positionals with no rest sink are an error, not dropped.
+ * - `.parse()` honors `--help`/`-h` on its own (no CLI layer): it throws `HelpRequested`, whose `message` is a
+ *   plain-text usage rendered from the schema — catch it to print-and-exit-0, or let it fall through as an
+ *   error that at least shows usage. The CLI layer (`./cli`) intercepts `--help` first and renders via cmd-ts.
+ * - Repeated Array flags (`--tags x --tags y`) keep every value (comma-split per occurrence).
  */
 import { pascalCaseToKebabCase, pascalCaseToScreamingSnakeCase } from "@brianjenkins94/util/text"; // browser-safe (pure string ops)
 import { getRuntime } from "@brianjenkins94/util/env"; // shared runtime detection (env pulls node:path/url — polyfilled at bundle time)
@@ -106,8 +124,12 @@ export interface PropertySchema {
 	/** CLI flag (no dashes). Omitted → derived --kebab of the key path (#379). Consumed by `.parse()`/the bridge. */
 	"arg"?: string;
 	"short"?: string;
-	/** Take this value from a CLI positional argument (not a `--flag`) when used via the cmd-ts bridge. */
-	"positional"?: boolean;
+	/** Take this value from a CLI positional argument (not a `--flag`). `"rest"` collects every remaining positional
+	 *  (an Array-typed `true` is promoted to `"rest"`); at most one, and it must be the last positional. */
+	"positional"?: boolean | "rest";
+	/** Must be non-`undefined` after env/load/parse. Implied by a missing `default`; explicit `true` also makes a
+	 *  default-less object spec a leaf (otherwise a default-less object is a namespace). */
+	"required"?: boolean;
 	"sensitive"?: boolean;
 	"nullable"?: boolean;
 	"doc"?: string;
@@ -168,23 +190,40 @@ function resolveFormat(prop: PropertySchema, fullName: string): FormatFn {
 
 	assert(format === undefined || format === null, `'${fullName}': 'format' must be a function or a known format type.`);
 
-	// No format → infer from the default value's runtime type.
-	const type = Object.prototype.toString.call(prop.default);
+	// No format and no default → a required leaf of any type (see header).
+	if (prop.default === undefined) { return BUILT_IN_TYPES["*"]; }
 
-	return (x) => assert(Object.prototype.toString.call(x) === type, `should be of type ${type.replace(/\[object (.*)\]/u, "$1")}`);
+	// No format → infer from the default value's runtime type. Recording the inferred ctor name as `format` is what
+	// lets `coerce()` and `getArgSpecs()` treat `{ port: 3000 }` exactly like `{ format: Number, default: 3000 }`.
+	const type = Object.prototype.toString.call(prop.default);
+	const typeName = type.replace(/\[object (.*)\]/u, "$1");
+
+	if (typeName in BUILT_IN_CTORS) { prop.format = typeName.toLowerCase(); }
+
+	return (x) => assert(Object.prototype.toString.call(x) === type, `should be of type ${typeName}`);
 }
 
 // ---------------------------------------------------------------------------------------------------------
 // Coercion — env/argv values arrive as strings; coerce to the property's declared type
 // ---------------------------------------------------------------------------------------------------------
 
+// Anything outside these two sets is NOT a boolean; it's returned untouched so `validate()` rejects it (the old
+// `!== "false"` rule made `DEBUG=0` truthy).
+const TRUTHY = new Set(["true", "1", "yes", "on"]);
+const FALSY = new Set(["false", "0", "no", "off", ""]);
+
+// A non-numeric string stays a string (instead of becoming NaN — which IS `[object Number]` and would validate).
+function numeric(parsed: number, raw: string): unknown {
+	return Number.isNaN(parsed) ? raw : parsed;
+}
+
 function coerce(prop: NormalizedProp | undefined, value: unknown): unknown {
 	if (typeof value !== "string" || prop === undefined) { return value; }
 
 	switch (prop.format) {
-		case "int": case "integer": case "nat": case "port": return parseInt(value, 10);
-		case "number": return parseFloat(value);
-		case "boolean": return value.toLowerCase() !== "false";
+		case "int": case "integer": case "nat": case "port": return numeric(parseInt(value, 10), value);
+		case "number": return numeric(parseFloat(value), value);
+		case "boolean": return TRUTHY.has(value.toLowerCase()) ? true : FALSY.has(value.toLowerCase()) ? false : value;
 		case "array": return value.split(",");
 		case "object": return JSON.parse(value);
 		case "regexp": return new RegExp(value, "u");
@@ -196,6 +235,40 @@ function coerce(prop: NormalizedProp | undefined, value: unknown): unknown {
 // The offering
 // ---------------------------------------------------------------------------------------------------------
 
+export interface ArgSpec {
+	"flag": string;
+	"path": string;
+	"type": "string" | "boolean";
+	"multiple": boolean;
+	"positional": false | true | "rest";
+	"short"?: string;
+	"doc"?: string;
+}
+
+/** Thrown by `.parse()` on `--help`/`-h`; `message` is the schema-derived usage text. */
+export class HelpRequested extends Error {
+	public constructor(usage: string) {
+		super(usage);
+		this.name = "HelpRequested";
+	}
+}
+
+// The help `.parse()` can render on its own (no cmd-ts): one line per arg, in schema order.
+function renderUsage(specs: ArgSpec[], defaults: (path: string) => unknown): string {
+	const lines = specs.map((spec) => {
+		const usage = spec.positional === "rest"
+			? `<${spec.flag}...>`
+			: spec.positional
+				? `<${spec.flag}>`
+				: [`--${spec.flag}`, ...(spec.short !== undefined ? [`-${spec.short}`] : [])].join(", ") + (spec.type === "boolean" ? "" : " <value>");
+		const fallback = defaults(spec.path);
+
+		return `  ${usage.padEnd(28)} ${spec.doc ?? ""}${fallback !== undefined && fallback !== "" ? ` [default: ${String(fallback)}]` : ""}`.trimEnd();
+	});
+
+	return ["Usage:", ...lines, "  --help, -h                   show help"].join("\n");
+}
+
 export interface Juvy {
 	get(path: string): any;
 	has(path: string): boolean;
@@ -205,8 +278,9 @@ export interface Juvy {
 	load(values: Record<string, unknown>): Juvy;
 	getProperties(): Record<string, any>;
 	getSchema(): SchemaNode;
-	/** #379 arg descriptors (flag/path/type/positional/short/doc) — drives `.parse()` and the cmd-ts bridge. */
-	getArgSpecs(): Array<{ "flag": string; "path": string; "type": "string" | "boolean"; "positional": boolean; "short"?: string; "doc"?: string }>;
+	/** #379 arg descriptors (flag/path/type/positional/short/doc) — drives `.parse()` and the cmd-ts bridge.
+	 *  `multiple` = an Array-typed flag (repeatable); `positional` is `false`, `true` (one) or `"rest"` (the remainder). */
+	getArgSpecs(): ArgSpec[];
 	validate(options?: { "strict"?: boolean }): Juvy;
 	/** Portion: parse argv and load the result. Lazy-loads `node:util`, so it's async. Node front door. */
 	parse(argv?: string[]): Promise<Juvy>;
@@ -227,14 +301,15 @@ export function juvy(schema: Schema, options: JuvyOptions = {}): Juvy {
 	const propByPath: Record<string, NormalizedProp> = {};
 	const sensitive: string[] = [];
 	const instance: Record<string, any> = {};
+	let restPositional: string | undefined;
 
 	// --- normalize the schema (recursive), deriving env/flag names per #379 ---
 	function normalize(name: string, node: unknown, props: Record<string, any>, fullName: string): void {
 		assert(name !== "_juvyProperties", `'${fullName}': '_juvyProperties' is a reserved key`);
 		assert(name !== "__proto__" && name !== "constructor" && name !== "prototype", `'${fullName}': reserved key`);
 
-		// A nested namespace = a plain object with no `default`.
-		if (node !== null && typeof node === "object" && !Array.isArray(node) && Object.keys(node).length > 0 && !("default" in (node as object))) {
+		// A nested namespace = a plain object with neither `default` nor `required` (either one marks a leaf).
+		if (node !== null && typeof node === "object" && !Array.isArray(node) && Object.keys(node).length > 0 && !("default" in (node as object)) && !("required" in (node as object))) {
 			props[name] = { "_juvyProperties": {} };
 
 			for (const key of Object.keys(node as object)) {
@@ -245,13 +320,23 @@ export function juvy(schema: Schema, options: JuvyOptions = {}): Juvy {
 		}
 
 		// Shorthand: `key: value` → `{ default: value }`.
-		const prop: PropertySchema = (node !== null && typeof node === "object" && !Array.isArray(node) && "default" in (node as object))
-			? { ...(node as PropertySchema) } // shallow — we add fields; `format`/validator fn stays by reference
+		const prop: PropertySchema = (node !== null && typeof node === "object" && !Array.isArray(node) && ("default" in (node as object) || "required" in (node as object)))
+			? { "default": undefined, ...(node as PropertySchema) } // shallow — we add fields; `format`/validator fn stays by reference
 			: { "default": node };
 
 		const normalized = prop as NormalizedProp;
 		normalized._path = fullName;
 		normalized._format = resolveFormat(prop, fullName);
+
+		// An Array-typed positional can only mean "the remainder"; and only one sink can take the remainder.
+		if (prop.positional === true && prop.format === "array") { prop.positional = "rest"; }
+
+		if (prop.positional === "rest") {
+			assert(restPositional === undefined, `'${fullName}': only one positional may be "rest" (already '${restPositional}')`);
+			restPositional = fullName;
+		} else if (prop.positional === true) {
+			assert(restPositional === undefined, `'${fullName}': a "rest" positional ('${restPositional}') must be declared last`);
+		}
 
 		// #379: derive env (SCREAMING_SNAKE) + flag (--kebab) from the key path unless given / opted out.
 		// #379 derivation: `server.maxCount` → flag `--server-max-count`, env `SERVER_MAX_COUNT` (dots → separators).
@@ -317,8 +402,9 @@ export function juvy(schema: Schema, options: JuvyOptions = {}): Juvy {
 			return Object.values(propByPath).map((prop) => ({
 				"flag": prop._arg,
 				"path": prop._path,
-				"type": (prop.format === "boolean" || prop.format === Boolean) ? "boolean" as const : "string" as const,
-				"positional": prop.positional === true,
+				"type": prop.format === "boolean" ? "boolean" as const : "string" as const,
+				"multiple": prop.format === "array",
+				"positional": prop.positional === "rest" ? "rest" as const : prop.positional === true,
 				...(prop.short !== undefined ? { "short": prop.short } : {}),
 				...(prop.doc !== undefined ? { "doc": prop.doc } : {})
 			}));
@@ -335,6 +421,9 @@ export function juvy(schema: Schema, options: JuvyOptions = {}): Juvy {
 				try { value = getByPath(instance, path.split(".")); } catch { errors.push(`'${path}' is missing from config`); continue; }
 
 				if (prop.nullable && value === null) { continue; }
+
+				// Required = still undefined after every source; checked before the format so it reads as "missing".
+				if (value === undefined) { errors.push(`'${path}' is required (no default, and not provided by env/load/parse)`); continue; }
 
 				try { prop._format(value); } catch (error) { errors.push(`'${path}': ${(error as Error).message} (got ${JSON.stringify(value)})`); }
 			}
@@ -362,9 +451,14 @@ export function juvy(schema: Schema, options: JuvyOptions = {}): Juvy {
 			const specs = api.getArgSpecs();
 			const flagSpecs = specs.filter((spec) => !spec.positional);
 			const positionalSpecs = specs.filter((spec) => spec.positional);
-			const parseOptions: Record<string, { "type": "string" | "boolean"; "short"?: string }> = {};
+			const parseOptions: Record<string, { "type": "string" | "boolean"; "short"?: string; "multiple"?: boolean }> = {};
 
-			for (const spec of flagSpecs) { parseOptions[spec.flag] = { "type": spec.type, ...(spec.short ? { "short": spec.short } : {}) }; }
+			for (const spec of flagSpecs) { parseOptions[spec.flag] = { "type": spec.type, ...(spec.short ? { "short": spec.short } : {}), ...(spec.multiple ? { "multiple": true } : {}) }; }
+
+			// `--help` is reserved unless the schema claims it; without this, strict parseArgs rejects it as unknown.
+			const ownsHelp = "help" in parseOptions;
+
+			if (!ownsHelp) { parseOptions["help"] = { "type": "boolean", "short": "h" }; }
 
 			// strict → reject unknown flags (parity with cmd-ts); trim parseArgs' verbose positional hint.
 			let values: Record<string, unknown>;
@@ -376,18 +470,31 @@ export function juvy(schema: Schema, options: JuvyOptions = {}): Juvy {
 				throw new Error((error as Error).message.replace(/\.\s+To [\s\S]*/u, "."), { "cause": error });
 			}
 
+			if (!ownsHelp && values["help"] === true) { throw new HelpRequested(renderUsage(specs, api.default)); }
+
 			const byFlag = new Map(flagSpecs.map((spec) => [spec.flag, spec.path]));
 
 			for (const [flag, value] of Object.entries(values)) {
 				const path = byFlag.get(flag);
 
-				if (path !== undefined && value !== undefined) { api.set(path, value as string | boolean); }
+				if (path === undefined || value === undefined) { continue; }
+
+				// A repeated Array flag arrives as string[]; each occurrence may itself be comma-separated.
+				api.set(path, Array.isArray(value) ? value.flatMap((item) => item.split(",")) : value as string | boolean);
 			}
 
-			// positionals map to `positional: true` props by declaration order
+			// positionals map to positional props by declaration order; a "rest" sink takes the remainder.
 			positionalSpecs.forEach((spec, index) => {
-				if (positionals[index] !== undefined) { api.set(spec.path, positionals[index]); }
+				if (spec.positional === "rest") {
+					if (positionals.length > index) { api.set(spec.path, positionals.slice(index)); }
+				} else if (positionals[index] !== undefined) {
+					api.set(spec.path, positionals[index]);
+				}
 			});
+
+			const consumed = positionalSpecs.some((spec) => spec.positional === "rest") ? positionals.length : positionalSpecs.length;
+
+			if (positionals.length > consumed) { throw new Error(`Unexpected positional argument${positionals.length - consumed > 1 ? "s" : ""}: ${positionals.slice(consumed).map((item) => `'${item}'`).join(", ")}`); }
 
 			return api;
 		},

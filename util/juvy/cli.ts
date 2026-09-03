@@ -57,9 +57,11 @@ function helpTopicsFor(config: Juvy | undefined): CommandHelpData["helpTopics"] 
 
 	for (const spec of config?.getArgSpecs() ?? []) {
 		const category = spec.positional ? "arguments" : spec.type === "boolean" ? "flags" : "options";
-		const usage = spec.positional
-			? `<${spec.flag}>`
-			: [`--${spec.flag}`, ...(spec.short !== undefined ? [`-${spec.short}`] : [])].join(", ") + (spec.type === "boolean" ? "" : " <value>");
+		const usage = spec.positional === "rest"
+			? `<${spec.flag}...>`
+			: spec.positional
+				? `<${spec.flag}>`
+				: [`--${spec.flag}`, ...(spec.short !== undefined ? [`-${spec.short}`] : [])].join(", ") + (spec.type === "boolean" ? "" : " <value>");
 		const fallback = config?.default(spec.path);
 
 		topics.push({ category, usage, "description": spec.doc ?? "", "defaults": fallback !== undefined && fallback !== "" ? [String(fallback)] : [] });

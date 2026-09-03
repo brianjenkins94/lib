@@ -23,3 +23,30 @@ export const isBrowser = !isBun && !isDeno && ("self" in globalThis && "addEvent
 export function getRuntime() {
 	return isBrowser ? "browser" : isBun ? "bun" : isDeno ? "deno" : isNode ? "node" : "unknown";
 }
+
+/**
+ * Is `meta` (pass `import.meta`) the module Node was started with? The run-guard for a file that is both
+ * importable and a CLI: `if (isEntry(import.meta)) { … }`. argv[1] is realpath'd so a bin symlink
+ * (`node_modules/.bin/util-serve`) matches its target; a non-file entry (`node -e`, a REPL) is never the
+ * entry. `node:fs` comes via `getBuiltinModule` rather than a static import so this module stays
+ * bundleable for the browser (fido pulls `isBrowser` from here).
+ */
+export function isEntry(meta: { "url": string }): boolean {
+	const entry = process.argv[1];
+
+	if (isBrowser || entry === undefined) {
+		return false;
+	}
+
+	const fs = process.getBuiltinModule("node:fs");
+
+	let real: string;
+
+	try {
+		real = fs.realpathSync(entry);
+	} catch {
+		return false;
+	}
+
+	return meta.url === url.pathToFileURL(real).href;
+}

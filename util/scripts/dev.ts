@@ -1,5 +1,4 @@
-import * as url from "node:url";
-import * as fs from "@brianjenkins94/util/fs";
+import { isEntry } from "@brianjenkins94/util/env";
 import { serve } from "@brianjenkins94/util/vite/dev";
 
 /**
@@ -8,6 +7,6 @@ import { serve } from "@brianjenkins94/util/vite/dev";
  * imports `serve` from `@brianjenkins94/util/vite/dev` and composes its own dev
  * script — see games/war2/scripts/dev.ts (PeerJS broker + debug server).
  */
-if (process.argv[1] !== undefined && import.meta.url === url.pathToFileURL(await fs.realpath(process.argv[1])).toString()) {
+if (isEntry(import.meta)) {
 	await serve(process.cwd());
 }

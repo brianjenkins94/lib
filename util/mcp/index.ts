@@ -16,6 +16,7 @@
 import type { McpTool } from "./tool";
 import * as path from "node:path";
 import * as url from "node:url";
+import { isEntry } from "@brianjenkins94/util/env";
 import { discover } from "@brianjenkins94/util/router/core";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
@@ -99,13 +100,13 @@ export async function serveMcp(meta: EntryMeta, options: ServeOptions): Promise<
 	// Boots only when this module is the process entry (tsx) or the bridge is re-entering it under SSR —
 	// NOT when merely imported (e.g. a CLI that pulls in the server's exports). On failure this rejects;
 	// the caller owns the exit policy.
-	const isEntry = Boolean(process.argv[1]) && meta.url === url.pathToFileURL(process.argv[1]).href;
+	const entry = isEntry(meta);
 	const useBridge = options.bridge ?? (process.env["NODE_ENV"] !== "production");
 
 	if (useBridge) {
-		// Merely imported → no-op, don't even load Vite. The SSR re-entry still has isEntry === true
+		// Merely imported → no-op, don't even load Vite. The SSR re-entry is still the entry
 		// (Vite gives the re-entered module the entry's own file URL), so this guard only stops imports.
-		if (!isEntry) {
+		if (!entry) {
 			return;
 		}
 
@@ -139,7 +140,7 @@ export async function serveMcp(meta: EntryMeta, options: ServeOptions): Promise<
 		return;
 	}
 
-	if (!isEntry) {
+	if (!entry) {
 		return; // merely imported
 	}
 

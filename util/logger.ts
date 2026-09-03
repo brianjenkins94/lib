@@ -235,50 +235,84 @@ export function write(...args: unknown[]): void {
 	console.log(...args);
 }
 
+/** The pieces every human rendering of a record is built from — decided ONCE here, so the plain line and
+ *  the ANSI tree can't drift: `head` is `→ name` / `← name` for a span and the message for a point log;
+ *  `timing` exists only on span-close; `level` only on warn/error/fatal point logs; `attrs` is compact JSON
+ *  or "". */
+interface RecordParts {
+	"indent": string;
+	"head": string;
+	"timing"?: string;
+	"level"?: string;
+	"attrs": string;
+}
+
+function renderParts(record: LogRecord): RecordParts {
+	const parts: RecordParts = { "indent": "  ".repeat(record.depth), "head": record.message, "attrs": Object.keys(record.attrs).length ? JSON.stringify(record.attrs) : "" };
+
+	if (record.kind === "span-open") {
+		parts.head = `→ ${record.span}`;
+	} else if (record.kind === "span-close") {
+		parts.head = `← ${record.span}`;
+		parts.timing = record.durationMs === undefined ? "incomplete" : `${record.durationMs.toFixed(1)}ms`;
+	} else if (record.level === "warn" || record.level === "error" || record.level === "fatal") {
+		parts.level = record.level.toUpperCase();
+	}
+
+	return parts;
+}
+
+/**
+ * A record as ONE plain line (no color, no level label — the caller carries `record.level`): span open/close
+ * as `→ name` / `← name (Xms)`, point logs depth-indented, attrs appended as compact JSON. The ANSI tree
+ * sink is the same parts plus color; exported so a consumer relaying records over its own `{ level, msg }`
+ * wire (war2's debug overlay) renders them the same way instead of re-deriving the format.
+ */
+export function renderRecord(record: LogRecord): string {
+	const { indent, head, timing, attrs } = renderParts(record);
+
+	return `${indent}${head}${timing === undefined ? "" : ` (${timing})`}${attrs === "" ? "" : ` ${attrs}`}`;
+}
+
 // ── Sinks ─────────────────────────────────────────────────────────────────────────────────────--
 
 const COLOR = { "cyan": "[36m", "yellow": "[33m", "red": "[31m", "dim": "[2m", "reset": "[0m" };
 
-/** Node human tree: depth → ANSI indentation. Span open/close render as `→ name` / `← name (Xms)`. */
+/** Node human tree: `renderParts` with color — cyan spans (red when a close has no timing), dim timing/attrs,
+ *  yellow/red level labels. */
 function ansiTreeSink(record: LogRecord): void {
-	const indent = "  ".repeat(record.depth);
-	const extra = Object.keys(record.attrs).length ? ` ${COLOR.dim}${JSON.stringify(record.attrs)}${COLOR.reset}` : "";
+	const { indent, head, timing, level, attrs } = renderParts(record);
+	const extra = attrs === "" ? "" : ` ${COLOR.dim}${attrs}${COLOR.reset}`;
 
-	if (record.kind === "span-open") {
-		process.stderr.write(`${indent}${COLOR.cyan}→ ${record.span}${COLOR.reset}${extra}\n`);
+	if (record.kind === "span-open" || record.kind === "span-close") {
+		const color = timing === "incomplete" ? COLOR.red : COLOR.cyan;
+		const time = timing === undefined ? "" : ` ${COLOR.dim}(${timing})${COLOR.reset}`;
 
-		return;
-	}
-
-	if (record.kind === "span-close") {
-		const incomplete = record.durationMs === undefined;
-		const color = incomplete ? COLOR.red : COLOR.cyan;
-		const timing = incomplete ? "incomplete" : `${record.durationMs.toFixed(1)}ms`;
-
-		process.stderr.write(`${indent}${color}← ${record.span}${COLOR.reset} ${COLOR.dim}(${timing})${COLOR.reset}${extra}\n`);
+		process.stderr.write(`${indent}${color}${head}${COLOR.reset}${time}${extra}\n`);
 
 		return;
 	}
 
-	const level = record.level === "warn" ? `${COLOR.yellow}WARN${COLOR.reset} ` : (record.level === "error" || record.level === "fatal") ? `${COLOR.red}${record.level.toUpperCase()}${COLOR.reset} ` : "";
+	const label = level === undefined ? "" : `${level === "WARN" ? COLOR.yellow : COLOR.red}${level}${COLOR.reset} `;
 
-	process.stderr.write(`${indent}${level}${record.message}${extra}\n`);
+	process.stderr.write(`${indent}${label}${head}${extra}\n`);
 }
 
 /** Browser human tree: `console.group`/`groupEnd` gives real collapsible nesting in devtools. */
 function consoleGroupSink(record: LogRecord): void {
+	// Same text as the other renderers; attrs stay an object so devtools can expand them, and depth comes
+	// from console.group nesting rather than the indent.
+	const { head, timing } = renderParts(record);
 	const args = Object.keys(record.attrs).length ? [record.attrs] : [];
 
 	if (record.kind === "span-open") {
-		console.group(`→ ${record.span}`);
+		console.group(head);
 
 		return;
 	}
 
 	if (record.kind === "span-close") {
-		const timing = record.durationMs === undefined ? "incomplete" : `${record.durationMs.toFixed(1)}ms`;
-
-		console.log(`← ${record.span} (${timing})`, ...args);
+		console.log(`${head} (${timing})`, ...args);
 		console.groupEnd();
 
 		return;
@@ -286,7 +320,7 @@ function consoleGroupSink(record: LogRecord): void {
 
 	const emit = record.level === "error" || record.level === "fatal" ? console.error : record.level === "warn" ? console.warn : console.log;
 
-	emit(record.message, ...args);
+	emit(head, ...args);
 }
 
 /** Roarr-compatible `{ time, sequence, version, message, context }`; span/domain data under `context`. */

@@ -1,4 +1,4 @@
-import * as url from "node:url";
+import { isEntry } from "@brianjenkins94/util/env";
 import { mapAsync, partition } from "@brianjenkins94/util/array";
 import { exec } from "@brianjenkins94/util/exec";
 import * as fs from "@brianjenkins94/util/fs";
@@ -26,6 +26,6 @@ export async function build(workspaces?: string[]) {
 	return Object.fromEntries([...packageResults, ...restResults]);
 }
 
-if (process.argv[1] !== undefined && import.meta.url === url.pathToFileURL(await fs.realpath(process.argv[1])).toString()) {
+if (isEntry(import.meta)) {
 	await build();
 }

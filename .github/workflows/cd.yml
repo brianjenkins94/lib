@@ -73,7 +73,7 @@
           "env": {
             "GH_TOKEN": "${{ secrets.GITHUB_TOKEN }}"
           },
-          "run": "echo \"TAG_NAME=$(npx tsx .github/workflows/scripts/tag.ts \"${{ matrix.package }}\")\" >> \"$GITHUB_OUTPUT\""
+          "run": "TAG_NAME=$(npx tsx .github/workflows/scripts/tag.ts \"${{ matrix.package }}\") && echo \"TAG_NAME=$TAG_NAME\" >> \"$GITHUB_OUTPUT\""
         },
         {
           "uses": "softprops/action-gh-release@v2",

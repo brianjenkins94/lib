@@ -1,7 +1,7 @@
 import type { InlineConfig } from "vite";
 import * as path from "node:path";
 import { log } from "@brianjenkins94/util/logger";
-import * as url from "node:url";
+import { isEntry } from "@brianjenkins94/util/env";
 import * as fs from "@brianjenkins94/util/fs";
 import { build, mergeConfig } from "vite";
 import { defaults } from "./defaults";
@@ -83,6 +83,6 @@ export async function buildApp(appRoot: string, repoRoot: string, options: Build
 
 // Run directly → build the package this was invoked from. repoRoot is two
 // levels up from this file (util/vite/).
-if (import.meta.url === url.pathToFileURL(process.argv[1]).href) {
+if (isEntry(import.meta)) {
 	await buildApp(process.cwd(), path.resolve(import.meta.dirname, "../.."));
 }

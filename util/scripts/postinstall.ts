@@ -1,4 +1,4 @@
-import * as url from "node:url";
+import { isEntry } from "@brianjenkins94/util/env";
 import { mapAsync } from "@brianjenkins94/util/array";
 import { exec } from "@brianjenkins94/util/exec";
 import * as fs from "@brianjenkins94/util/fs";
@@ -30,6 +30,6 @@ export async function postinstall(workspaces?: string[]) {
 	});
 }
 
-if (process.argv[1] !== undefined && import.meta.url === url.pathToFileURL(await fs.realpath(process.argv[1])).toString()) {
+if (isEntry(import.meta)) {
 	await postinstall();
 }

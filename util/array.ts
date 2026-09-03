@@ -10,12 +10,35 @@ export function partition(array: (() => Promise<any>)[], callback) {
 	}, [[], []]);
 }
 
-export async function mapAsync(array, callback = (promise) => promise(), filter?) {
-	if (filter !== undefined) {
-		return (await Promise.all(array.map(callback))).filter(filter);
+/**
+ * `Promise.all(array.map(callback))`, with two extras: a `filter` over the settled results, and a
+ * `concurrency` cap — at most that many callbacks in flight, fed from a shared cursor in array order (the
+ * bounded worker-pool shape every "fetch N pages / days at a time" script otherwise hand-rolls). The third
+ * argument is the filter function (legacy) or an options object.
+ */
+export async function mapAsync(array, callback: (value, index?, array?) => any = (promise) => promise(), options?: ((value) => boolean) | { "filter"?: (value) => boolean; "concurrency"?: number }) {
+	const { filter, concurrency } = typeof options === "function" ? { "filter": options, "concurrency": undefined } : options ?? {};
+
+	let results;
+
+	if (concurrency === undefined || concurrency >= array.length) {
+		results = await Promise.all(array.map(callback));
 	} else {
-		return Promise.all(array.map(callback));
+		results = new Array(array.length);
+
+		let next = 0;
+
+		await Promise.all(Array.from({ "length": concurrency }, async function() {
+			while (next < array.length) {
+				const index = next;
+
+				next += 1;
+				results[index] = await callback(array[index], index, array);
+			}
+		}));
 	}
+
+	return filter === undefined ? results : results.filter(filter);
 }
 
 export async function filterAsync(array: (() => Promise<any>)[], callback) {

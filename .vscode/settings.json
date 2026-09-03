@@ -1,29 +1,45 @@
 {
-  "[javascript][javascriptreact][typescript][typescriptreact]": {
-    "editor.codeActionsOnSave": {
-      "source.fixAll.eslint": "explicit"
-    },
-    "editor.defaultFormatter": "dbaeumer.vscode-eslint",
-    "editor.formatOnSave": true
-  },
-  "eslint.validate": [
-    "javascript",
-    "javascriptreact",
-    "typescript",
-    "typescriptreact",
-    "yaml",
-    "json",
-    "jsonc",
-    "markdown"
-  ],
-  "editor.formatOnSave": false,
-  "files.insertFinalNewline": true,
-  "files.trimTrailingWhitespace": true,
-  "javascript.format.insertSpaceAfterFunctionKeywordForAnonymousFunctions": false,
-  "javascript.format.insertSpaceBeforeFunctionParenthesis": false,
-  "search.exclude": {
-    "**/package-lock.json": true
-  },
-  "typescript.format.insertSpaceAfterFunctionKeywordForAnonymousFunctions": false,
-  "typescript.format.insertSpaceBeforeFunctionParenthesis": false
+	"[javascript][javascriptreact][typescript][typescriptreact]": {
+		"editor.codeActionsOnSave": {
+			"source.fixAll.eslint": "explicit"
+		},
+		"editor.defaultFormatter": "dbaeumer.vscode-eslint",
+		"editor.formatOnSave": true
+	},
+	"editor.formatOnSave": false,
+	// The preset also lints these (antfu's yaml/jsonc/markdown configs); the extension only does so when told.
+	"eslint.validate": [
+		"javascript",
+		"javascriptreact",
+		"typescript",
+		"typescriptreact",
+		"yaml",
+		"json",
+		"jsonc",
+		"markdown"
+	],
+	// FROM: https://github.com/antfu/eslint-config#ide-support-auto-fix-on-save — style rules stay fixable
+	// on save but don't paint the editor red; the preset's `hushFixable` design assumes exactly this.
+	"eslint.rules.customizations": [
+		{ "rule": "style/*", "severity": "off", "fixable": true },
+		{ "rule": "format/*", "severity": "off", "fixable": true },
+		{ "rule": "*-indent", "severity": "off", "fixable": true },
+		{ "rule": "*-spacing", "severity": "off", "fixable": true },
+		{ "rule": "*-spaces", "severity": "off", "fixable": true },
+		{ "rule": "*-order", "severity": "off", "fixable": true },
+		{ "rule": "*-dangle", "severity": "off", "fixable": true },
+		{ "rule": "*-newline", "severity": "off", "fixable": true },
+		{ "rule": "*quotes", "severity": "off", "fixable": true },
+		{ "rule": "*semi", "severity": "off", "fixable": true }
+	],
+	"eslint.workingDirectories": [{ "mode": "location" }],
+	"files.insertFinalNewline": true,
+	"files.trimTrailingWhitespace": true,
+	"javascript.format.insertSpaceAfterFunctionKeywordForAnonymousFunctions": false,
+	"javascript.format.insertSpaceBeforeFunctionParenthesis": false,
+	"search.exclude": {
+		"**/package-lock.json": true
+	},
+	"typescript.format.insertSpaceAfterFunctionKeywordForAnonymousFunctions": false,
+	"typescript.format.insertSpaceBeforeFunctionParenthesis": false
 }

@@ -5,6 +5,9 @@
  * (The complement to [[../schema]], which INFERS a schema from a value; this INTERROGATES one.)
  */
 
+/** The operation verbs an OpenAPI path item can carry (lowercase, as the spec keys them) — for walking `paths`. */
+export const HTTP_METHODS = ["get", "put", "post", "delete", "options", "head", "patch", "trace"] as const;
+
 /** The set of JSON-Schema types a schema allows, resolving anyOf/oneOf/allOf and `nullable`. */
 function collectTypes(schema: any): Set<string> {
 	if (!schema) {

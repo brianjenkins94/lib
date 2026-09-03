@@ -10,7 +10,12 @@ export class PersistentStore {
 		"filename": `.cache/keyv-file.json`,
 		"serialize": (value) => JSON.stringify(value, undefined, 2),
 		"writeDelay": 100, // ms
-		"checkFileLock": false
+		"checkFileLock": false,
+		// Cross-process handoff (a listener marks ids that a projector in another process must see on
+		// its very next read, and a mark must be on disk before the marking call returns) needs
+		// writes that land synchronously and reads that come from disk, not memory. The debounced
+		// default gives neither, and existing consumers (caches, session stores) rely on it.
+		"sync": false
 	};
 
 	private _cache: object;
@@ -22,6 +27,10 @@ export class PersistentStore {
 			this.acquireFileLock();
 		}
 
+		this.load();
+	}
+
+	private load() {
 		try {
 			const data = this.options.deserialize(
 				fs.readFileSync(this.options.filename, "utf8")
@@ -30,8 +39,23 @@ export class PersistentStore {
 			this._cache = data.cache;
 			this._lastExpire = data.lastExpire;
 		} catch (error) {
+			// In sync mode only a missing file may read as empty: a torn read of another process's
+			// in-flight write would otherwise become `{}` and the next set() would write that back,
+			// clobbering every other key.
+			if (this.options.sync && error.code !== "ENOENT") {
+				throw error;
+			}
+
 			this._cache = {};
 			this._lastExpire = Date.now();
+		}
+	}
+
+	// Re-read on every access rather than on mtime change: another process's write can land within
+	// the same timestamp tick, and the files this mode is for are small.
+	private refresh() {
+		if (this.options.sync && !isBrowser) {
+			this.load();
 		}
 	}
 
@@ -65,6 +89,8 @@ export class PersistentStore {
 	}
 
 	public has(key: string) {
+		this.refresh();
+
 		const data = this._cache[key];
 
 		if (!data) {
@@ -82,6 +108,8 @@ export class PersistentStore {
 	}
 
 	public get(key: string) {
+		this.refresh();
+
 		try {
 			const data = this._cache[key];
 
@@ -94,6 +122,8 @@ export class PersistentStore {
 	}
 
 	public set(key: string, value: any, ttl?: number) {
+		this.refresh();
+
 		if (ttl === 0) {
 			ttl = undefined;
 		}
@@ -107,24 +137,35 @@ export class PersistentStore {
 	}
 
 	public delete(key: string) {
+		this.refresh();
+
 		delete this._cache[key];
 
 		return this.save();
 	}
 
+	public clear() {
+		this._cache = {};
+
+		return this.save();
+	}
+
 	public *keys() {
+		this.refresh();
 		this.clearExpire();
 
 		for (const [key] of Object.entries(this._cache)) { yield key; }
 	}
 
 	public *values() {
+		this.refresh();
 		this.clearExpire();
 
 		for (const [, entry] of Object.entries(this._cache)) { yield entry.value; }
 	}
 
 	public *entries() {
+		this.refresh();
 		this.clearExpire();
 
 		for (const [key, entry] of Object.entries(this._cache)) {
@@ -162,40 +203,41 @@ export class PersistentStore {
 			"lastExpire": this._lastExpire
 		});
 
-		return new Promise<void>((resolve, reject) => {
-			const dirname = path.dirname(this.options.filename);
+		const dirname = path.dirname(this.options.filename);
 
-			if (!(fs.existsSync(dirname))) {
-				fs.mkdirSync(dirname, { "recursive": true });
-			}
+		if (!(fs.existsSync(dirname))) {
+			fs.mkdirSync(dirname, { "recursive": true });
+		}
 
-			try {
-				fs.writeFileSync(this.options.filename, data);
-			} catch (error) {
-				reject(error);
-
-				return;
-			}
-
-			resolve();
-		});
+		fs.writeFileSync(this.options.filename, data);
 	}
 
 	private _savePromise?: Promise<any> | undefined;
 
 	private save() {
 		this.clearExpire();
+
+		// Sync mode: on disk (or thrown) before the caller regains control.
+		if (this.options.sync && !isBrowser) {
+			this.saveToDisk();
+
+			return Promise.resolve();
+		}
+
 		if (this._savePromise) {
 			return this._savePromise;
 		}
 
 		this._savePromise = isBrowser ? Promise.resolve() : new Promise<void>((resolve, reject) => {
 			setTimeout(() => {
-				this.saveToDisk()
-					.then(resolve, reject)
-					.finally(() => {
-						this._savePromise = undefined;
-					});
+				try {
+					this.saveToDisk();
+					resolve();
+				} catch (error) {
+					reject(error);
+				} finally {
+					this._savePromise = undefined;
+				}
 			}, this.options.writeDelay);
 		});
 

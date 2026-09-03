@@ -258,7 +258,7 @@ export function getHref(page) {
 /*
 import * as url from "url";
 
-if (import.meta.url === url.pathToFileURL(process.argv[1]).toString()) {
+if (isEntry(import.meta)) {
 	await fetch();
 }
 */

@@ -1,4 +1,5 @@
 import * as path from "node:path";
+import { isEntry } from "@brianjenkins94/util/env";
 import { print } from "./logger";
 import * as fs from "@brianjenkins94/util/fs";
 
@@ -60,7 +61,7 @@ export async function tree(cwd = process.cwd(), preface = []) {
 }
 
 /*
-if (import.meta.url === url.pathToFileURL(process.argv[1]).toString()) {
+if (isEntry(import.meta)) {
 	tree();
 }
 */

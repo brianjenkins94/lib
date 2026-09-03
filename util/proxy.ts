@@ -38,17 +38,25 @@ export async function proxy(request, response, options = { "fetch": fetch, "to":
 		"duplex": "half"
 	}));
 
-	response.status(proxyResponse.status);
+	pipeResponse(response, proxyResponse);
+}
 
-	for (const [header, value] of [...proxyResponse.headers].filter(([header]) => !UNSAFE_HEADERS.includes(header))) {
+/**
+ * Copy an upstream fetch `Response` onto an Express-style response: status, every header not in
+ * `UNSAFE_HEADERS`, then stream the body. The tail of `proxy()`, exported so a route that obtains its
+ * upstream Response some other way (a fido client, say) finishes exactly the way the proxy does.
+ */
+export function pipeResponse(response, upstream: Response): void {
+	response.status(upstream.status);
+
+	for (const [header, value] of [...upstream.headers].filter(([header]) => !UNSAFE_HEADERS.includes(header))) {
 		response.setHeader(header, value);
 	}
 
-	if (proxyResponse.body !== undefined) {
-		const readable = Readable.fromWeb(proxyResponse.body);
-
-		readable.pipe(response);
-	} else {
+	// A bodiless upstream (204/304, HEAD) has `body === null`, not undefined.
+	if (upstream.body === null) {
 		response.end();
+	} else {
+		Readable.fromWeb(upstream.body).pipe(response);
 	}
 }

@@ -30,6 +30,8 @@ export interface ExecOptions {
 	"shell"?: boolean;
 	/** How to wire stdio. `pipe` (default) collects stdout/stderr; `inherit` streams to the parent; `ignore` drops. */
 	"stdio"?: "pipe" | "inherit" | "ignore";
+	/** SIGKILL the process if it is still running after this many ms; the result then has `timedOut: true`. */
+	"timeoutMs"?: number;
 }
 
 export interface ExecResult {
@@ -41,6 +43,8 @@ export interface ExecResult {
 	/** Trimmed stderr (empty when stdio isn't `pipe`). */
 	"stderr": string;
 	"ok": boolean;
+	/** True when `timeoutMs` elapsed and the process was killed (exitCode is then the non-zero fallback). */
+	"timedOut": boolean;
 }
 
 /** The one shell decision (see the module note): honor an explicit `opts.shell`, else shell iff it's an
@@ -70,8 +74,11 @@ export function exec(command: string, args: string[] = [], opts: ExecOptions = {
 
 	if (opts.input !== undefined) { child.stdin?.end(opts.input); }
 
+	let timedOut = false;
+	const timer = opts.timeoutMs === undefined ? undefined : setTimeout(() => { timedOut = true; child.kill("SIGKILL"); }, opts.timeoutMs);
+
 	return new Promise((resolve, reject) => {
-		child.once("error", reject);   // ENOENT/EACCES etc. — reject instead of hanging
+		child.once("error", (error) => { clearTimeout(timer); reject(error); });   // ENOENT/EACCES etc. — reject instead of hanging
 
 		// `text` (node:stream/consumers) consumes each stream to a string — no manual on("data") accumulation.
 		// A pipe-less stdio (inherit/ignore) has no stream, so those resolve to "".
@@ -80,7 +87,8 @@ export function exec(command: string, args: string[] = [], opts: ExecOptions = {
 			child.stderr ? text(child.stderr) : Promise.resolve(""),
 			once(child, "close")
 		]).then(([stdout, stderr, [code]]) => {
-			resolve({ "command": command, "exitCode": (code as number | null) ?? 1, "stdout": stdout.trim(), "stderr": stderr.trim(), "ok": code === 0 });
+			clearTimeout(timer);
+			resolve({ "command": command, "exitCode": (code as number | null) ?? 1, "stdout": stdout.trim(), "stderr": stderr.trim(), "ok": code === 0, "timedOut": timedOut });
 		}, reject);
 	});
 }

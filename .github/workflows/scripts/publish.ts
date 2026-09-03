@@ -34,8 +34,8 @@ for (const pkg of packages) {
 	console.log(`📦 Releasing ${tag}`);
 
 	try {
-		gh(["release", "view", tag]);
-		gh(["release", "edit", tag, "--draft=false"]);
+		await gh(["release", "view", tag]);
+		await gh(["release", "edit", tag, "--draft=false"]);
 		console.log(`✅ Release ${tag} marked as published`);
 		successes += 1;
 	} catch {

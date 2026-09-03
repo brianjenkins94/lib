@@ -31,7 +31,7 @@ if (existsSync(`docs/${pkg}@latest.tgz`)) {
 let version = (JSON.parse(readFileSync(`${pkg}/package.json`, "utf8")).version as string | undefined) || archiveVersion;
 
 // If the highest existing release tag for this package is higher, jump to it.
-const highest = (JSON.parse(gh(["release", "list", "--limit", "100", "--json", "tagName"])) as Array<{ "tagName": string }>)
+const highest = (JSON.parse(await gh(["release", "list", "--limit", "100", "--json", "tagName"])) as Array<{ "tagName": string }>)
 	.filter((release) => release.tagName.startsWith(`${pkg}@`))
 	.map((release) => parse(release.tagName.slice(`${pkg}@`.length)))
 	.filter((parsed): parsed is [number, number, number] => parsed !== null)
@@ -51,7 +51,7 @@ if (version === archiveVersion) {
 let isDraft = "";
 
 try {
-	isDraft = gh(["release", "view", `${pkg}@${version}`, "--json", "isDraft", "--jq", ".isDraft"]).trim();
+	isDraft = (await gh(["release", "view", `${pkg}@${version}`, "--json", "isDraft", "--jq", ".isDraft"])).trim();
 } catch { /* no such release */ }
 
 if (isDraft === "false") {
