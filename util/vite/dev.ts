@@ -26,7 +26,7 @@ export async function jsxToHtml(node) {
 }
 
 import { defaults } from "./defaults";
-import { ensureOptionalStubs, polyfillNodeEsbuild, polyfillNodeRolldown } from "./plugins/polyfillNode";
+import { polyfillNodeEsbuild, polyfillNodeRolldown } from "./plugins/polyfillNode";
 
 /** Close tags jsx-async-runtime emits for HTML void elements — invalid HTML5, so strip them. */
 const VOID_CLOSE_TAGS = /<\/(?:meta|link|br|hr|img|input|area|base|col|embed|source|track|wbr)>/gu;
@@ -43,14 +43,7 @@ export async function getViteDevServer(root: string, plugins: Plugin[] = []): Pr
 	// dev server matches the build configs instead of re-specifying its own base. `plugins` (empty by
 	// default) lets a consumer inject transforms on the FIRST call that creates the singleton — e.g. util/mcp
 	// injects the capability-gating builtin-rewrite for tool modules. A no-op in production (no dev server).
-	if (viteDevServer !== undefined) { return viteDevServer; }
-
-	// Before the optimizer runs, materialize on-disk stubs for any `@external` optional dep this lib
-	// imports that the app hasn't installed — the dev optimizer can only resolve such an import from a real
-	// `node_modules/<name>` (see ensureOptionalStubs). Best-effort; a failure here never blocks the server.
-	await ensureOptionalStubs(path.dirname(path.dirname(url.fileURLToPath(import.meta.url))), root).catch(() => {});
-
-	viteDevServer = await createViteServer(mergeConfig(defaults, {
+	viteDevServer ??= await createViteServer(mergeConfig(defaults, {
 		"root": root,
 		"appType": "custom",
 		"plugins": plugins,

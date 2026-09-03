@@ -317,7 +317,7 @@ for (const workspace of workspaces) {
 	} : {
 		...publishable,
 		"name": `@${owner}/${packageJson["name"]}`,
-		"exports": Object.fromEntries(Object.keys(files).filter((key) => key !== "package.json" && !key.endsWith(".d.ts")).map((key) => {
+		"exports": Object.fromEntries(Object.keys(files).filter((key) => key !== "package.json" && !key.endsWith(".d.ts")).flatMap((key) => {
 			// Pair each entry with its emitted declaration (if any) so TypeScript consumers get types;
 			// hand-written .mjs/.cjs have no sibling .d.ts and stay a bare target string.
 			const dtsKey = key.replace(/\.[^.]+$/u, ".d.ts");
@@ -327,11 +327,14 @@ for (const workspace of workspaces) {
 
 			// An `index` module is addressed by its directory (root index becomes the `.` main entry);
 			// everything else by its own path-without-extension.
-			if (baseName === "index") {
-				return [directory === "." ? "." : "./" + directory, target];
-			}
+			const entry: [string, unknown] = baseName === "index"
+				? [directory === "." ? "." : "./" + directory, target]
+				: ["./" + path.join(directory, baseName).replace(/\\/gu, "/"), target];
 
-			return ["./" + path.join(directory, baseName).replace(/\\/gu, "/"), target];
+			// A hand-written .mjs/.cjs is imported WITH its extension from the package's own transpiled
+			// sources (TypeScript can't resolve `./decide` to `decide.mjs`), so export that literal key too —
+			// without it the package can't load itself (`mcp/tool.js` → `silo/enforce/decide.mjs`).
+			return /\.(?:mjs|cjs)$/u.test(key) ? [entry, ["./" + key, "./" + key]] : [entry];
 		})),
 		"files": Object.keys(files).filter((key) => key !== "package.json"),
 		// bin: preserve a package's own `bin` (e.g. silo's root `cli.js` → `silo`), else derive

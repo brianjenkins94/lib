@@ -2,9 +2,8 @@ import type { PluginOption } from "vite";
 import type { Plugin as EsbuildPlugin } from "esbuild";
 import type { Plugin as RolldownPlugin } from "rolldown";
 import { builtinModules, createRequire } from "node:module";
-import * as fs from "node:fs/promises";
-import * as path from "node:path";
 import * as url from "node:url";
+import * as fs from "@brianjenkins94/util/fs";
 import stdlib from "node-stdlib-browser";
 import { nodePolyfills } from "vite-plugin-node-polyfills";
 
@@ -74,79 +73,37 @@ export function externalOptionalDeps(): PluginOption {
 	} as PluginOption;
 }
 
-/** Marks a package.json as a stub this tooling generated, so {@link ensureOptionalStubs} only ever
- *  overwrites/keeps its own and a later real `npm install <dep>` (which replaces the folder) wins. */
-const STUB_MARKER = "@brianjenkins94/util:optional-external-stub";
+// Importer-file cache for `isOptionalImport`: the optimizer asks about the same few lib modules repeatedly.
+const importerSource = new Map<string, Promise<string>>();
 
 /**
- * Dev-server companion to {@link externalOptionalDeps} for the ONE case that plugin can't reach: an
- * `@external` optional dep that the app hasn't installed, imported from a package Vite PRE-BUNDLES.
- *
- * Vite's dep optimizer resolves the imports inside a `.vite/deps/*` chunk through an internal, on-disk-only
- * path — it consults no plugin `resolveId`, no `resolve.alias`, and neither `optimizeDeps.include` nor
- * `exclude` (all verified). And in dev a resolveId `external: true` is ignored unless the id is an external
- * URL (import-analysis gates on `isExternalUrl`, not rollup's build-time flag). So the browser-side
- * equivalent of the annotation's "harmless unreached runtime import" HAS to be a real on-disk module: a
- * bare specifier only resolves out of a `node_modules/<name>`.
- *
- * This scans `packageDir` (the lib that ships the `@external` imports) for those specifiers and, for each
- * bare one that doesn't resolve from `root`, writes an inert `node_modules/<name>` stub (default export `{}`
- * — the consumer reads it inside a try/catch and degrades). It is idempotent, only ever creates/overwrites
- * folders it marked itself, and never touches a real install (a folder it didn't mark is left alone; a real
- * `npm install <dep>` replaces the folder and takes over). Dev-only: production builds go through
- * {@link externalOptionalDeps}, which rollup honors.
+ * Does `importer` import `id` through an `@external`-annotated dynamic import? The dev optimizer bypasses the
+ * Vite plugin pipeline (so {@link externalOptionalDeps} never sees these), but it does run its OWN plugins
+ * (`polyfillNodeRolldown` / `polyfillNodeEsbuild`), which get the importer path — so the annotation can be
+ * honored there, in memory, the same way un-polyfillable builtins are stubbed. Read on demand, only for a
+ * bare specifier that failed to resolve, so the common path costs nothing.
  */
-export async function ensureOptionalStubs(packageDir: string, root: string): Promise<void> {
-	const specifiers = new Set<string>();
-
-	// Walk the lib's shipped source for `@external`-annotated specifiers (skip its own node_modules).
-	async function collect(dir: string): Promise<void> {
-		const entries = await fs.readdir(dir, { "withFileTypes": true }).catch(() => []);
-
-		await Promise.all(entries.map(async function(entry) {
-			const full = path.join(dir, entry.name);
-
-			if (entry.isDirectory()) {
-				if (entry.name !== "node_modules") { await collect(full); }
-			} else if (entry.name.endsWith(".js")) {
-				const code = await fs.readFile(full, "utf8").catch(() => "");
-
-				for (const [, comments, id] of code.matchAll(OPTIONAL_IMPORT)) {
-					// Only a bare specifier resolves out of node_modules and so can be stubbed there.
-					if (/@external/u.test(comments) && id[0] !== "." && id[0] !== "/") { specifiers.add(id); }
-				}
-			}
-		}));
+async function isOptionalImport(importer: string | undefined, id: string): Promise<boolean> {
+	if (importer === undefined || importer.startsWith("\0") || id[0] === "." || id[0] === "/" || id[0] === "\0") {
+		return false;
 	}
 
-	await collect(packageDir);
+	if (!importerSource.has(importer)) {
+		importerSource.set(importer, fs.readFile(importer).catch(() => ""));
+	}
 
-	if (specifiers.size === 0) { return; }
+	for (const [, comments, specifier] of (await importerSource.get(importer)).matchAll(OPTIONAL_IMPORT)) {
+		if (specifier === id && /@external/u.test(comments)) {
+			return true;
+		}
+	}
 
-	const require = createRequire(path.join(root, "index.js"));
-
-	await Promise.all([...specifiers].map(async function(specifier) {
-		// Installed (or already stubbed) → resolvable → nothing to do.
-		try { require.resolve(specifier); return; } catch {}
-
-		const stubDir = path.join(root, "node_modules", specifier);
-		const manifest = path.join(stubDir, "package.json");
-
-		// Never clobber a folder we didn't create — only a prior stub of ours (or nothing) is ours to write.
-		const existing = await fs.readFile(manifest, "utf8").catch(() => null);
-		if (existing !== null && !existing.includes(STUB_MARKER)) { return; }
-
-		await fs.mkdir(stubDir, { "recursive": true });
-		await fs.writeFile(manifest, JSON.stringify({
-			"name": specifier,
-			"version": "0.0.0-stub",
-			"type": "module",
-			"exports": "./index.js",
-			"//": STUB_MARKER
-		}, undefined, "\t") + "\n");
-		await fs.writeFile(path.join(stubDir, "index.js"), "export default {};\n");
-	}));
+	return false;
 }
+
+// The inert module an absent optional dep resolves to in the optimizer: the consumer reads it inside a
+// try/catch (or a Node-only branch) and degrades, exactly like the unreached runtime import in a build.
+const OPTIONAL_STUB_SOURCE = "export default {};\n";
 
 export function polyfillNode(builtins = builtinModules): PluginOption {
 	const polyfill = builtins.filter(isFunctional);
@@ -249,6 +206,24 @@ export function polyfillNodeEsbuild(builtins = builtinModules): EsbuildPlugin {
 				return undefined;
 			});
 
+			// `@external` optional deps the app hasn't installed → the inert stub. `pluginData` breaks the
+			// recursion: our own `build.resolve` probe re-enters this hook.
+			const OPTIONAL_NS = "optional-dep-stub";
+
+			build.onResolve({ "filter": /^[^./\\0]/ }, async function(args) {
+				if (args.pluginData?.optionalProbe === true || !(await isOptionalImport(args.importer, args.path))) {
+					return undefined;
+				}
+
+				const probe = await build.resolve(args.path, { "importer": args.importer, "resolveDir": args.resolveDir, "kind": args.kind, "pluginData": { "optionalProbe": true } });
+
+				return probe.errors.length === 0 ? undefined : { "path": args.path, "namespace": OPTIONAL_NS };
+			});
+
+			build.onLoad({ "filter": /.*/, "namespace": OPTIONAL_NS }, function() {
+				return { "contents": OPTIONAL_STUB_SOURCE, "loader": "js" };
+			});
+
 			build.onLoad({ "filter": /.*/, "namespace": STUB_NS }, async function(args) {
 				// Import the REAL builtin (this runs in Node at build time) to mirror its named
 				// exports as no-ops, so downstream named imports link.
@@ -290,10 +265,17 @@ export function polyfillNodeRolldown(builtins = builtinModules): RolldownPlugin 
 	// harmless no-op in a module that already has one.
 	const PROCESS_SHIM = `var process = globalThis.process ?? { "env": {}, "argv": [], "platform": "browser", "version": "", "versions": {}, "cwd": () => "/", "nextTick": (fn) => queueMicrotask(fn) };\n`;
 
+	const OPTIONAL_STUB = "\0optional-dep-stub:";
+
 	return {
 		"name": "polyfill-node-rolldown",
-		"resolveId": async function(id) {
+		"resolveId": async function(id, importer) {
 			if (!filter.test(id)) {
+				// An `@external` optional dep the app hasn't installed → the inert stub (installed → normal resolution).
+				if (await isOptionalImport(importer, id) && await this.resolve(id, importer, { "skipSelf": true }) === null) {
+					return OPTIONAL_STUB + id;
+				}
+
 				return null;
 			}
 
@@ -310,6 +292,10 @@ export function polyfillNodeRolldown(builtins = builtinModules): RolldownPlugin 
 			return stdlib[name] !== undefined ? STUB + name : null;
 		},
 		"load": async function(id) {
+			if (id.startsWith(OPTIONAL_STUB)) {
+				return OPTIONAL_STUB_SOURCE;
+			}
+
 			if (!id.startsWith(STUB)) {
 				return null;
 			}

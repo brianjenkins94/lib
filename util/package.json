@@ -3,6 +3,12 @@
   "author": "Brian Jenkins",
   "license": "MIT",
   "type": "module",
+  "dependencies": {
+    "@antfu/eslint-config": "latest",
+    "@eslint/js": "latest",
+    "eslint": "latest",
+    "typescript-eslint": "latest"
+  },
   "peerDependencies": {
     "@badgateway/oauth2-client": "latest",
     "@clack/prompts": "latest",
