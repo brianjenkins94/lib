@@ -1,6 +1,6 @@
 {
   "name": "setup",
-  "description": "Shared Node + pnpm setup: setup-node, pnpm, pnpm-store cache, and a supply-chain-cooldown install. Dependency build-script strictness is applied EPHEMERALLY on the install (--config.strictDepBuilds), so the committed pnpm-workspace.yaml is never mutated. Run AFTER actions/checkout (install needs the working tree).",
+  "description": "Shared Node + pnpm setup: setup-node, pnpm, pnpm-store cache, and a supply-chain-cooldown install. When strict-dep-builds is 'false' (default) it runs `pnpm config set strictDepBuilds false` first — pnpm only honours strictDepBuilds from pnpm-workspace.yaml, not from a --config flag, so this writes it into the CI CHECKOUT's file (ephemeral, never committed back) to keep ignored dependency build scripts a warning rather than a hard ERR_PNPM_IGNORED_BUILDS. Run AFTER actions/checkout (install needs the working tree).",
   "inputs": {
     "node-version": {
       "description": "Node version for setup-node.",
@@ -13,7 +13,7 @@
       "default": "10080"
     },
     "strict-dep-builds": {
-      "description": "pnpm strictDepBuilds, passed ephemerally to `pnpm install`. Default 'false': don't fail the install over un-allowlisted dependency build scripts (the ones that matter — esbuild, isolated-vm — ship prebuilds). Set 'true' to gate them.",
+      "description": "pnpm strictDepBuilds. Default 'false': `pnpm config set` writes it into the CI checkout's pnpm-workspace.yaml so ignored dependency build scripts stay a warning (the ones that matter — esbuild, isolated-vm — ship prebuilds). Set 'true' to skip that and let pnpm hard-fail on ignored builds.",
       "required": false,
       "default": "false"
     },
@@ -43,8 +43,13 @@
         }
       },
       {
+        "if": "${{ inputs.strict-dep-builds == 'false' }}",
         "shell": "bash",
-        "run": "pnpm install ${{ inputs.install-flags }} --config.minimumReleaseAge=${{ inputs.release-age }} --config.strictDepBuilds=${{ inputs.strict-dep-builds }}"
+        "run": "pnpm config set --location=project strictDepBuilds false"
+      },
+      {
+        "shell": "bash",
+        "run": "pnpm install ${{ inputs.install-flags }} --config.minimumReleaseAge=${{ inputs.release-age }}"
       }
     ]
   }
