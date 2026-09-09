@@ -69,7 +69,7 @@ async function serve() {
 	const packageJsonFile = path.join(process.cwd(), "package.json");
 
 	if (fs.existsSync(packageJsonFile)) {
-		const parsedPackageJson = JSON.parse(await fs.readFile(packageJsonFile, { "encoding": "utf8" }));
+		const parsedPackageJson = JSON.parse(await fs.readFile(packageJsonFile));
 
 		if (parsedPackageJson?.["repository"]?.["url"] !== undefined) {
 			const matches = new URL(parsedPackageJson["repository"]["url"]).pathname.split("/");

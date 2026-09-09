@@ -4,6 +4,7 @@ import * as url from "node:url";
 import { isEntry } from "@brianjenkins94/util/env";
 import { log } from "@brianjenkins94/util/logger";
 import * as fs from "@brianjenkins94/util/fs";
+import { find } from "@brianjenkins94/util/find";
 import { build } from "vite";
 import { getViteDevServer, jsxToHtml } from "@brianjenkins94/util/vite/dev";
 
@@ -149,22 +150,19 @@ async function exists(file: string): Promise<boolean> {
  */
 export async function discoverPages(root: string, prefix = "app"): Promise<StaticPage[]> {
 	const routesDir = path.join(root, prefix, "routes");
-	const files = (await fs.readdir(routesDir, { "recursive": true })).filter((file) => /\.[jt]sx?$/u.test(String(file)));
-	const pages: StaticPage[] = [];
 
-	for (const rel of files) {
-		const view = String(await fs.readFile(path.join(routesDir, String(rel)))).match(/response\.render\(\s*["']([^"']+)["']/u)?.[1];
+	return (await find(routesDir).name("*.{js,jsx,ts,tsx}").exec(async (absolute) => {
+		const rel = path.relative(routesDir, absolute);
+		const view = String(await fs.readFile(absolute)).match(/response\.render\(\s*["']([^"']+)["']/u)?.[1];
 
-		if (view === undefined) { continue; } // api/proxy routes render nothing
+		if (view === undefined) { return undefined; } // api/proxy routes render nothing
 
-		const routePath = String(rel).replace(/\.[jt]sx?$/u, "").replace(/(^|\/)index$/u, "");
+		const routePath = rel.replace(/\.[jt]sx?$/u, "").replace(/(^|\/)index$/u, "");
 
-		if (CONVENTION_SKIP.has(routePath) || CONVENTION_SKIP.has(view)) { continue; }
+		if (CONVENTION_SKIP.has(routePath) || CONVENTION_SKIP.has(view)) { return undefined; }
 
-		pages.push({ "module": `/${prefix}/views/${view}.tsx`, "out": `${prefix}/` + (routePath ? routePath + "/" : "") + "index.html" });
-	}
-
-	return pages;
+		return { "module": `/${prefix}/views/${view}.tsx`, "out": `${prefix}/` + (routePath ? routePath + "/" : "") + "index.html" };
+	}, { "concurrency": 8 })).filter(Boolean);
 }
 
 /**

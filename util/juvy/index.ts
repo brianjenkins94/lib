@@ -27,6 +27,7 @@
  *   plain-text usage rendered from the schema — catch it to print-and-exit-0, or let it fall through as an
  *   error that at least shows usage. The CLI layer (`./cli`) intercepts `--help` first and renders via cmd-ts.
  * - Repeated Array flags (`--tags x --tags y`) keep every value (comma-split per occurrence).
+ * - An empty env var (`KEY=`) is treated as unset: the default applies, or `required` fires.
  */
 import { pascalCaseToKebabCase, pascalCaseToScreamingSnakeCase } from "@brianjenkins94/util/text"; // browser-safe (pure string ops)
 import { getRuntime } from "@brianjenkins94/util/env"; // shared runtime detection (env pulls node:path/url — polyfilled at bundle time)
@@ -108,7 +109,12 @@ export function pickEnvSource(): Record<string, unknown> {
 }
 
 function readEnv(source: EnvSource, name: string): unknown {
-	return typeof source === "function" ? source(name) : source[name];
+	const value = typeof source === "function" ? source(name) : source[name];
+
+	// An EMPTY env var is "not provided" — that's what a `KEY=` line in a .env(.example) means, and it's what
+	// the `if (!secret)` guards this replaces were checking. So it falls through to the default, or to
+	// `required`, instead of counting as a value.
+	return value === "" ? undefined : value;
 }
 
 // ---------------------------------------------------------------------------------------------------------

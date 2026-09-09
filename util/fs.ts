@@ -11,21 +11,27 @@ export { appendFile, copyFile, cp, glob, mkdir, mkdtemp, readdir, realpath, rena
 // temp file reaches for one fs facade rather than mixing in node:os.
 export { tmpdir } from "node:os";
 
+// utf8 is the default, so naming it is redundant (and rejected); any OTHER text encoding is allowed, and
+// `{ "encoding": null }` asks for the raw bytes — the one case where the return type is a Buffer.
+type TextEncoding = Exclude<BufferEncoding, "utf8">;
+
 interface ReadFileOptions {
-	"encoding"?: BufferEncoding;
 	"flag"?: OpenMode | undefined;
 }
 
-export function readFile(path, options: Omit<ReadFileOptions, "encoding"> & { "encoding"?: Exclude<BufferEncoding, "utf8" | "utf-8"> } & Abortable = {}) {
+export function readFile(path, options: ReadFileOptions & { "encoding": null } & Abortable): Promise<Buffer>;
+export function readFile(path, options?: ReadFileOptions & { "encoding"?: TextEncoding } & Abortable): Promise<string>;
+export function readFile(path, options: ReadFileOptions & { "encoding"?: TextEncoding | null } & Abortable = {}): Promise<string | Buffer> {
 	return fs.promises.readFile(path, { "encoding": "utf8", ...options });
 }
 
 interface ReadFileSyncOptions {
-	"encoding"?: BufferEncoding;
 	"flag"?: string | undefined;
 }
 
-export function readFileSync(path, options: Omit<ReadFileSyncOptions, "encoding"> & { "encoding"?: Exclude<BufferEncoding, "utf8" | "utf-8"> } = {}) {
+export function readFileSync(path, options: ReadFileSyncOptions & { "encoding": null }): Buffer;
+export function readFileSync(path, options?: ReadFileSyncOptions & { "encoding"?: TextEncoding }): string;
+export function readFileSync(path, options: ReadFileSyncOptions & { "encoding"?: TextEncoding | null } = {}): string | Buffer {
 	return fs.readFileSync(path, { "encoding": "utf8", ...options });
 }
 

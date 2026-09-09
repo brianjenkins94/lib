@@ -13,7 +13,7 @@ export function fetchWrapper(oauth2Client: OAuth2Client, { redirectUri = "http:/
 				await fetchWrapper["activeGetStoredToken"];
 
 				if (fs.existsSync("token.json")) {
-					return JSON.parse(await fs.readFile("token.json", { "encoding": "utf8" }));
+					return JSON.parse(await fs.readFile("token.json"));
 				}
 			}
 
@@ -58,7 +58,7 @@ export function fetchWrapper(oauth2Client: OAuth2Client, { redirectUri = "http:/
 		},
 		"getStoredToken": async function() {
 			if (fs.existsSync("token.json")) {
-				return JSON.parse(await fs.readFile("token.json", { "encoding": "utf8" }));
+				return JSON.parse(await fs.readFile("token.json"));
 			} else {
 				return null;
 			}

@@ -113,7 +113,7 @@ export async function render(template, data = {}, { useVite = false, root = unde
 		return [key, value];
 	});
 
-	template = await fs.readFile(template, { "encoding": "utf8" });
+	template = await fs.readFile(template);
 
 	while (true) {
 		let html;

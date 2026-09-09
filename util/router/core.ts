@@ -12,6 +12,7 @@
 import * as path from "node:path";
 import * as url from "node:url";
 import * as fs from "@brianjenkins94/util/fs";
+import { find } from "@brianjenkins94/util/find";
 import { getViteDevServer as getBaseViteDevServer } from "@brianjenkins94/util/vite/dev";
 
 let watcherAttached = false;
@@ -69,7 +70,7 @@ export async function getViteDevServer(root) {
 /** Absolute paths of every handler file under `directory` (recursively) — the single discovery walk
  *  both `util/router` and `util/mcp` use, so a `tools/` tree is enumerated one way. */
 export async function discover(directory) {
-	return (await Array.fromAsync(fs.glob("**/*.ts*", { "cwd": directory }))).map((filePath) => path.join(directory, filePath));
+	return find(directory).name("*.ts*").exec();
 }
 
 /** The nearest package root above `directory` (the base the Vite SSR graph resolves module URLs against). */

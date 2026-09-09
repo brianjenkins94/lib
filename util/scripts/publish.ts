@@ -5,7 +5,9 @@ import { exec } from "@brianjenkins94/util/exec";
 import { createGunzip, createGzip } from "node:zlib";
 import { isCI } from "@brianjenkins94/util/env";
 import { HelpRequested, juvy } from "@brianjenkins94/util/juvy";
+import { find } from "@brianjenkins94/util/find";
 import * as fs from "@brianjenkins94/util/fs";
+import { mapAsync } from "@brianjenkins94/util/array";
 import { pascalCaseToKebabCase } from "@brianjenkins94/util/text";
 import tarStream from "tar-stream";
 import * as vite from "vite";
@@ -44,6 +46,12 @@ try {
 const owner: string = config.get("owner");
 const npmToken: string = config.get("npmToken");
 
+// fs.glob's `**` never entered dot-directories (.github/, .claude/); find does, so the walks below prune them
+// (dot-FILES are already off the table for a `name` glob — `*` doesn't match a leading dot). "." is a root, not hidden.
+function isHidden(entry: string): boolean {
+	return entry !== "." && path.basename(entry).startsWith(".");
+}
+
 /**
  * Collect a pre-built package's shipped files (the directories in its package.json `files`),
  * reading each as a Buffer (binary-safe — monaco-vscode-api ships wasm/fonts) and skipping
@@ -53,14 +61,13 @@ const npmToken: string = config.get("npmToken");
 async function collectBuiltFiles(workspaceRoot: string, patterns: string[]): Promise<Record<string, Buffer>> {
 	const result: Record<string, Buffer> = {};
 
+	// `files` entries are plain directories here (`dist`) — an npm `files` glob entry couldn't be a find root.
 	for (const pattern of patterns) {
-		for await (const entry of fs.glob(path.join(workspaceRoot, pattern, "**", "*"), { "exclude": ["**/*.map"], "withFileTypes": true })) {
-			if (entry.isFile()) {
-				const absolute = path.join(entry.parentPath, entry.name);
+		const shipped = (await find(path.join(workspaceRoot, pattern)).type("f").prune(isHidden).exec()).filter((file) => !file.endsWith(".map") && !isHidden(file));
 
-				result[path.relative(workspaceRoot, absolute).replace(/\\/gu, "/")] = await fs.readFile(absolute, { "encoding": null });
-			}
-		}
+		await mapAsync(shipped, async (absolute) => {
+			result[path.relative(workspaceRoot, absolute).replace(/\\/gu, "/")] = await fs.readFile(absolute, { "encoding": null });
+		}, { "concurrency": 16 });
 	}
 
 	return result;
@@ -92,17 +99,7 @@ async function emitDeclarations(workspace: string, nestedDirs: string[]): Promis
 		// code and a spawn failure. exec auto-shells `npx` (a .cmd shim) on Windows.
 		await exec("npx", ["tsc", "-p", configPath], { "cwd": __root }).catch(() => {});
 
-		const declarations: Record<string, Buffer> = {};
-
-		for await (const entry of fs.glob(path.join(outDir, "**", "*.d.ts"), { "withFileTypes": true })) {
-			if (!entry.isFile()) { continue; }
-
-			const absolute = path.join(entry.parentPath, entry.name);
-
-			declarations[path.relative(outDir, absolute).replace(/\\/gu, "/")] = await fs.readFile(absolute, { "encoding": null });
-		}
-
-		return declarations;
+		return Object.fromEntries(await find(outDir).name("*.d.ts").exec(async (absolute): Promise<[string, Buffer]> => [path.relative(outDir, absolute).replace(/\\/gu, "/"), await fs.readFile(absolute, { "encoding": null })], { "concurrency": 16 }));
 	} finally {
 		await fs.rm(outDir, { "recursive": true, "force": true });
 		await fs.rm(configPath, { "force": true });
@@ -185,7 +182,7 @@ for (const workspace of workspaces) {
 	if (preBuilt) {
 		files = await collectBuiltFiles(path.join(__root, workspace).replace(/\\/gu, "/"), packageJson["files"]);
 	} else {
-		const entryPoints = packageJson["exports"] ?? (await Array.fromAsync(fs.glob(path.join(workspace, "**", "*.ts"), { "exclude": (entry) => entry.includes("node_modules") || isNested(entry) }))).map((entry) => path.join(__root, entry).replace(/\\/gu, "/"));
+		const entryPoints = packageJson["exports"] ?? (await find(workspace).name("*.ts").prune((dir) => dir.includes("node_modules") || isNested(dir + "/") || isHidden(dir)).exec()).map((entry) => path.join(__root, entry).replace(/\\/gu, "/"));
 
 		// Nothing to transpile and nothing pre-built: say so, instead of rolldown's opaque "must supply options.input".
 		if (entryPoints.length === 0) {
@@ -238,21 +235,9 @@ for (const workspace of workspaces) {
 		// vite only built the .ts entries; also ship hand-written .mjs/.cjs source verbatim — files node
 		// loads directly at runtime (silo's `node --import` preload + the broker it injects, the Deno
 		// backend, the cooldown installer), which genuinely can't be .ts. Keyed workspace-relative.
-		// `withFileTypes` makes the exclude callback receive a Dirent, not a string — normalize to a path
-		// first, or `.includes` throws (TypeError: entry.includes is not a function) and aborts the build.
-		for await (const entry of fs.glob(path.join(__root, workspace, "**", "*.{mjs,cjs}"), { "exclude": (entry) => {
-			const file = typeof entry === "string" ? entry : path.join(entry.parentPath, entry.name);
-
-			return file.includes("node_modules") || isNested(file);
-		}, "withFileTypes": true })) {
-			if (!entry.isFile()) {
-				continue;
-			}
-
-			const absolute = path.join(entry.parentPath, entry.name);
-
+		await find(path.join(__root, workspace)).name("*.{mjs,cjs}").prune((dir) => dir.includes("node_modules") || isNested(dir + path.sep) || isHidden(dir)).exec(async (absolute) => {
 			files[path.relative(path.join(__root, workspace), absolute).replace(/\\/gu, "/")] = await fs.readFile(absolute, { "encoding": null });
-		}
+		}, { "concurrency": 16 });
 
 		// Ship `.d.ts` for the transpiled sources — the esbuild/vite output above carries no types.
 		Object.assign(files, await emitDeclarations(workspace, nestedDirs));
