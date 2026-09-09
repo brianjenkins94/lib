@@ -17,15 +17,25 @@ import { parseSync } from "oxc-parser";
  */
 const imp = (m: string) => new RegExp(`from\\s*["']node:${m}["']|require\\(\\s*["'](?:node:)?${m}["']\\s*\\)`);
 
+/** The call-based names per capability, as DATA — the single source both the regex `DETECTORS` below and the
+ *  AST matchers in `./reach` build from (a bare `writeFile(` and an `fs.writeFile(` both count). */
+export const CALL_DETECTORS: Record<string, string[]> = {
+	"exec": ["spawnSync", "spawn", "execFileSync", "execFile", "execSync", "fork"],
+	"fs:write": ["writeFileSync", "writeFile", "createWriteStream", "mkdirSync", "mkdir", "unlinkSync", "unlink", "rmSync", "renameSync", "appendFileSync"],
+	"fs:read": ["readFileSync", "readFile", "createReadStream", "readdirSync", "readdir", "existsSync", "statSync"]
+};
+
+const callRe = (names: string[]) => new RegExp(`\\b(${names.join("|")})\\s*\\(`);
+
 export const DETECTORS: [RegExp, string][] = [
 	[imp("child_process"), "exec"],
-	[/\b(spawnSync|spawn|execFileSync|execFile|execSync|fork)\s*\(/, "exec"],   // call-based (deobfuscated/bare)
+	[callRe(CALL_DETECTORS["exec"]), "exec"],   // call-based (deobfuscated/bare)
 	[imp("(net|http|https|tls|dgram|http2)"), "net"],
 	[/\bfetch\s*\(|\bnew WebSocket\b/, "net"],
 	[/\beval\s*\(|new Function\s*\(/, "eval"],
 	[/\bprocess\.env\b/, "env"],
-	[/\b(writeFileSync|writeFile|createWriteStream|mkdirSync|mkdir|unlinkSync|unlink|rmSync|renameSync|appendFileSync)\s*\(/, "fs:write"],
-	[/\b(readFileSync|readFile|createReadStream|readdirSync|readdir|existsSync|statSync)\s*\(/, "fs:read"],
+	[callRe(CALL_DETECTORS["fs:write"]), "fs:write"],
+	[callRe(CALL_DETECTORS["fs:read"]), "fs:read"],
 	[imp("fs"), "fs"]   // coarse — dropped by refine() if read/write seen
 ];
 

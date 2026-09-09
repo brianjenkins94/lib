@@ -13,6 +13,7 @@ import { createRequire } from "node:module";
 import * as path from "node:path";
 
 import { exec } from "@brianjenkins94/util/exec";
+import { find } from "@brianjenkins94/util/find";
 import * as fs from "@brianjenkins94/util/fs";
 import { webcrack } from "webcrack";
 
@@ -50,13 +51,7 @@ export async function resolveEntry(pkg: string, fromDir: string, stopRoot: strin
 }
 
 async function readAll(dir: string): Promise<string> {
-	const parts = await Promise.all((await fs.readdir(dir, { "withFileTypes": true })).map(async (e) => {
-		const p = path.join(dir, e.name);
-
-		return e.isDirectory() ? await readAll(p) : e.name.endsWith(".js") ? fs.readFileSync(p) : "";
-	}));
-
-	return parts.join("\n");
+	return (await find(dir).name("*.js").exec((file) => fs.readFile(file), { "concurrency": 32 })).join("\n");
 }
 
 /** Deobfuscate `entry` with both engines; return the recovered-code variants (caller detects + unions). */

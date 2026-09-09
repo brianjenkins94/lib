@@ -17,6 +17,7 @@
 
 import * as path from "node:path";
 
+import { find } from "@brianjenkins94/util/find";
 import * as fs from "@brianjenkins94/util/fs";
 
 import { type Surface, type SurfaceEntry, add, builtinCaps, classifyKind, detect, surfaceOfSource } from "./detect.js";
@@ -68,20 +69,11 @@ function isPrivateWorkspace(dir: string): boolean {
 }
 
 async function files(target: string): Promise<string[]> {
-	const st = await fs.stat(target);
+	// Prune node_modules, dot-directories and NESTED private workspaces (they self-govern) — never the target
+	// itself: the project being audited is usually `private: true` and must still be walked.
+	const prune = (dir: string) => dir !== target && (path.basename(dir) === "node_modules" || path.basename(dir).startsWith(".") || isPrivateWorkspace(dir));
 
-	if (st.isFile()) { return [target]; }
-	const out: string[] = [];
-
-	for (const e of await fs.readdir(target, { "withFileTypes": true })) {
-		if (e.name === "node_modules" || e.name.startsWith(".")) { continue; }
-		const p = path.join(target, e.name);
-
-		// Descend into subdirectories, but prune a nested private workspace (it self-governs).
-		if (e.isDirectory()) { if (!isPrivateWorkspace(p)) { out.push(...(await files(p))); } } else if (isCode(e.name)) { out.push(p); }
-	}
-
-	return out;
+	return (await find(target).type("f").prune(prune).exec()).filter((f) => !path.basename(f).startsWith(".") && isCode(path.basename(f)));
 }
 
 /** Merge every code file under `target` into one consumer surface (specifier → members). */
