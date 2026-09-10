@@ -1,12 +1,13 @@
 import { isEntry } from "@brianjenkins94/util/env";
-import { mapAsync, partition } from "@brianjenkins94/util/array";
+import { mapAsync } from "@brianjenkins94/util/array";
 import { exec } from "@brianjenkins94/util/exec";
 import * as fs from "@brianjenkins94/util/fs";
 
 /**
- * Build every git-tracked workspace by running its own `build` script. Library packages under
- * `packages/` build to completion first, so dependents (apps) can consume their built dist.
- * Private workspaces build too: `private` means "not published to the registry" (util-publish honours
+ * Build every git-tracked workspace by running its own `build` script, in dependency waves:
+ * `components/` (leaf deps — vendored/UI packages others consume, some emitting a dist that apps read at
+ * build time) build to completion first, then `packages/`, then everything else. Private workspaces build too:
+ * `private` means "not published to the registry" (util-publish honours
  * it), NOT "not built" — a private, deployable app (e.g. a Pages workbench) still needs building.
  * Returns a `{ workspace: exitCode }` map.
  */
@@ -24,12 +25,17 @@ export async function build(workspaces?: string[]) {
 		return [workspace, (await exec("pnpm", ["run", "--if-present", "build"], { "cwd": workspace })).exitCode];
 	}
 
-	const [packages, rest] = partition(workspaces, (workspace) => workspace.split("/")[0] === "packages");
+	const prefixOf = (workspace: string) => workspace.split("/")[0];
+	const components = workspaces.filter((workspace) => prefixOf(workspace) === "components");
+	const packages = workspaces.filter((workspace) => prefixOf(workspace) === "packages");
+	const rest = workspaces.filter((workspace) => prefixOf(workspace) !== "components" && prefixOf(workspace) !== "packages");
 
+	// Sequential across waves (a later wave reads earlier waves' built dist), parallel within each wave.
+	const componentResults = await mapAsync(components, buildOne);
 	const packageResults = await mapAsync(packages, buildOne);
 	const restResults = await mapAsync(rest, buildOne);
 
-	return Object.fromEntries([...packageResults, ...restResults]);
+	return Object.fromEntries([...componentResults, ...packageResults, ...restResults]);
 }
 
 if (isEntry(import.meta)) {
