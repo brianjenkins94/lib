@@ -88,7 +88,6 @@ const squelched = {
 	"ts/no-empty-function": "warn", // 14
 	"camelcase": "warn", // 13 — redundant with ts/naming-convention; consider `disabled` instead
 	"ts/require-await": "warn", // 10
-	"no-duplicate-imports": "warn", // 9
 	"ts/member-ordering": "warn", // 8
 	"ts/no-floating-promises": "warn", // 5
 	"require-unicode-regexp": "warn", // 5
@@ -136,6 +135,7 @@ const disabled = {
 	"style/max-len": "off", // line length is a judgment call, not a hard limit — and tabs make the column math lie
 	"jsonc/sort-keys": "off", // like alphabetized keys in principle, but if it ever happens it should be a separate deliberate pass
 	"sort-imports": "off", // TWO import sorters can't coexist — core sort-imports and antfu's perfectionist/sort-imports disagree on order and undo each other every --fix pass (circular fixes → non-deterministic import order on save). Defer to perfectionist (antfu's choice; the refill re-added this core one on top)
+	"no-duplicate-imports": "off", // same story as sort-imports: core no-duplicate-imports isn't type-aware, so it flags a separate `import type {}` + `import {}` from one module — UNFIXABLE alongside consistent-type-imports, which auto-splits a merged inline-type import right back (the two rules undo each other every --fix). antfu's import/no-duplicates already catches REAL duplicates type-awarely AND allows the type+value split. Defer to it; the refill re-added this core one on top
 	"sort-keys": "off", // same as jsonc/sort-keys — not a nag; a deliberate pass if ever
 	"style/multiline-ternary": "off", // allow BOTH single-line and multiline ternaries — don't force either. "never" scrunched genuinely-multiline ones onto one line and hurt readability; "always" over-breaks short `a ? b : c`. Author's call.
 	"antfu/no-top-level-await": "off", // top-level await is wanted (this very config is built on it)
