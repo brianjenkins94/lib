@@ -21,6 +21,11 @@
       "description": "Extra flags appended to `pnpm install` (e.g. '--prod' to skip devDependencies).",
       "required": false,
       "default": ""
+    },
+    "workspace-packages": {
+      "description": "Comma-separated package globs (e.g. 'packages/*,components/*'). When set, writes an EPHEMERAL pnpm-workspace.yaml (those globs + linkWorkspacePackages: true) into the CI checkout before install — never committed back — so a repo that is NOT a committed pnpm workspace still links its sibling packages (a `\"*\"` dep on a sibling resolves to the local package instead of 404-ing on the registry). Leave empty to install exactly as-is.",
+      "required": false,
+      "default": ""
     }
   },
   "runs": {
@@ -41,6 +46,12 @@
           "key": "pnpm-store-${{ runner.os }}-${{ hashFiles('**/pnpm-lock.yaml') }}",
           "restore-keys": "pnpm-store-${{ runner.os }}-"
         }
+      },
+      {
+        "if": "${{ inputs.workspace-packages != '' }}",
+        "shell": "bash",
+        "env": { "WS": "${{ inputs.workspace-packages }}" },
+        "run": "{ echo packages:; IFS=',' read -ra g <<< \"$WS\"; for p in \"${g[@]}\"; do echo \"  - $p\"; done; echo 'linkWorkspacePackages: true'; } > pnpm-workspace.yaml"
       },
       {
         "if": "${{ inputs.strict-dep-builds == 'false' }}",
