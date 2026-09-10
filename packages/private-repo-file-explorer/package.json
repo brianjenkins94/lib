@@ -2,6 +2,7 @@
   "name": "private-repo-file-explorer",
   "author": "Brian Jenkins",
   "license": "MIT",
+  "private": true,
   "type": "module",
   "scripts": {
     "build": "#"

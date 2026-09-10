@@ -267,6 +267,12 @@ for (const workspace of workspaces) {
 
 	const binFiles = Object.keys(files).filter(isBin);
 
+	// The published manifest's base: package.json minus its `scripts` (a shipped `preinstall`/`postinstall`
+	// would otherwise run on the consumer's install, referencing files that aren't shipped). Declared here —
+	// before the optional-peer derivation reads its already-declared peers — not down at buildPackageJson,
+	// where it sat before and TDZ-crashed that earlier read.
+	const { "scripts": _scripts, ...publishable } = packageJson;
+
 	// Optional peers, DERIVED from the `@external` annotations in the emitted code (util/vite/external.ts): every
 	// bare specifier they name — not a builtin, not this package's own subpath — that isn't already a required
 	// peer becomes an optional one (`peerDependencies` + `peerDependenciesMeta.<name>.optional`). That
@@ -329,10 +335,6 @@ for (const workspace of workspaces) {
 	}
 
 	// Drop `scripts` from the published archive — they're build/dev tooling, and a lifecycle
-	// `preinstall`/`postinstall` would otherwise run on the consumer's install, referencing
-	// files that aren't shipped. (Allowlist the published fields instead if more leaks show up.)
-	const { "scripts": _scripts, ...publishable } = packageJson;
-
 	const buildPackageJson = (version) => JSON.stringify(preBuilt ? {
 		...publishable,
 		"name": `@${owner}/${packageJson["name"]}`,
