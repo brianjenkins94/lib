@@ -25,10 +25,12 @@ for (const pkg of packages) {
 	const directory = mkdtempSync(path.join(tmpdir(), `smoke-${pkg.replace(/[\\/]/gu, "-")}-`));
 
 	writeFileSync(path.join(directory, "package.json"), JSON.stringify({ "name": "smoke", "version": "0.0.0", "private": true }));
-	// strictDepBuilds=false: a dependency with an unapproved build script (esbuild, isolated-vm) is a warning,
-	// not a hard ERR_PNPM_IGNORED_BUILDS — the smoke test only imports the entrypoints, it doesn't need those
-	// native builds. minimumReleaseAge=0 so the just-published tarball isn't held back by the cooldown.
-	execFileSync("pnpm", ["add", "--ignore-workspace", "--config.strictDepBuilds=false", "--config.minimumReleaseAge=0", url], { "cwd": directory, "stdio": "inherit" });
+	// strictDepBuilds is only honoured from pnpm-workspace.yaml (not a --config flag): setting it false makes a
+	// dependency with an unapproved build script (esbuild, isolated-vm) a warning, not a hard
+	// ERR_PNPM_IGNORED_BUILDS — the smoke test only imports entrypoints and doesn't need those native builds.
+	writeFileSync(path.join(directory, "pnpm-workspace.yaml"), "strictDepBuilds: false\n");
+	// minimumReleaseAge=0 so the just-published tarball isn't held back by the supply-chain cooldown.
+	execFileSync("pnpm", ["add", "--config.minimumReleaseAge=0", url], { "cwd": directory, "stdio": "inherit" });
 
 	const exportsMap = JSON.parse(readFileSync(path.join(directory, "node_modules", scoped, "package.json"), "utf8"))["exports"] as Record<string, unknown>;
 	const specifiers = Object.keys(exportsMap).filter((key) => key !== ".").map((key) => scoped + key.slice(1));
