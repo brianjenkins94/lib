@@ -15,8 +15,13 @@ export async function build(workspaces?: string[]) {
 
 	// exec auto-shells `pnpm` (a .cmd shim) on Windows and — unlike the old hand-rolled Promise — rejects if
 	// pnpm can't be spawned at all, instead of hanging forever.
+	//
+	// NOT `--ignore-workspace`: in a workspace (incl. an ephemeral CI one) that flag makes pnpm treat the package
+	// as standalone, and since its deps reference workspace siblings pnpm then does a FULL reinstall (re-running
+	// every preinstall, e.g. a heavy clone) on each call. Plain `pnpm run` executes the script against the
+	// existing install — and is a no-op difference for a non-workspace repo, where there's no workspace to ignore.
 	async function buildOne(workspace: string): Promise<[string, number]> {
-		return [workspace, (await exec("pnpm", ["--ignore-workspace", "run", "--if-present", "build"], { "cwd": workspace })).exitCode];
+		return [workspace, (await exec("pnpm", ["run", "--if-present", "build"], { "cwd": workspace })).exitCode];
 	}
 
 	const [packages, rest] = partition(workspaces, (workspace) => workspace.split("/")[0] === "packages");
