@@ -1,0 +1,61 @@
+{
+  "name": "deploy",
+  # Reusable Pages-deploy workflow (called via `uses:` from a repo's own cd). The COMMON app-deploy shape:
+  # checkout → shared setup → a caller-supplied build/publish command → pages-deploy. The caller owns the
+  # TRIGGER (push, or workflow_run after ci + the success gate); this owns the steps. Repos with bespoke
+  # release logic (lib, partner-api-docs) keep their own cd instead of calling this.
+  "on": {
+    "workflow_call": {
+      "inputs": {
+        "run": { "type": "string", "required": true, "description": "Command(s) to run after setup, before the Pages deploy — the build/publish step (e.g. `npx util-publish`, or `pnpm run build && pnpm run --if-present test`)." },
+        "pages-path": { "type": "string", "required": false, "default": "docs", "description": "Directory to deploy to GitHub Pages." },
+        "workspace-packages": { "type": "string", "required": false, "default": "", "description": "Forwarded to the setup action: comma-separated globs to install as an ephemeral pnpm workspace (link sibling packages in CI)." },
+        "strict-dep-builds": { "type": "string", "required": false, "default": "false", "description": "Forwarded to the setup action." },
+        "node-version": { "type": "string", "required": false, "default": "lts/*", "description": "Forwarded to the setup action." }
+      },
+      "secrets": {
+        "NPM_TOKEN": { "required": false }
+      }
+    }
+  },
+  # pages + id-token for the Pages deploy; id-token also carries npm provenance. A calling workflow must grant
+  # at least these (a reusable workflow's token is the INTERSECTION of the caller's and this block).
+  "permissions": {
+    "contents": "read",
+    "pages": "write",
+    "id-token": "write"
+  },
+  "jobs": {
+    "deploy": {
+      "runs-on": "ubuntu-latest",
+      "environment": {
+        "name": "github-pages",
+        "url": "${{ steps.deploy.outputs.page_url }}"
+      },
+      "steps": [
+        { "uses": "actions/checkout@v4" },
+        {
+          "uses": "brianjenkins94/lib/.github/actions/setup@main",
+          "with": {
+            "node-version": "${{ inputs.node-version }}",
+            "strict-dep-builds": "${{ inputs.strict-dep-builds }}",
+            "workspace-packages": "${{ inputs.workspace-packages }}"
+          }
+        },
+        {
+          "run": "${{ inputs.run }}",
+          "env": {
+            "NPM_TOKEN": "${{ secrets.NPM_TOKEN }}",
+            "GITHUB_REPOSITORY_OWNER": "${{ github.repository_owner }}"
+          }
+        },
+        {
+          "id": "deploy",
+          "uses": "brianjenkins94/lib/.github/actions/pages-deploy@main",
+          "with": { "path": "${{ inputs.pages-path }}" }
+        }
+      ],
+      "timeout-minutes": 15
+    }
+  }
+}
