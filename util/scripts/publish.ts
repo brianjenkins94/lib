@@ -13,7 +13,7 @@ import { pascalCaseToKebabCase } from "@brianjenkins94/util/text";
 import tarStream from "tar-stream";
 import * as vite from "vite";
 import { build } from "./build";
-import { externalSpecifiers, packageName } from "../vite/external";
+import { externalSpecifiers, packageName } from "@brianjenkins94/util/vite/external";
 
 // util-publish runs in whatever repo invokes it (silo, lib, …) — the root is the cwd, not util's dir.
 const __root = process.cwd();

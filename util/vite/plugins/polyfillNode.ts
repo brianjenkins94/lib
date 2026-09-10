@@ -5,7 +5,7 @@ import { builtinModules, createRequire } from "node:module";
 import * as url from "node:url";
 import stdlib from "node-stdlib-browser";
 import { nodePolyfills } from "vite-plugin-node-polyfills";
-import { externalSpecifiers } from "../external";
+import { externalSpecifiers } from "@brianjenkins94/util/vite/external";
 
 const NAMESPACE = "\0external-global:";
 
