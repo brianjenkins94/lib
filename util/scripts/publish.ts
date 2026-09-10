@@ -184,10 +184,30 @@ for (const workspace of workspaces) {
 	if (preBuilt) {
 		files = await collectBuiltFiles(path.join(__root, workspace).replace(/\\/gu, "/"), packageJson["files"]);
 	} else {
-		const entryPoints = packageJson["exports"] ?? (await find(workspace).name("*.ts").prune((dir) => dir.includes("node_modules") || isNested(dir + "/") || isHidden(dir)).exec()).map((entry) => path.join(__root, entry).replace(/\\/gu, "/"));
+		const rawExports = packageJson["exports"];
+		let entryPoints: string[] | Record<string, string>;
+
+		if (rawExports === undefined) {
+			entryPoints = (await find(workspace).name("*.ts").prune((dir) => dir.includes("node_modules") || isNested(dir + "/") || isHidden(dir)).exec()).map((entry) => path.join(__root, entry).replace(/\\/gu, "/"));
+		} else {
+			// `exports` maps import specifiers (".", "./typed") to targets, and those specifiers are NOT valid
+			// Rollup entry names — a "./typed" key becomes an illegal "./typed.js" output. Re-key each by a clean
+			// entry name (the specifier's basename; "." → "index") pointing at the target's source file (resolving
+			// the conditional { types, default, … } form). The exports rewrite below turns the emitted
+			// "index.js"/"typed.js" back into "." / "./typed".
+			const specifiers = typeof rawExports === "string" ? { ".": rawExports } : rawExports as Record<string, unknown>;
+
+			entryPoints = Object.fromEntries(Object.entries(specifiers).map(([specifier, target]) => {
+				const conditional = target as { "default"?: string; "import"?: string; "require"?: string; "types"?: string };
+				const file = typeof target === "string" ? target : (conditional.default ?? conditional.import ?? conditional.require ?? conditional.types);
+				const name = specifier === "." ? "index" : specifier.replace(/^\.\//u, "");
+
+				return [name, path.join(__root, workspace, file as string).replace(/\\/gu, "/")];
+			}));
+		}
 
 		// Nothing to transpile and nothing pre-built: say so, instead of rolldown's opaque "must supply options.input".
-		if (entryPoints.length === 0) {
+		if ((Array.isArray(entryPoints) ? entryPoints.length : Object.keys(entryPoints).length) === 0) {
 			console.error(`❌ build failed for ${workspace}: no entry points (no \`exports\`, no .ts sources, no \`files\`) — mark it private or declare what it ships`);
 			buildFailures.push(workspace);
 			continue;
