@@ -22,7 +22,15 @@ export async function build(workspaces?: string[]) {
 	// every preinstall, e.g. a heavy clone) on each call. Plain `pnpm run` executes the script against the
 	// existing install — and is a no-op difference for a non-workspace repo, where there's no workspace to ignore.
 	async function buildOne(workspace: string): Promise<[string, number]> {
-		return [workspace, (await exec("pnpm", ["run", "--if-present", "build"], { "cwd": workspace })).exitCode];
+		const result = await exec("pnpm", ["run", "--if-present", "build"], { "cwd": workspace });
+
+		// Surface WHY a build failed. exec captures the output, so without echoing it a failure is just a bare
+		// exit code with no diagnostic — which is how a broken build once slipped through as a "green" CI.
+		if (!result.ok) {
+			process.stderr.write(`\n❌ ${workspace} build failed (exit ${result.exitCode})\n${result.stdout}\n${result.stderr}\n`);
+		}
+
+		return [workspace, result.exitCode];
 	}
 
 	const prefixOf = (workspace: string) => workspace.split("/")[0];
