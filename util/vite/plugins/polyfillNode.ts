@@ -3,9 +3,9 @@ import type { Plugin as EsbuildPlugin } from "esbuild";
 import type { Plugin as RolldownPlugin } from "rolldown";
 import { builtinModules, createRequire } from "node:module";
 import * as url from "node:url";
-import * as fs from "@brianjenkins94/util/fs";
 import stdlib from "node-stdlib-browser";
 import { nodePolyfills } from "vite-plugin-node-polyfills";
+import { externalSpecifiers } from "../external";
 
 const NAMESPACE = "\0external-global:";
 
@@ -22,27 +22,11 @@ function isFunctional(builtin: string): boolean {
 }
 
 /**
- * A dynamic import whose specifier is preceded by a `@external` LEGAL block comment (`/*! … *\/`)
- * names an OPTIONAL dependency the consuming app may not install — the same axis as an
- * un-polyfillable builtin: an import that would otherwise break a browser bundle of the lib. We
- * collect the annotated specifiers from source, then externalize each ONLY IF it doesn't resolve —
- * so a consumer that DOES install the dep still gets it bundled and working, while one that doesn't
- * gets a harmless unreached runtime import instead of a build-time "failed to resolve import" error.
- * (Bundlers have no cross-tool ignore comment — `@vite-ignore`/`webpackIgnore` are each honored only
- * by their own tool — so an annotation like this only means anything paired with a plugin that reads
- * it; this is that plugin.)
- *
- * The `/*!` (legal-comment) form is REQUIRED, not stylistic: a plain `/* … *\/` is dropped when util
- * itself is published (its source is Rolldown-bundled, minify:false — which still strips ordinary
- * comments but preserves legal ones), so the annotation would never reach a consumer's build and the
- * specifier would never be externalized. Keep every `@external` marker a `/*!` comment.
- */
-const OPTIONAL_IMPORT = /import\(\s*((?:\/\*[\s\S]*?\*\/\s*)*)["']([^"']+)["']/gu;
-
-/**
- * Externalize `@external`-annotated dynamic imports that a consuming app may not have installed:
- * installed → let normal resolution bundle it; absent → leave it a harmless unreached runtime import.
- * Split out of {@link polyfillNode} so a build using {@link polyfillNodeRolldown} can keep this behavior.
+ * Externalize `@external`-annotated dynamic imports (see util/vite/external.ts) that a consuming app may not
+ * have installed: installed → let normal resolution bundle it; absent → leave it a harmless unreached runtime
+ * import. A BUILD-side plugin: the dev optimizer never consults it, and is covered instead by the optional-peer
+ * declaration publish.ts derives from the same annotations. Split out of {@link polyfillNode} so a build using
+ * {@link polyfillNodeRolldown} can keep this behavior.
  */
 export function externalOptionalDeps(): PluginOption {
 	// Specifiers seen with an `@external` annotation, filled by the transform hook below.
@@ -52,10 +36,8 @@ export function externalOptionalDeps(): PluginOption {
 		"name": "external-optional-deps",
 		"enforce": "pre",
 		"transform": function(code: string) {
-			for (const [, comments, id] of code.matchAll(OPTIONAL_IMPORT)) {
-				if (/@external/u.test(comments)) {
-					optional.add(id);
-				}
+			for (const id of externalSpecifiers(code)) {
+				optional.add(id);
 			}
 
 			return null;
@@ -72,38 +54,6 @@ export function externalOptionalDeps(): PluginOption {
 		}
 	} as PluginOption;
 }
-
-// Importer-file cache for `isOptionalImport`: the optimizer asks about the same few lib modules repeatedly.
-const importerSource = new Map<string, Promise<string>>();
-
-/**
- * Does `importer` import `id` through an `@external`-annotated dynamic import? The dev optimizer bypasses the
- * Vite plugin pipeline (so {@link externalOptionalDeps} never sees these), but it does run its OWN plugins
- * (`polyfillNodeRolldown` / `polyfillNodeEsbuild`), which get the importer path — so the annotation can be
- * honored there, in memory, the same way un-polyfillable builtins are stubbed. Read on demand, only for a
- * bare specifier that failed to resolve, so the common path costs nothing.
- */
-async function isOptionalImport(importer: string | undefined, id: string): Promise<boolean> {
-	if (importer === undefined || importer.startsWith("\0") || id[0] === "." || id[0] === "/" || id[0] === "\0") {
-		return false;
-	}
-
-	if (!importerSource.has(importer)) {
-		importerSource.set(importer, fs.readFile(importer).catch(() => ""));
-	}
-
-	for (const [, comments, specifier] of (await importerSource.get(importer)).matchAll(OPTIONAL_IMPORT)) {
-		if (specifier === id && /@external/u.test(comments)) {
-			return true;
-		}
-	}
-
-	return false;
-}
-
-// The inert module an absent optional dep resolves to in the optimizer: the consumer reads it inside a
-// try/catch (or a Node-only branch) and degrades, exactly like the unreached runtime import in a build.
-const OPTIONAL_STUB_SOURCE = "export default {};\n";
 
 export function polyfillNode(builtins = builtinModules): PluginOption {
 	const polyfill = builtins.filter(isFunctional);
@@ -206,24 +156,6 @@ export function polyfillNodeEsbuild(builtins = builtinModules): EsbuildPlugin {
 				return undefined;
 			});
 
-			// `@external` optional deps the app hasn't installed → the inert stub. `pluginData` breaks the
-			// recursion: our own `build.resolve` probe re-enters this hook.
-			const OPTIONAL_NS = "optional-dep-stub";
-
-			build.onResolve({ "filter": /^[^./\\0]/ }, async function(args) {
-				if (args.pluginData?.optionalProbe === true || !(await isOptionalImport(args.importer, args.path))) {
-					return undefined;
-				}
-
-				const probe = await build.resolve(args.path, { "importer": args.importer, "resolveDir": args.resolveDir, "kind": args.kind, "pluginData": { "optionalProbe": true } });
-
-				return probe.errors.length === 0 ? undefined : { "path": args.path, "namespace": OPTIONAL_NS };
-			});
-
-			build.onLoad({ "filter": /.*/, "namespace": OPTIONAL_NS }, function() {
-				return { "contents": OPTIONAL_STUB_SOURCE, "loader": "js" };
-			});
-
 			build.onLoad({ "filter": /.*/, "namespace": STUB_NS }, async function(args) {
 				// Import the REAL builtin (this runs in Node at build time) to mirror its named
 				// exports as no-ops, so downstream named imports link.
@@ -265,17 +197,10 @@ export function polyfillNodeRolldown(builtins = builtinModules): RolldownPlugin 
 	// harmless no-op in a module that already has one.
 	const PROCESS_SHIM = `var process = globalThis.process ?? { "env": {}, "argv": [], "platform": "browser", "version": "", "versions": {}, "cwd": () => "/", "nextTick": (fn) => queueMicrotask(fn) };\n`;
 
-	const OPTIONAL_STUB = "\0optional-dep-stub:";
-
 	return {
 		"name": "polyfill-node-rolldown",
-		"resolveId": async function(id, importer) {
+		"resolveId": function(id) {
 			if (!filter.test(id)) {
-				// An `@external` optional dep the app hasn't installed → the inert stub (installed → normal resolution).
-				if (await isOptionalImport(importer, id) && await this.resolve(id, importer, { "skipSelf": true }) === null) {
-					return OPTIONAL_STUB + id;
-				}
-
 				return null;
 			}
 
@@ -292,10 +217,6 @@ export function polyfillNodeRolldown(builtins = builtinModules): RolldownPlugin 
 			return stdlib[name] !== undefined ? STUB + name : null;
 		},
 		"load": async function(id) {
-			if (id.startsWith(OPTIONAL_STUB)) {
-				return OPTIONAL_STUB_SOURCE;
-			}
-
 			if (!id.startsWith(STUB)) {
 				return null;
 			}

@@ -1,4 +1,5 @@
 import * as os from "node:os";
+import { builtinModules } from "node:module";
 import * as path from "node:path";
 import { log } from "@brianjenkins94/util/logger";
 import { exec } from "@brianjenkins94/util/exec";
@@ -12,6 +13,7 @@ import { pascalCaseToKebabCase } from "@brianjenkins94/util/text";
 import tarStream from "tar-stream";
 import * as vite from "vite";
 import { build } from "./build";
+import { externalSpecifiers, packageName } from "../vite/external";
 
 // util-publish runs in whatever repo invokes it (silo, lib, …) — the root is the cwd, not util's dir.
 const __root = process.cwd();
@@ -245,6 +247,22 @@ for (const workspace of workspaces) {
 
 	const binFiles = Object.keys(files).filter(isBin);
 
+	// Optional peers, DERIVED from the `@external` annotations in the emitted code (util/vite/external.ts): every
+	// bare specifier they name — not a builtin, not this package's own subpath — that isn't already a required
+	// peer becomes an optional one (`peerDependencies` + `peerDependenciesMeta.<name>.optional`). That
+	// metadata is what a consumer's Vite dev optimizer reads to stub the dep when it's absent; npm never
+	// installs an optional peer, so nothing is added to the consumer — and nothing is hand-maintained here.
+	const selfName = `@${owner}/${packageJson["name"]}`;
+	const optionalPeers = [
+			...new Set(Object.entries(files)
+			.filter(([key]) => /\.[cm]?js$/u.test(key))
+			.flatMap(([, code]) => [...externalSpecifiers(code.toString())])
+			.filter((id) => /^[\w@]/u.test(id) && !id.startsWith("node:") && !builtinModules.includes(id) && id !== selfName && !id.startsWith(selfName + "/"))
+			.map(packageName))
+		]
+		.filter((name) => publishable["peerDependencies"]?.[name] === undefined)
+		.sort();
+
 	let archiveVersion;
 
 	const tarFile = path.join(distDirectory, workspace + "@latest.tgz");
@@ -322,6 +340,10 @@ for (const workspace of workspaces) {
 			return /\.(?:mjs|cjs)$/u.test(key) ? [entry, ["./" + key, "./" + key]] : [entry];
 		})),
 		"files": Object.keys(files).filter((key) => key !== "package.json"),
+		...(optionalPeers.length > 0 ? {
+			"peerDependencies": { ...publishable["peerDependencies"], ...Object.fromEntries(optionalPeers.map((name) => [name, "latest"])) },
+			"peerDependenciesMeta": { ...publishable["peerDependenciesMeta"], ...Object.fromEntries(optionalPeers.map((name) => [name, { "optional": true }])) }
+		} : {}),
 		// bin: preserve a package's own `bin` (e.g. silo's root `cli.js` → `silo`), else derive
 		// from scripts/* as `${pkg}-${name}` (e.g. util-build). The CLI name is kebab-cased so a
 		// camelCase source file still yields a hyphenated binary (buildStatic.js → util-build-static),

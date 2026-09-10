@@ -6,6 +6,7 @@
 
 import type { Plugin, ViteDevServer } from "vite";
 import http from "node:http";
+import * as net from "node:net";
 import { log } from "@brianjenkins94/util/logger";
 import * as path from "node:path";
 import * as url from "node:url";
@@ -32,35 +33,75 @@ import { polyfillNodeEsbuild, polyfillNodeRolldown } from "./plugins/polyfillNod
 const VOID_CLOSE_TAGS = /<\/(?:meta|link|br|hr|img|input|area|base|col|embed|source|track|wbr)>/gu;
 
 /**
- * The shared Vite dev server (middleware mode, custom appType) — one per process. This is the base
+ * The shared Vite dev server (middleware mode, custom appType) — one per PROCESS. This is the base
  * everything else builds on: `util/router` layers route-module invalidation on top, `util/mcp`'s
  * bridge re-enters the entry through it, and `serve` below renders HTML through it.
+ *
+ * Keyed on `globalThis`, not held in a module variable, because this module can be loaded TWICE in one
+ * process: an app that nests a sub-package with its own `node_modules/@brianjenkins94/util` (its root
+ * entry bootstraps through the root copy, its sub-package's setup through the nested one) gets two module
+ * instances, and a per-module singleton then builds two Vite servers over the same root. Those fight: both
+ * bind the HMR port (the second logs "Port 24678 is already in use" and the browser's socket — carrying the
+ * second server's token — is refused by the first, so HMR silently dies) and both optimize into the same
+ * `.vite/deps`. Every copy sharing the first server created ends that. Held as the creation promise so
+ * concurrent first calls share it too.
  */
-let viteDevServer: ViteDevServer | undefined;
+const SERVER: unique symbol = Symbol.for("@brianjenkins94/util/vite/dev:server");
+const shared = globalThis as { [SERVER]?: Promise<ViteDevServer> };
 
-export async function getViteDevServer(root: string, plugins: Plugin[] = []): Promise<ViteDevServer> {
+/**
+ * The first free TCP port at or after `start` on loopback. In middleware mode Vite runs HMR on its OWN
+ * WebSocket server on a fixed port (default 24678); if a stale process holds it — common on Windows, where a
+ * killed `node`/`tsx watch` child orphans and keeps the socket — Vite fails to bind and silently drops HMR,
+ * so the browser retries the socket forever. Pinning HMR to a known-free port (and telling the client via
+ * `clientPort`) sidesteps that whole class of failure.
+ */
+async function firstFreePort(start: number): Promise<number> {
+	for (let port = start; port < start + 100; port++) {
+		const free = await new Promise<boolean>(function(resolve) {
+			const probe = net.createServer();
+
+			probe.once("error", () => resolve(false));
+			probe.once("listening", () => probe.close(() => resolve(true)));
+			probe.listen(port, "127.0.0.1");
+		});
+
+		if (free) { return port; }
+	}
+
+	return start;
+}
+
+export function getViteDevServer(root: string, plugins: Plugin[] = []): Promise<ViteDevServer> {
 	// Start from the shared repo defaults (esnext, logLevel, worker format, …) so the
 	// dev server matches the build configs instead of re-specifying its own base. `plugins` (empty by
 	// default) lets a consumer inject transforms on the FIRST call that creates the singleton — e.g. util/mcp
 	// injects the capability-gating builtin-rewrite for tool modules. A no-op in production (no dev server).
-	viteDevServer ??= await createViteServer(mergeConfig(defaults, {
-		"root": root,
-		"appType": "custom",
-		"plugins": plugins,
-		// allowedHosts: this dev server is often mounted on an app reached through a
-		// tunnel/proxy (e.g. a *.loca.lt webhook), and Vite's default host check would
-		// 403 those requests. It's a dev-only server, so trust any host.
-		"server": { "middlewareMode": true, "allowedHosts": true },
-		"esbuild": { "jsx": "automatic", "jsxImportSource": "jsx-async-runtime" },
-		// Vite 8 pre-bundles deps with Rolldown (it stubs esbuild plugins → "Not implemented"); earlier
-		// Vite uses esbuild. Wire the polyfill to whichever optimizer this Vite runs.
-		"optimizeDeps": Number(viteVersion.split(".")[0]) >= 8
-			? { "rolldownOptions": { "plugins": [polyfillNodeRolldown(["fs", "path", "url", "util"])] } }
-			: { "esbuildOptions": { "plugins": [polyfillNodeEsbuild(["fs", "path", "url", "util"])] } },
-		"publicDir": false
-	}));
+	shared[SERVER] ??= (async function() {
+		// HMR on its own free port so a stale holder of the default (24678) can't silently break hot reload.
+		const hmrPort = await firstFreePort(24678);
 
-	return viteDevServer;
+		return createViteServer(mergeConfig(defaults, {
+			"root": root,
+			"appType": "custom",
+			"plugins": plugins,
+			// allowedHosts: this dev server is often mounted on an app reached through a
+			// tunnel/proxy (e.g. a *.loca.lt webhook), and Vite's default host check would
+			// 403 those requests. It's a dev-only server, so trust any host.
+			// hmr: middleware mode runs HMR on its own WS server; pin it to a free port (clientPort so the
+			// browser connects there) so a stale holder of 24678 can't silently break hot reload.
+			"server": { "middlewareMode": true, "allowedHosts": true, "hmr": { "port": hmrPort, "clientPort": hmrPort } },
+			"esbuild": { "jsx": "automatic", "jsxImportSource": "jsx-async-runtime" },
+			// Vite 8 pre-bundles deps with Rolldown (it stubs esbuild plugins → "Not implemented"); earlier
+			// Vite uses esbuild. Wire the polyfill to whichever optimizer this Vite runs.
+			"optimizeDeps": Number(viteVersion.split(".")[0]) >= 8
+				? { "rolldownOptions": { "plugins": [polyfillNodeRolldown(["fs", "path", "url", "util"])] } }
+				: { "esbuildOptions": { "plugins": [polyfillNodeEsbuild(["fs", "path", "url", "util"])] } },
+			"publicDir": false
+		}));
+	}());
+
+	return shared[SERVER];
 }
 
 let entered = false;
