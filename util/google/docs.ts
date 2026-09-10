@@ -1,6 +1,6 @@
-import type { docs_v1 as DocsApis } from "googleapis/build/src/apis/docs";
+import type { docs_v1 as DocsApis } from "googleapis/build/src/apis/docs/index.js";
 import { OAuth2Client } from "googleapis-common";
-import { docs as docsApi } from "googleapis/build/src/apis/docs";
+import { docs as docsApi } from "googleapis/build/src/apis/docs/index.js";
 //import { GoogleDocument } from "gatsby-source-google-docs/utils/google-document";
 
 export class Doc {

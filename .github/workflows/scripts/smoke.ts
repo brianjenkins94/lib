@@ -1,9 +1,17 @@
 import { execFileSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import * as path from "node:path";
 
 /**
- * Smoke-test each freshly-published package against its LIVE GitHub Pages tarball (replaces smoke.sh):
- * install it with `--no-save`, then run the runtime test over every non-"." export it declares.
+ * Smoke-test each freshly-published package against its LIVE GitHub Pages tarball: install it into a throwaway
+ * directory, then import every non-"." export to prove the published entrypoints resolve and load.
+ *
+ * Install with pnpm, not npm: pnpm is what consumers actually use, its auto-install-peers pulls the optional
+ * peers an export might load, and npm's arborist crashes ("Cannot read properties of null (reading 'matches')")
+ * on the URL tarball under the runner's bundled npm. An isolated temp dir (not the repo checkout, which is a
+ * pnpm workspace) keeps the install standalone; minimumReleaseAge=0 so the just-published tarball isn't held
+ * back by the supply-chain cooldown.
  */
 
 const packages = process.argv.slice(2);
@@ -14,10 +22,17 @@ for (const pkg of packages) {
 	const scoped = `@${owner}/${pkg}`;
 	const url = `https://${owner}.github.io/${repo}/${pkg}@latest.tgz`;
 
-	execFileSync("npm", ["install", "--no-save", url], { "stdio": "inherit" });
+	const directory = mkdtempSync(path.join(tmpdir(), `smoke-${pkg.replace(/[\\/]/gu, "-")}-`));
 
-	const exportsMap = JSON.parse(readFileSync(`node_modules/${scoped}/package.json`, "utf8")).exports as Record<string, unknown>;
-	const exportPaths = Object.keys(exportsMap).filter((key) => key !== ".").map((key) => scoped + key.slice(1));
+	writeFileSync(path.join(directory, "package.json"), JSON.stringify({ "name": "smoke", "version": "0.0.0", "private": true }));
+	execFileSync("pnpm", ["add", "--ignore-workspace", "--config.minimumReleaseAge=0", url], { "cwd": directory, "stdio": "inherit" });
 
-	execFileSync("npx", ["tsx", "test/runtime/node.ts", ...exportPaths], { "stdio": "inherit" });
+	const exportsMap = JSON.parse(readFileSync(path.join(directory, "node_modules", scoped, "package.json"), "utf8"))["exports"] as Record<string, unknown>;
+	const specifiers = Object.keys(exportsMap).filter((key) => key !== ".").map((key) => scoped + key.slice(1));
+
+	// cwd = the install dir, so the bare specifiers resolve against its node_modules.
+	for (const specifier of specifiers) {
+		console.log("> import", specifier);
+		execFileSync("node", ["--input-type=module", "--eval", `import ${JSON.stringify(specifier)};`], { "cwd": directory, "stdio": "inherit" });
+	}
 }

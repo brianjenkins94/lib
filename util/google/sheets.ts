@@ -1,9 +1,9 @@
 import type { ClientSettings } from "@badgateway/oauth2-client/dist/client";
-import type { sheets_v4 as SheetsApi } from "googleapis/build/src/apis/sheets";
+import type { sheets_v4 as SheetsApi } from "googleapis/build/src/apis/sheets/index.js";
 import { OAuth2Client } from "@badgateway/oauth2-client";
 import { mapAsync } from "@brianjenkins94/util/array";
 import { OAuth2Client as GoogleOAuth2Client } from "googleapis-common";
-import { sheets as sheetsApi } from "googleapis/build/src/apis/sheets";
+import { sheets as sheetsApi } from "googleapis/build/src/apis/sheets/index.js";
 import { fetchWrapper } from "./auth";
 
 class Sheet {

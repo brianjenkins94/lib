@@ -1,6 +1,6 @@
 import { OAuth2Client } from "googleapis-common";
 import { log } from "@brianjenkins94/util/logger";
-import { drive as driveApi } from "googleapis/build/src/apis/drive";
+import { drive as driveApi } from "googleapis/build/src/apis/drive/index.js";
 
 export class Drive {
 	private readonly driveApi;
