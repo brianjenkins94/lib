@@ -17,6 +17,15 @@ const NPM_BEFORE = new Date(Date.now() - MINIMUM_RELEASE_AGE_DAYS * 86_400_000).
  * workspaces are skipped — they self-install (see `findWorkspaces()`).
  */
 export async function postinstall(workspaces?: string[]) {
+	// In a pnpm workspace the top-level install already installed every member and ran their lifecycle
+	// scripts, so there's nothing to do here — and doing it anyway (a per-package `--ignore-workspace`
+	// install) would re-fire heavy preinstalls and break the sibling ("*") resolution the workspace provides.
+	// A `pnpm-workspace.yaml` with a `packages:` key is the tell (an ephemeral CI one included; a
+	// strictDepBuilds-only file has no `packages:`).
+	if (fs.existsSync("pnpm-workspace.yaml") && (/^packages:/mu).test(await fs.readFile("pnpm-workspace.yaml"))) {
+		return [];
+	}
+
 	workspaces ??= (await fs.findWorkspaces()).filter((workspace) => !workspace.private).map((workspace) => workspace.dir);
 
 	// exec auto-shells pnpm/npm (.cmd shims) on Windows; the pnpm→npm fallback is just "try pnpm, else npm".
