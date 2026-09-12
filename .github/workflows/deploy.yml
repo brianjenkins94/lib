@@ -2,8 +2,9 @@
   "name": "deploy",
   # Reusable Pages-deploy workflow (called via `uses:` from a repo's own cd). The COMMON app-deploy shape:
   # checkout → shared setup → a caller-supplied build/publish command → pages-deploy. The caller owns the
-  # TRIGGER (push, or workflow_run after ci + the success gate); this owns the steps. Repos with bespoke
-  # release logic (lib, partner-api-docs) keep their own cd instead of calling this.
+  # TRIGGER (push, or workflow_run after ci + the success gate); this owns the steps. `release: true` opts into
+  # a SIMPLE per-package util-release; repos needing bespoke release logic (lib, partner-api-docs — per-package
+  # matrices, AI notes) keep their own cd instead of calling this.
   "on": {
     "workflow_call": {
       "inputs": {
@@ -11,17 +12,19 @@
         "pages-path": { "type": "string", "required": false, "default": "docs", "description": "Directory to deploy to GitHub Pages." },
         "workspace-packages": { "type": "string", "required": false, "default": "", "description": "Forwarded to the setup action: comma-separated globs to install as an ephemeral pnpm workspace (link sibling packages in CI)." },
         "strict-dep-builds": { "type": "string", "required": false, "default": "false", "description": "Forwarded to the setup action." },
-        "node-version": { "type": "string", "required": false, "default": "lts/*", "description": "Forwarded to the setup action." }
+        "node-version": { "type": "string", "required": false, "default": "lts/*", "description": "Forwarded to the setup action." },
+        "release": { "type": "string", "required": false, "default": "false", "description": "When \"true\", cut/promote a GitHub release per non-private package (util-release) before the run step; the caller must grant contents: write." }
       },
       "secrets": {
         "NPM_TOKEN": { "required": false }
       }
     }
   },
-  # pages + id-token for the Pages deploy; id-token also carries npm provenance. A calling workflow must grant
-  # at least these (a reusable workflow's token is the INTERSECTION of the caller's and this block).
+  # pages + id-token for the Pages deploy (id-token also carries npm provenance); contents:write lets the
+  # opt-in `release` step cut GitHub releases. A caller's token is the INTERSECTION of its own grant and this
+  # block, so a repo that doesn't set `release: true` (and grants only contents:read) is unaffected.
   "permissions": {
-    "contents": "read",
+    "contents": "write",
     "pages": "write",
     "id-token": "write"
   },
@@ -41,6 +44,16 @@
             "strict-dep-builds": "${{ inputs.strict-dep-builds }}",
             "workspace-packages": "${{ inputs.workspace-packages }}"
           }
+        },
+        {
+          # Opt-in: create/promote a GitHub release for each non-private package (util-release decides draft vs
+          # promote from package.json version vs published releases). Runs before the build/publish step so
+          # util-publish can attach tarballs to the freshly-cut releases.
+          "if": "${{ inputs.release == 'true' }}",
+          "name": "Cut GitHub releases (util-release)",
+          "shell": "bash",
+          "env": { "GH_TOKEN": "${{ github.token }}" },
+          "run": "git ls-files '*/package.json' | while read -r manifest; do [ \"$(jq -r '.private // false' \"$manifest\")\" = true ] && continue; ( cd \"$(dirname \"$manifest\")\" && npx util-release ); done"
         },
         {
           "run": "${{ inputs.run }}",
