@@ -37,8 +37,10 @@ export interface LogRecord {
 	/** Unix ms. For `span-close` this is the END time; start is `endTime - durationMs`. */
 	"time": number;
 	"span"?: string;
-	"spanId"?: number;
-	"parentSpanId"?: number;
+	/** W3C Trace Context ids as hex (span 64-bit / trace 128-bit) — globally unique across contexts, so a
+	 *  collector stitches records from different realms, and an OpenTelemetry span is constructable downstream. */
+	"spanId"?: string;
+	"parentSpanId"?: string;
 	"traceId"?: string;
 	"depth": number;
 	/** Present only on `span-close`. */
@@ -72,15 +74,17 @@ function resolveFormat(): Format {
 
 const threshold = LEVELS[setting("LOG_LEVEL") as Level] ?? LEVELS.trace;
 
-let spanCounter = 0;
 let sequence = 0;
 
-function nextSpanId(): number {
-	const id = spanCounter;
+/** A hex id of `bytes` random bytes (crypto). W3C Trace Context sizes: a span id is 8 bytes (16 hex chars), a
+ *  trace id 16 (32 hex). Random rather than a counter, so ids are globally unique ACROSS contexts (a per-context
+ *  counter collides once records from several realms meet at one collector) and valid to build OTel spans from. */
+function randomHex(bytes: number): string {
+	const values = new Uint8Array(bytes);
 
-	spanCounter += 1;
+	crypto.getRandomValues(values);
 
-	return id;
+	return Array.from(values, (byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 
 // ── Dispatch ──────────────────────────────────────────────────────────────────────────────────--
@@ -161,9 +165,9 @@ export class Logger {
 }
 
 export class Span extends Logger {
-	readonly id = nextSpanId();
+	readonly id = randomHex(8); // W3C span id (64-bit hex)
 	readonly name: string;
-	readonly parentId?: number;
+	readonly parentId?: string;
 	readonly traceId: string;
 	readonly depth: number;
 	private readonly startMs = performance.now();
@@ -174,7 +178,7 @@ export class Span extends Logger {
 
 		this.name = name;
 		this.parentId = parent?.id;
-		this.traceId = parent?.traceId ?? `t${this.id}`;
+		this.traceId = parent?.traceId ?? randomHex(16); // W3C trace id (128-bit hex); descendants inherit the root's
 		this.depth = parent ? parent.depth + 1 : 0;
 
 		this.emit("span-open", "trace", "span started", attrs);
@@ -378,12 +382,12 @@ function incompleteClose(open: LogRecord): LogRecord {
  * `.drain()`) force-flushes any root that was still open — so a forgotten `.end()` is loud, not silent.
  */
 export function buffered(sink: Sink): Sink & { "drain": () => void } {
-	const items = new Map<number, (LogRecord | number)[]>(); // spanId → its logs, interleaved with child spanIds
-	const opens = new Map<number, LogRecord>();
-	const closes = new Map<number, LogRecord>();
-	const pendingRoots = new Set<number>();
+	const items = new Map<string, (LogRecord | string)[]>(); // spanId → its logs, interleaved with child spanIds
+	const opens = new Map<string, LogRecord>();
+	const closes = new Map<string, LogRecord>();
+	const pendingRoots = new Set<string>();
 
-	function flush(id: number): void {
+	function flush(id: string): void {
 		const open = opens.get(id);
 
 		if (open) {
@@ -391,8 +395,8 @@ export function buffered(sink: Sink): Sink & { "drain": () => void } {
 		}
 
 		for (const item of items.get(id) ?? []) {
-			if (typeof item === "number") {
-				flush(item);
+			if (typeof item === "string") {
+				flush(item); // a child spanId marker
 			} else {
 				sink(item);
 			}
