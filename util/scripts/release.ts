@@ -309,8 +309,15 @@ if (isEntry(import.meta) && process.argv.includes("--latest")) {
 	if (cwdWorkspace !== "" && cwdWorkspace !== ".") {
 		await releaseWorkspace(cwdWorkspace, { gitRoot, "prime": isCI });
 	} else if (globs.length > 0) {
-		for (const workspace of await fs.matchWorkspaces(globs, gitRoot)) {
-			await releaseWorkspace(workspace.dir, { gitRoot, "prime": isCI });
+		// Publish every workspace whose dir matches a glob (`*` spans ONE path segment, e.g. `packages/*`, so
+		// an app's bundled sub-packages aren't published on their own), skipping private ones — `private` is the
+		// publish gate, and this (release) is the one place it filters.
+		const patterns = globs.map((glob) => new RegExp(`^${glob.replace(/[.+?^${}()|[\]\\]/gu, "\\$&").replace(/\*/gu, "[^/]+")}$`, "u"));
+
+		for (const workspace of await fs.findWorkspaces(gitRoot)) {
+			if (!workspace.private && patterns.some((pattern) => pattern.test(workspace.dir))) {
+				await releaseWorkspace(workspace.dir, { gitRoot, "prime": isCI });
+			}
 		}
 	} else {
 		const configPath = ["release.config.ts", "release.config.js"].map((name) => path.resolve(process.cwd(), name)).find((file) => fs.existsSync(file));

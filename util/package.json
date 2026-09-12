@@ -21,6 +21,7 @@
     "googleapis": "latest",
     "http-proxy-3": "latest",
     "hyperformula": "latest",
+    "ignore": "latest",
     "jsonc-parser": "latest",
     "jsonpath-plus": "latest",
     "jsx-async-runtime": "latest",

@@ -13,8 +13,9 @@ const NPM_BEFORE = new Date(Date.now() - MINIMUM_RELEASE_AGE_DAYS * 86_400_000).
 
 /**
  * Install every git-tracked workspace (pnpm `--ignore-workspace`, falling back to npm), so each
- * sub-package's own dependencies and install lifecycle run. Used as the repo's `postinstall`. Private
- * workspaces are skipped — they self-install (see `findWorkspaces()`).
+ * sub-package's own dependencies and install lifecycle run. Used as the repo's `postinstall`. `private`
+ * gates PUBLISHING only (util-publish honours it) — it never gates installing: a private, deployable app
+ * (e.g. a Pages workbench) still needs its deps installed to build, so private workspaces are installed too.
  */
 export async function postinstall(workspaces?: string[]) {
 	// In a pnpm workspace the top-level install already installed every member and ran their lifecycle
@@ -26,7 +27,7 @@ export async function postinstall(workspaces?: string[]) {
 		return [];
 	}
 
-	workspaces ??= (await fs.findWorkspaces()).filter((workspace) => !workspace.private).map((workspace) => workspace.dir);
+	workspaces ??= (await fs.findWorkspaces()).map((workspace) => workspace.dir);
 
 	// exec auto-shells pnpm/npm (.cmd shims) on Windows; the pnpm→npm fallback is just "try pnpm, else npm".
 	return mapAsync(workspaces, async function(workspace: string) {

@@ -1,9 +1,9 @@
 import type { Abortable } from "node:events";
 import type { OpenMode } from "node:fs";
+import type { FileFinder } from "@brianjenkins94/util/find";
+import type { Ignore } from "ignore";
 import * as fs from "node:fs";
 import * as path from "node:path";
-
-import { exec } from "@brianjenkins94/util/exec";
 
 export { createReadStream, createWriteStream, existsSync, writeFileSync } from "node:fs";
 export { appendFile, copyFile, cp, glob, mkdir, mkdtemp, readdir, realpath, rename, rm, stat, unlink, writeFile } from "node:fs/promises";
@@ -94,49 +94,76 @@ export function parents(start: string, target: ClosestTarget, options: { "until"
 }
 
 export interface Workspace {
-	/** Workspace directory, relative to `cwd` (POSIX, as git reports it). The repo root is `.`. */
+	/** Workspace directory, relative to `cwd`, POSIX-separated (`packages/tsval`); never the repo root itself. */
 	"dir": string;
 	/** The package's `name`, or `undefined` if the manifest is unnamed/unreadable. */
 	"name"?: string;
-	/** `package.json` `private: true` — silo ignores private workspaces everywhere (build/install/audit). */
+	/** `package.json` `private: true` — gates PUBLISHING only (util-publish skips it); install/build/audit
+	 *  still process private workspaces (a private, deployable app still needs installing and building). */
 	"private": boolean;
 }
 
+// findWorkspaces' deps, loaded once on first use (import() caches the module; `??=` memoises the unwrap).
+// `find` is dynamic to avoid a static cycle (find imports this module); `ignore` is an on-demand peer dep (as
+// object-scan is in find). Each is assigned right before it's used below, so TS keeps it narrowed (it drops an
+// outer let's narrowing across an await).
+let find: ((root: string) => FileFinder) | undefined;
+let ignore: (() => Ignore) | undefined;
+
 /**
- * Discover the repo's workspace packages: git-tracked `package.json` files one or two directories deep.
- * Going through git keeps it gitignore-aware for free (build output and `node_modules` never appear), and
- * reading each manifest surfaces `name`/`private` so every consumer (build, postinstall, publish, audit)
- * can filter on `private` from one place instead of re-deriving it. The 1–2 level depth cap matches the
- * historical glob — lift it only when a deeper layout actually exists. Returns in git's order
- * (shallowest/lexical first).
+ * Discover the repo's workspace packages: `package.json` files one or two directories deep, found by WALKING
+ * the working tree (via `find`) rather than `git ls-files`. Reading the real filesystem means only workspaces
+ * that actually EXIST are returned — a tracked-but-absent manifest (a staged-but-uncommitted deletion, a
+ * sparse/partial checkout, a `skip-worktree` file) can never surface as a phantom workspace whose dir a
+ * consumer would `cd` into (postinstall) — and there's no `git` dependency, so it works in a tarball or a
+ * checkout without git. Gitignore-awareness is KEPT (build output like `dist/`/`docs/` and `node_modules` are
+ * pruned) by honouring the repo's own root `.gitignore` in the prune predicate — no hardcoded ignore list;
+ * `.git` (the VCS dir, never a workspace) is the one fixed special case. The two-level depth cap matches the
+ * historical one- and two-level `package.json` globs (lift it only when a deeper layout exists) and excludes
+ * the repo-root manifest, as those globs did. Each manifest is read to surface `name`/`private` so the one
+ * consumer that needs it (publish) can filter on `private` from one place; a manifest that fails to PARSE is
+ * kept as nameless/non-private (a real package with malformed JSON). Returns in lexical dir order.
  */
 export async function findWorkspaces(cwd: string = process.cwd()): Promise<Workspace[]> {
-	const manifests = (await exec("git", ["ls-files", "*/package.json", "*/*/package.json"], { "cwd": cwd })).stdout.split("\n").filter(Boolean);
+	// The prune list is the repo's own .gitignore, so it tracks whatever the repo already ignores.
+	ignore ??= (await import("ignore")).default;
 
-	return manifests.map(function(manifest) {
+	const ignorer = ignore();
+
+	try {
+		ignorer.add(fs.readFileSync(path.join(cwd, ".gitignore"), "utf8"));
+	} catch { /* no root .gitignore → nothing extra to prune */ }
+
+	find ??= (await import("@brianjenkins94/util/find")).find;
+
+	// A manifest one dir deep sits at find-depth 2 (`foo/package.json`), two dirs deep at depth 3
+	// (`packages/tsval/package.json`); maxDepth 3 descends far enough to reach the latter and no further.
+	const manifests = await find(cwd)
+		.name("package.json")
+		.type("f")
+		.maxDepth(3)
+		.prune(function(container) {
+			const relative = path.relative(cwd, container).split(path.sep).join("/");
+
+			return path.basename(container) === ".git" || (relative !== "" && ignorer.ignores(relative));
+		})
+		.exec();
+
+	return manifests.flatMap(function(manifest) {
+		// POSIX-separated so consumers stay consistent on Windows, as git's output was — release globs
+		// (`packages/*`) and build's `dir.split("/")` depend on it.
+		const dir = path.relative(cwd, path.dirname(manifest)).split(path.sep).join("/");
+
+		if (dir === "") {
+			return []; // the repo-root manifest is not a workspace (those one-/two-level globs never matched it)
+		}
+
 		let packageJson: { "name"?: string; "private"?: boolean } = {};
 
 		try {
-			packageJson = JSON.parse(fs.readFileSync(path.join(cwd, manifest), "utf8"));
-		} catch { /* unreadable/invalid manifest → nameless, non-private */ }
+			packageJson = JSON.parse(fs.readFileSync(manifest, "utf8"));
+		} catch { /* present but invalid JSON → nameless, non-private */ }
 
-		return { "dir": path.dirname(manifest), "name": packageJson["name"], "private": packageJson["private"] === true };
-	});
-}
-
-/** A workspace glob (POSIX, `*` spans ONE path segment) → an anchored RegExp; regex metachars are escaped. */
-function globToRegExp(glob: string): RegExp {
-	return new RegExp(`^${glob.replace(/[.+?^${}()|[\]\\]/gu, "\\$&").replace(/\*/gu, "[^/]+")}$`, "u");
-}
-
-/**
- * The non-private workspaces whose directory matches one of `globs` (each `*` spans a single path segment,
- * e.g. `packages/*`). With no globs, every non-private workspace (the historical default). Scoping to a glob
- * naturally excludes packages nested deeper than it — `packages/*` matches `packages/tsval`, never
- * `packages/vscode/extensions/x` — so an app's bundled sub-packages don't get published on their own.
- */
-export async function matchWorkspaces(globs: string[] = [], cwd: string = process.cwd()): Promise<Workspace[]> {
-	const patterns = globs.filter(Boolean).map(globToRegExp);
-
-	return (await findWorkspaces(cwd)).filter((workspace) => !workspace.private && (patterns.length === 0 || patterns.some((pattern) => pattern.test(workspace.dir))));
+		return [{ "dir": dir, "name": packageJson["name"], "private": packageJson["private"] === true }];
+	}).sort((left, right) => left.dir.localeCompare(right.dir));
 }
