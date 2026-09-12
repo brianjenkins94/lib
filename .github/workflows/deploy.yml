@@ -46,14 +46,20 @@
           }
         },
         {
-          # Opt-in: create/promote a GitHub release for each non-private package (util-release decides draft vs
-          # promote from package.json version vs published releases). Runs before the build/publish step so
-          # util-publish can attach tarballs to the freshly-cut releases.
+          # Opt-in: ensure a GitHub release per publishable workspace BEFORE the build/publish step, so
+          # util-publish can attach its freshly-built tarball. util-release keeps a rolling DRAFT tagged
+          # `<workspace>@<version>` (the tag util-publish looks up) for each non-private workspace matching
+          # `workspace-packages` — versioned off the archived `docs/<ws>@latest.tgz` it primes from Pages. The
+          # globs scope to one level, so an app's bundled sub-packages never get a draft (hence never publish).
+          # Empty `workspace-packages` → the single-package `v<version>` release at the repo root instead.
           "if": "${{ inputs.release == 'true' }}",
           "name": "Cut GitHub releases (util-release)",
-          "shell": "bash",
-          "env": { "GH_TOKEN": "${{ github.token }}" },
-          "run": "git ls-files '*/package.json' | while read -r manifest; do [ \"$(jq -r '.private // false' \"$manifest\")\" = true ] && continue; ( cd \"$(dirname \"$manifest\")\" && npx util-release ); done"
+          "env": {
+            "GH_TOKEN": "${{ github.token }}",
+            "WS_GLOBS": "${{ inputs.workspace-packages }}",
+            "GITHUB_REPOSITORY_OWNER": "${{ github.repository_owner }}"
+          },
+          "run": "npx util-release"
         },
         {
           "run": "${{ inputs.run }}",

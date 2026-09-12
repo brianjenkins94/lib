@@ -123,3 +123,20 @@ export async function findWorkspaces(cwd: string = process.cwd()): Promise<Works
 		return { "dir": path.dirname(manifest), "name": packageJson["name"], "private": packageJson["private"] === true };
 	});
 }
+
+/** A workspace glob (POSIX, `*` spans ONE path segment) → an anchored RegExp; regex metachars are escaped. */
+function globToRegExp(glob: string): RegExp {
+	return new RegExp(`^${glob.replace(/[.+?^${}()|[\]\\]/gu, "\\$&").replace(/\*/gu, "[^/]+")}$`, "u");
+}
+
+/**
+ * The non-private workspaces whose directory matches one of `globs` (each `*` spans a single path segment,
+ * e.g. `packages/*`). With no globs, every non-private workspace (the historical default). Scoping to a glob
+ * naturally excludes packages nested deeper than it — `packages/*` matches `packages/tsval`, never
+ * `packages/vscode/extensions/x` — so an app's bundled sub-packages don't get published on their own.
+ */
+export async function matchWorkspaces(globs: string[] = [], cwd: string = process.cwd()): Promise<Workspace[]> {
+	const patterns = globs.filter(Boolean).map(globToRegExp);
+
+	return (await findWorkspaces(cwd)).filter((workspace) => !workspace.private && (patterns.length === 0 || patterns.some((pattern) => pattern.test(workspace.dir))));
+}
