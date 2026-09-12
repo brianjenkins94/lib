@@ -104,9 +104,9 @@ export interface Workspace {
 }
 
 // findWorkspaces' deps, loaded once on first use (import() caches the module; `??=` memoises the unwrap).
-// `find` is dynamic to avoid a static cycle (find imports this module); `ignore` is an on-demand peer dep (as
-// object-scan is in find). Each is assigned right before it's used below, so TS keeps it narrowed (it drops an
-// outer let's narrowing across an await).
+// `find` is dynamic to avoid a static cycle (find imports this module); `ignore` is loaded lazily too, to keep
+// it out of this hot module's static load. Each is assigned right before it's used below, so TS keeps it
+// narrowed (it drops an outer let's narrowing across an await).
 let find: ((root: string) => FileFinder) | undefined;
 let ignore: (() => Ignore) | undefined;
 

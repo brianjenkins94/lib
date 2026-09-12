@@ -7,6 +7,7 @@
     "@antfu/eslint-config": "latest",
     "@eslint/js": "latest",
     "eslint": "latest",
+    "ignore": "latest",
     "typescript-eslint": "latest"
   },
   "peerDependencies": {
@@ -21,7 +22,6 @@
     "googleapis": "latest",
     "http-proxy-3": "latest",
     "hyperformula": "latest",
-    "ignore": "latest",
     "jsonc-parser": "latest",
     "jsonpath-plus": "latest",
     "jsx-async-runtime": "latest",
