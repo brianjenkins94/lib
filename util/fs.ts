@@ -1,7 +1,6 @@
 import type { Abortable } from "node:events";
 import type { OpenMode } from "node:fs";
 import type { FileFinder } from "@brianjenkins94/util/find";
-import type { Ignore } from "ignore";
 import * as fs from "node:fs";
 import * as path from "node:path";
 
@@ -103,12 +102,35 @@ export interface Workspace {
 	"private": boolean;
 }
 
-// findWorkspaces' deps, loaded once on first use (import() caches the module; `??=` memoises the unwrap).
-// `find` is dynamic to avoid a static cycle (find imports this module); `ignore` is loaded lazily too, to keep
-// it out of this hot module's static load. Each is assigned right before it's used below, so TS keeps it
-// narrowed (it drops an outer let's narrowing across an await).
+// `find` is loaded lazily and memoised (`??=`; import() caches the module) so its static import of THIS module
+// doesn't form a cycle. Assigned right before use below, so TS keeps it narrowed (it drops an outer let's
+// narrowing across an await). It has no external deps of its own (object-scan is lazy, NodeFinder-only), which
+// matters because findWorkspaces runs inside postinstall — see the gitignore matcher note below.
 let find: ((root: string) => FileFinder) | undefined;
-let ignore: (() => Ignore) | undefined;
+
+/**
+ * Turn a `.gitignore` into a directory-prune predicate. Deliberately a tiny INLINE matcher rather than the
+ * `ignore` npm package: findWorkspaces runs inside `postinstall` (the install lifecycle, before any dependency
+ * is installed), so it must not import an npm package — the original used `git`, a system binary, for the same
+ * reason. Enough for pruning discovery: a pattern with no slash matches a basename at any depth (git's rule),
+ * one with a slash (or a leading `/`) is anchored to the repo root; `*` spans a segment, `**` spans any.
+ * Negations (`!`) and other edge cases are skipped — conservative (it never un-prunes), fine at this scope.
+ */
+function gitignorePruner(gitignore: string): (relative: string) => boolean {
+	const patterns = gitignore
+		.split("\n")
+		.map((line) => line.trim())
+		.filter((line) => line !== "" && !line.startsWith("#") && !line.startsWith("!"))
+		.map(function(line) {
+			const anchored = line.startsWith("/");
+			const body = line.replace(/^\//u, "").replace(/\/$/u, "");
+			const escaped = body.replace(/[.+?^${}()|[\]\\]/gu, "\\$&").replace(/\*\*/gu, "\0").replace(/\*/gu, "[^/]*").replace(/\0/gu, ".*");
+
+			return new RegExp(anchored || body.includes("/") ? `^${escaped}$` : `(?:^|/)${escaped}$`, "u");
+		});
+
+	return (relative) => patterns.some((pattern) => pattern.test(relative));
+}
 
 /**
  * Discover the repo's workspace packages: `package.json` files one or two directories deep, found by WALKING
@@ -116,7 +138,7 @@ let ignore: (() => Ignore) | undefined;
  * that actually EXIST are returned — a tracked-but-absent manifest (a staged-but-uncommitted deletion, a
  * sparse/partial checkout, a `skip-worktree` file) can never surface as a phantom workspace whose dir a
  * consumer would `cd` into (postinstall) — and there's no `git` dependency, so it works in a tarball or a
- * checkout without git. Gitignore-awareness is KEPT (build output like `dist/`/`docs/` and `node_modules` are
+ * checkout without git. Gitignore-awareness is KEPT (build output like `dist`/`docs` and `node_modules` are
  * pruned) by honouring the repo's own root `.gitignore` in the prune predicate — no hardcoded ignore list;
  * `.git` (the VCS dir, never a workspace) is the one fixed special case. The two-level depth cap matches the
  * historical one- and two-level `package.json` globs (lift it only when a deeper layout exists) and excludes
@@ -126,13 +148,13 @@ let ignore: (() => Ignore) | undefined;
  */
 export async function findWorkspaces(cwd: string = process.cwd()): Promise<Workspace[]> {
 	// The prune list is the repo's own .gitignore, so it tracks whatever the repo already ignores.
-	ignore ??= (await import("ignore")).default;
-
-	const ignorer = ignore();
+	let gitignore = "";
 
 	try {
-		ignorer.add(fs.readFileSync(path.join(cwd, ".gitignore"), "utf8"));
+		gitignore = fs.readFileSync(path.join(cwd, ".gitignore"), "utf8");
 	} catch { /* no root .gitignore → nothing extra to prune */ }
+
+	const ignored = gitignorePruner(gitignore);
 
 	find ??= (await import("@brianjenkins94/util/find")).find;
 
@@ -145,7 +167,7 @@ export async function findWorkspaces(cwd: string = process.cwd()): Promise<Works
 		.prune(function(container) {
 			const relative = path.relative(cwd, container).split(path.sep).join("/");
 
-			return path.basename(container) === ".git" || (relative !== "" && ignorer.ignores(relative));
+			return path.basename(container) === ".git" || (relative !== "" && ignored(relative));
 		})
 		.exec();
 
