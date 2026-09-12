@@ -62,9 +62,13 @@
           "run": "npx util-release"
         },
         {
+          # GH_TOKEN so util-publish's `gh release view <ws>@<version>` can SEE the draft releases the step
+          # above cut — drafts are invisible to unauthenticated gh, so without it every package is skipped as
+          # "no GitHub release exists". GITHUB_REPOSITORY_OWNER scopes the published `@<owner>/<pkg>` name.
           "run": "${{ inputs.run }}",
           "env": {
             "NPM_TOKEN": "${{ secrets.NPM_TOKEN }}",
+            "GH_TOKEN": "${{ github.token }}",
             "GITHUB_REPOSITORY_OWNER": "${{ github.repository_owner }}"
           }
         },
