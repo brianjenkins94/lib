@@ -164,6 +164,14 @@ export class Logger {
 	}
 }
 
+/** The minimum a child needs from its parent: identity, trace, and nesting depth. A local `Span` satisfies it,
+ *  and so does a remote parent reconstructed from an envelope's `traceContext` (see `continueSpan`). */
+export interface SpanRef {
+	readonly "id": string;
+	readonly "traceId": string;
+	readonly "depth": number;
+}
+
 export class Span extends Logger {
 	readonly id = randomHex(8); // W3C span id (64-bit hex)
 	readonly name: string;
@@ -173,7 +181,7 @@ export class Span extends Logger {
 	private readonly startMs = performance.now();
 	private ended = false;
 
-	constructor(name: string, attrs: Attrs = {}, parent?: Span, context: Attrs = attrs) {
+	constructor(name: string, attrs: Attrs = {}, parent?: SpanRef, context: Attrs = attrs) {
 		super(context);
 
 		this.name = name;
@@ -210,6 +218,16 @@ export const log = new Logger();
 
 /** Sugar for a context-bound sub-logger: `logger({ reqId })` === `log.child({ reqId })`. */
 export const logger = (context: Attrs): Logger => log.child(context);
+
+/**
+ * Open a span that CONTINUES a trace started in another context. `remote` is an envelope's `traceContext` (the
+ * sending span's ids); the returned span shares its `traceId` and is parented to it, so an operation that crosses
+ * a context boundary — a debug step dispatched to a worker, a request handed to a service worker — stitches into
+ * one trace instead of starting a fresh root on the far side. Hold the handle and open descendants as usual.
+ */
+export function continueSpan(remote: { "traceId": string; "parentSpanId": string }, name: string, attrs: Attrs = {}): Span {
+	return new Span(name, attrs, { "id": remote.parentSpanId, "traceId": remote.traceId, "depth": 0 }, attrs);
+}
 
 // ── Application output (the stdout counterpart to the stderr logger) ───────────────────────────--
 
