@@ -131,6 +131,17 @@ export class Logger {
 		return new Span(name, attrs, this.hostSpan(), { ...this.context, ...attrs });
 	}
 
+	/**
+	 * Open a span that CONTINUES a trace started in another context. `remote` is an envelope's `traceContext`
+	 * (the sending span's ids); the span shares its `traceId` and is parented to it — so an operation that
+	 * crosses a context boundary (a debug step dispatched to a worker, a request handed to a service worker)
+	 * stitches into one trace instead of a fresh root on the far side. Inherits this logger's bound context
+	 * (e.g. its `source`), exactly like `span`, so the continued span is still attributed to this context.
+	 */
+	continueSpan(remote: { "traceId": string; "parentSpanId": string }, name: string, attrs: Attrs = {}): Span {
+		return new Span(name, attrs, { "id": remote.parentSpanId, "traceId": remote.traceId, "depth": 0 }, { ...this.context, ...attrs });
+	}
+
 	log(level: Level, message: string, attrs?: Attrs): void { this.emit("log", level, message, attrs); }
 	trace(message: string, attrs?: Attrs): void { this.emit("log", "trace", message, attrs); }
 	debug(message: string, attrs?: Attrs): void { this.emit("log", "debug", message, attrs); }
@@ -218,16 +229,6 @@ export const log = new Logger();
 
 /** Sugar for a context-bound sub-logger: `logger({ reqId })` === `log.child({ reqId })`. */
 export const logger = (context: Attrs): Logger => log.child(context);
-
-/**
- * Open a span that CONTINUES a trace started in another context. `remote` is an envelope's `traceContext` (the
- * sending span's ids); the returned span shares its `traceId` and is parented to it, so an operation that crosses
- * a context boundary — a debug step dispatched to a worker, a request handed to a service worker — stitches into
- * one trace instead of starting a fresh root on the far side. Hold the handle and open descendants as usual.
- */
-export function continueSpan(remote: { "traceId": string; "parentSpanId": string }, name: string, attrs: Attrs = {}): Span {
-	return new Span(name, attrs, { "id": remote.parentSpanId, "traceId": remote.traceId, "depth": 0 }, attrs);
-}
 
 // ── Application output (the stdout counterpart to the stderr logger) ───────────────────────────--
 
