@@ -52,6 +52,11 @@ if (isEntry(import.meta)) {
 	const owner: string = config.get("owner");
 	const npmToken: string = config.get("npmToken");
 
+	// The published name is `@<owner>/<pkg>` — but DON'T double-scope a source name that's ALREADY scoped
+	// (a package authored as `@scope/x` publishes as-is). Prepending unconditionally shipped e.g.
+	// `@brianjenkins94/@brianjenkins94/hub`, an invalid npm name. Prepend only when unscoped.
+	const scopeName = (name: string): string => (name.startsWith("@") ? name : `@${owner}/${name}`);
+
 // fs.glob's `**` never entered dot-directories (.github/, .claude/); find does, so the walks below prune them
 // (dot-FILES are already off the table for a `name` glob — `*` doesn't match a leading dot). "." is a root, not hidden.
 	function isHidden(entry: string): boolean {
@@ -282,7 +287,7 @@ if (isEntry(import.meta)) {
 	// peer becomes an optional one (`peerDependencies` + `peerDependenciesMeta.<name>.optional`). That
 	// metadata is what a consumer's Vite dev optimizer reads to stub the dep when it's absent; npm never
 	// installs an optional peer, so nothing is added to the consumer — and nothing is hand-maintained here.
-		const selfName = `@${owner}/${packageJson["name"]}`;
+		const selfName = scopeName(packageJson["name"]);
 		const optionalPeers = [
 			...new Set(Object.entries(files)
 				.filter(([key]) => /\.[cm]?js$/u.test(key))
@@ -341,11 +346,11 @@ if (isEntry(import.meta)) {
 	// Drop `scripts` from the published archive — they're build/dev tooling, and a lifecycle
 		const buildPackageJson = (version) => JSON.stringify(preBuilt ? {
 			...publishable,
-			"name": `@${owner}/${packageJson["name"]}`,
+			"name": scopeName(packageJson["name"]),
 			"version": version
 		} : {
 			...publishable,
-			"name": `@${owner}/${packageJson["name"]}`,
+			"name": scopeName(packageJson["name"]),
 			"exports": Object.fromEntries(Object.keys(files).filter((key) => key !== "package.json" && !key.endsWith(".d.ts")).flatMap((key) => {
 			// Pair each entry with its emitted declaration (if any) so TypeScript consumers get types;
 			// hand-written .mjs/.cjs have no sibling .d.ts and stay a bare target string.
