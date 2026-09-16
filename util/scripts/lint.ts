@@ -1,3 +1,4 @@
+import * as path from "node:path";
 import { isEntry } from "@brianjenkins94/util/env";
 import { juvy } from "@brianjenkins94/util/juvy";
 import { command, run } from "@brianjenkins94/util/juvy/cli";
@@ -20,6 +21,21 @@ export async function lint({ fix = false, patterns = ["."] }: { "fix"?: boolean;
 
 	if (fix) {
 		await ESLint.outputFixes(results);
+	}
+
+	// ONLY errors fail the build (warnings never do — see the exit-code handler), but the stylish formatter
+	// interleaves the two, so a couple of build-breaking errors hide among hundreds of warnings and are murder to
+	// find. Print a compact errors-only digest FIRST — before the full stylish output — so the exact reason for the
+	// failure is at the TOP: it's the first thing you see, and it survives a CI runner truncating a long log from the
+	// end (which can eat the stylish tail, and with it the errors, entirely). Silent when there are no errors.
+	const errors = results.flatMap((result) => result.messages
+		.filter((message) => message.severity === 2)
+		.map((message) => ({ "file": result.filePath, "line": message.line ?? 0, "column": message.column ?? 0, "message": message.message, "ruleId": message.ruleId ?? "parse-error" })));
+
+	if (errors.length > 0) {
+		const lines = errors.map((error) => `  ${path.relative(process.cwd(), error.file) || error.file}:${error.line}:${error.column}  ${error.message}  ${error.ruleId}`);
+
+		process.stdout.write(`✖ ${errors.length} error${errors.length === 1 ? "" : "s"} (only errors fail the build; warnings do not):\n${lines.join("\n")}\n\n`);
 	}
 
 	const formatter = await eslint.loadFormatter("stylish");
