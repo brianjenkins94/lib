@@ -31,25 +31,13 @@
  */
 import { pascalCaseToKebabCase, pascalCaseToScreamingSnakeCase } from "@brianjenkins94/util/text"; // browser-safe (pure string ops)
 import { getRuntime } from "@brianjenkins94/util/env"; // shared runtime detection (env pulls node:path/url — polyfilled at bundle time)
+import { getKeyOfObjectByPath, getOrCreateKeyOfObjectByPath } from "@brianjenkins94/util/object"; // browser-safe (pure object traversal)
 
 // ---------------------------------------------------------------------------------------------------------
-// Helpers — no hand-rolled deep clone: config DATA uses native structuredClone (handles Date/RegExp/Map/Set),
+// Note — no hand-rolled deep clone: config DATA uses native structuredClone (handles Date/RegExp/Map/Set),
 // the schema (which holds format FUNCTIONS) is copied shallowly where mutated and JSON-projected by getSchema.
+// Path access uses getKeyOfObjectByPath (strict: throws on an absent segment) / getOrCreateKeyOfObjectByPath.
 // ---------------------------------------------------------------------------------------------------------
-
-function getByPath(object: any, path: string[]): any {
-	return path.reduce((node, key) => {
-		if (node === null || node === undefined || !Object.prototype.hasOwnProperty.call(node, key)) {
-			throw new TypeError(`cannot read '${key}' of ${JSON.stringify(node)}`);
-		}
-
-		return node[key];
-	}, object);
-}
-
-function getOrCreate(object: any, path: string[]): any {
-	return path.reduce((node, key) => (node[key] ??= {}), object);
-}
 
 // ---------------------------------------------------------------------------------------------------------
 // Built-in formats — each THROWS on a bad value (convict's `assert`, not juvy's old console.assert no-op)
@@ -374,14 +362,14 @@ export function juvy(schema: Schema, options: JuvyOptions = {}): Juvy {
 	}
 
 	const api: Juvy = {
-		get(path) { return structuredClone(getByPath(instance, path.split("."))); },
+		get(path) { return structuredClone(getKeyOfObjectByPath(instance, path.split("."))); },
 		has(path) {
-			try { getByPath(instance, path.split(".")); return true; } catch { return false; }
+			try { getKeyOfObjectByPath(instance, path.split(".")); return true; } catch { return false; }
 		},
 		set(path, value) {
 			const keys = path.split(".");
 			const leaf = keys.pop()!;
-			getOrCreate(instance, keys)[leaf] = coerce(propByPath[path], value);
+			getOrCreateKeyOfObjectByPath(instance, keys)[leaf] = coerce(propByPath[path], value);
 
 			return api;
 		},
@@ -424,7 +412,7 @@ export function juvy(schema: Schema, options: JuvyOptions = {}): Juvy {
 				seen.add(path);
 				let value: unknown;
 
-				try { value = getByPath(instance, path.split(".")); } catch { errors.push(`'${path}' is missing from config`); continue; }
+				try { value = getKeyOfObjectByPath(instance, path.split(".")); } catch { errors.push(`'${path}' is missing from config`); continue; }
 
 				if (prop.nullable && value === null) { continue; }
 
