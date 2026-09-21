@@ -37,6 +37,7 @@ const REDLINE = [
 	/^fs:write:\/(etc|bin|sbin|usr|boot|dev|System|Library)\//,       // system dirs
 	/^exec:.*(dd|mkfs|fdisk|shutdown|reboot|halt|sh|bash|zsh|curl|wget|nc|ncat|rm)(\.\w+)?$/, // dangerous bins
 	/^net:\*/,                                                        // indeterminate host
+	/^net\.(ws|webrtc):\*/,                                           // indeterminate WebSocket/WebRTC endpoint
 	/^eval\b/,                                                        // dynamic code
 	// The deployment's own policy seam — comma-separated regexes, appended to the defaults.
 	...(ENV.BERNARD ?? "").split(",").map((s) => s.trim()).filter(Boolean).map((s) => new RegExp(s))
