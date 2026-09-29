@@ -372,7 +372,7 @@ if (isEntry(import.meta)) {
 			})),
 			"files": Object.keys(files).filter((key) => key !== "package.json"),
 			...(optionalPeers.length > 0 ? {
-				"peerDependencies": { ...publishable["peerDependencies"], ...Object.fromEntries(optionalPeers.map((name) => [name, "latest"])) },
+				"peerDependencies": { ...publishable["peerDependencies"], ...Object.fromEntries(optionalPeers.map((name) => [name, "*"])) },
 				"peerDependenciesMeta": { ...publishable["peerDependenciesMeta"], ...Object.fromEntries(optionalPeers.map((name) => [name, { "optional": true }])) }
 			} : {}),
 		// bin: preserve a package's own `bin` (e.g. silo's root `cli.js` → `silo`), else derive
