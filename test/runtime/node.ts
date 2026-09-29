@@ -1,9 +1,13 @@
 import { spawn } from "node:child_process";
 import * as path from "node:path";
+import { pathToFileURL } from "node:url";
 import { __root } from "../../util/env";
 import * as fs from "../../util/fs";
 
 const packages = process.argv.slice(2);
+
+// Resolve util's imports as if util were installed on its own, not inside this repo (see isolate.mjs).
+const isolate = pathToFileURL(path.join(__root, "test", "runtime", "isolate.mjs")).href;
 
 const items = packages.length > 0 ? packages : fs.glob(path.join(__root, "util", "**", "*.ts"), {
 	"exclude": function(fileName) {
@@ -14,7 +18,7 @@ const items = packages.length > 0 ? packages : fs.glob(path.join(__root, "util",
 for await (const item of items) {
 	const command = packages.length > 0
 		? ["node", "--input-type=module", "--eval", `import "${item}";`]
-		: ["npx", "tsx", item];
+		: ["npx", "tsx", "--import", isolate, item];
 
 	console.log(">", command.join(" "));
 	let process = spawn(command[0], command.slice(1), {
