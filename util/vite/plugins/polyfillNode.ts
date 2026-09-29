@@ -59,7 +59,9 @@ export function polyfillNode(builtins = builtinModules): PluginOption {
 	const polyfill = builtins.filter(isFunctional);
 	const stub = builtins.filter((builtin) => !isFunctional(builtin));
 
-	const filter = new RegExp(`^(?:${NAMESPACE})?(${stub.join("|")})(/.*)?$`, "u");
+	// The optional `node:` prefix matters: `import … from "node:fs"` must reach the stub too — without it, Vite claims
+	// the id as an empty "browser external" (no named exports), so `readFileSync` etc. are undefined instead of no-ops.
+	const filter = new RegExp(`^(?:${NAMESPACE})?(?:node:)?(${stub.join("|")})(/.*)?$`, "u");
 
 	return [
 		externalOptionalDeps(),
@@ -70,7 +72,7 @@ export function polyfillNode(builtins = builtinModules): PluginOption {
 			"resolveId": function(id) {
 				const [_, match] = filter.exec(id) ?? [];
 
-				if (match !== undefined && stub.some((builtin) => id.startsWith(builtin))) {
+				if (match !== undefined && stub.some((builtin) => id.replace(/^node:/u, "").startsWith(builtin))) {
 					return NAMESPACE + id;
 				}
 			},
@@ -79,7 +81,8 @@ export function polyfillNode(builtins = builtinModules): PluginOption {
 
 				if (match !== undefined) {
 					return Object.entries(await import(match)).map(function([key, value]) {
-						return `export ${key === "default" ? "default" : `const ${key} =`} ${typeof value === "function" ? "() => {}" : undefined};`;
+						// An object-valued default (e.g. `import fs from "node:fs"`) keeps its members as no-ops too, not `undefined`.
+						return `export ${key === "default" ? "default" : `const ${key} =`} ${typeof value === "function" ? "() => {}" : key === "default" && typeof value === "object" && value !== null ? `{ ${Object.entries(value).map(([member, inner]) => `${JSON.stringify(member)}: ${typeof inner === "function" ? "() => {}" : undefined}`).join(", ")} }` : undefined};`;
 					}).join("\n");
 				}
 			}
@@ -161,7 +164,8 @@ export function polyfillNodeEsbuild(builtins = builtinModules): EsbuildPlugin {
 				// exports as no-ops, so downstream named imports link.
 				const real = await import(args.path).catch(() => ({}));
 				const contents = Object.entries(real).map(function([key, value]) {
-					return `export ${key === "default" ? "default" : `const ${key} =`} ${typeof value === "function" ? "() => {}" : "undefined"};`;
+					// An object-valued default (e.g. `import fs from "node:fs"`) keeps its members as no-ops too, not `undefined`.
+					return `export ${key === "default" ? "default" : `const ${key} =`} ${typeof value === "function" ? "() => {}" : key === "default" && typeof value === "object" && value !== null ? `{ ${Object.entries(value).map(([member, inner]) => `${JSON.stringify(member)}: ${typeof inner === "function" ? "() => {}" : "undefined"}`).join(", ")} }` : "undefined"};`;
 				}).join("\n");
 
 				return { "contents": contents || "export default {};", "loader": "js" };
@@ -225,7 +229,8 @@ export function polyfillNodeRolldown(builtins = builtinModules): RolldownPlugin 
 			const real = await import(id.slice(STUB.length)).catch(() => ({}));
 
 			return Object.entries(real).map(function([key, value]) {
-				return `export ${key === "default" ? "default" : `const ${key} =`} ${typeof value === "function" ? "() => {}" : "undefined"};`;
+				// An object-valued default (e.g. `import fs from "node:fs"`) keeps its members as no-ops too, not `undefined`.
+				return `export ${key === "default" ? "default" : `const ${key} =`} ${typeof value === "function" ? "() => {}" : key === "default" && typeof value === "object" && value !== null ? `{ ${Object.entries(value).map(([member, inner]) => `${JSON.stringify(member)}: ${typeof inner === "function" ? "() => {}" : "undefined"}`).join(", ")} }` : "undefined"};`;
 			}).join("\n") || "export default {};";
 		},
 		"transform": function(code, id) {
