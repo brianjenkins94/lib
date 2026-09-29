@@ -57,8 +57,9 @@ for await (const item of items) {
 			// Then install with pnpm, like the install that built util/node_modules (root postinstall: `pnpm
 			// --ignore-workspace install` per package; npm writing into a pnpm tree can crash reading its layout). pnpm's
 			// autoInstallPeers installs the project's own missing peer; everything already present is only relinked, and
-			// --ignore-scripts skips re-running every dependency's build.
-			const install = ["--ignore-workspace", "install", "--ignore-scripts"];
+			// --ignore-scripts skips re-running every dependency's build. --no-frozen-lockfile: in CI pnpm defaults to a
+			// frozen lockfile, which refuses exactly the manifest change we just made (ERR_PNPM_OUTDATED_LOCKFILE).
+			const install = ["--ignore-workspace", "install", "--ignore-scripts", "--no-frozen-lockfile"];
 
 			console.log(">", ["pnpm", ...install].join(" "), `(after adding peer ${packageName})`);
 			const subprocess = spawn("pnpm", install, {
