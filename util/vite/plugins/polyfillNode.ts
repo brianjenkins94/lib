@@ -55,6 +55,73 @@ export function externalOptionalDeps(): PluginOption {
 	} as PluginOption;
 }
 
+/**
+ * vite-plugin-node-polyfills injects bare imports of its OWN shims (`vite-plugin-node-polyfills/shims/buffer`, …) wherever
+ * a module reads `Buffer`/`global`/`process` as a free global, and they resolve from the INJECTED module's real path. A
+ * consumer that only has the plugin through this package (a strict pnpm install doesn't hoist it) can't resolve them
+ * from its own files or a linked `file:` package. Resolve them from here, where the plugin is a declared dependency.
+ * BUILD only: Vite's dep optimizer rejects absolute shim paths as entries ("cannot be external"), and in dev the
+ * optimizer bundles the shims itself.
+ */
+function nodePolyfillShims(): PluginOption {
+	const require = createRequire(import.meta.url);
+
+	return {
+		"name": "node-polyfill-shims",
+		"apply": "build",
+		"config": () => ({
+			"resolve": {
+				"alias": Object.fromEntries(["buffer", "global", "process"].map(function(name) {
+					const id = `vite-plugin-node-polyfills/shims/${name}`;
+
+					return [id, require.resolve(id)];
+				}))
+			}
+		})
+	} as PluginOption;
+}
+
+const SUBPATH = "node-subpath:";
+
+/**
+ * Node's builtin subpaths (`node:util/types`, `node:assert/strict`, `node:path/posix`, …) of a polyfilled builtin → the
+ * matching property of the parent's polyfill (`util.types`, `assert.strict`, `path.posix`), with named exports mirrored
+ * from real Node's module at build time; empty where the polyfill lacks it. vite-plugin-node-polyfills aliases `util`
+ * etc. by PREFIX, so without this `util/types` becomes a file the polyfill doesn't have. Aliased from a `config` hook
+ * placed AFTER nodePolyfills(): aliases outrank resolveId, and a later config hook's aliases are merged in FRONT.
+ * Only real Node subpaths are matched, so a package's own subpath (`process/browser`) is left alone.
+ */
+function nodeBuiltinSubpaths(polyfill: string[]): PluginOption[] {
+	const subpaths = builtinModules.filter((id) => id.includes("/") && !id.startsWith("node:") && polyfill.includes(id.split("/")[0]) && !isFunctional(id));
+
+	if (subpaths.length === 0) {
+		return [];
+	}
+
+	return [{
+		"name": "node-builtin-subpaths",
+		"config": () => ({
+			"resolve": { "alias": [{ "find": new RegExp(`^(?:node:)?(${subpaths.join("|")})$`, "u"), "replacement": SUBPATH + "$1" }] }
+		}),
+		"resolveId": (id) => (id.startsWith(SUBPATH) ? "\0" + id : undefined),
+		"load": async function(id) {
+			if (!id.startsWith("\0" + SUBPATH)) {
+				return undefined;
+			}
+
+			const subpath = id.slice(SUBPATH.length + 1);
+			const [parent, ...rest] = subpath.split("/");
+			let names: string[] = [];
+
+			try {
+				names = Object.keys(await import(`node:${subpath}`) as Record<string, unknown>).filter((name) => name !== "default" && /^[A-Za-z_$][\w$]*$/u.test(name));
+			} catch { /* not importable here — default export only */ }
+
+			return `import parent from ${JSON.stringify(parent)};\nconst sub = (parent && parent[${JSON.stringify(rest.join("/"))}]) || {};\nexport default sub;\n${names.map((name) => `export const ${name} = sub[${JSON.stringify(name)}];`).join("\n")}\n`;
+		}
+	} as PluginOption];
+}
+
 export function polyfillNode(builtins = builtinModules): PluginOption {
 	const polyfill = builtins.filter(isFunctional);
 	const stub = builtins.filter((builtin) => !isFunctional(builtin));
@@ -65,7 +132,7 @@ export function polyfillNode(builtins = builtinModules): PluginOption {
 
 	return [
 		externalOptionalDeps(),
-		...(polyfill.length > 0 ? nodePolyfills({ "include": polyfill, "protocolImports": true }) : []),
+		...(polyfill.length > 0 ? [...nodePolyfills({ "include": polyfill, "protocolImports": true }), nodePolyfillShims(), ...nodeBuiltinSubpaths(polyfill)] : []),
 		...(stub.length > 0 ? [{
 			"name": "node-stdlib-browser-alias",
 			"enforce": "pre",
