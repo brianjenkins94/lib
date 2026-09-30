@@ -16,6 +16,8 @@ const errors = {
 	"style/no-tabs": ["error", { "allowIndentationTabs": true }],
 	"node/prefer-global/buffer": ["error", "always"], // prefer the global `Buffer` over importing it — flags imports, not global use
 	"node/prefer-global/process": ["error", "always"], // same for `process` — prefer the global, flag imports
+	// node:test's test/it/describe/suite return promises the runner itself tracks — awaiting them is not the idiom.
+	"ts/no-floating-promises": ["error", { "allowForKnownSafeCalls": [{ "from": "package", "name": ["test", "it", "describe", "suite"], "package": "node:test" }] }],
 	"ts/no-misused-promises": ["error", { "checksConditionals": true, "checksSpreads": true, "checksVoidReturn": false }], // keep the real-bug checks (promise-in-conditional = forgotten await; spread-promise) loud; drop void-return (unavoidable async handlers; the one real case — async Promise executor — is covered by no-async-promise-executor)
 	// Brian imports node:path / node:url as `* as path` / `* as url` (namespace) and calls `path.join`, `url.fileURLToPath`.
 	// extendDefaultStyles:false drops unicorn's built-in opinions (it wants `default` for path). NOT auto-fixable — flags named imports, convert by hand.
@@ -133,6 +135,7 @@ const unsure = {
 const disabled = {
 	// rules we've turned off
 	"style/max-len": "off", // line length is a judgment call, not a hard limit — and tabs make the column math lie
+	"test/no-import-node-test": "off", // tests run on node:test — no runner dependency. Its autofix rewrites the imports to vitest, which isn't installed: that's how war2's whole suite silently stopped loading (a "Linting" commit)
 	"jsonc/sort-keys": "off", // like alphabetized keys in principle, but if it ever happens it should be a separate deliberate pass
 	"sort-imports": "off", // TWO import sorters can't coexist — core sort-imports and antfu's perfectionist/sort-imports disagree on order and undo each other every --fix pass (circular fixes → non-deterministic import order on save). Defer to perfectionist (antfu's choice; the refill re-added this core one on top)
 	"no-duplicate-imports": "off", // same story as sort-imports: core no-duplicate-imports isn't type-aware, so it flags a separate `import type {}` + `import {}` from one module — UNFIXABLE alongside consistent-type-imports, which auto-splits a merged inline-type import right back (the two rules undo each other every --fix). antfu's import/no-duplicates already catches REAL duplicates type-awarely AND allows the type+value split. Defer to it; the refill re-added this core one on top
