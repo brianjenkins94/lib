@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import * as path from "node:path";
 
 /**
- * Smoke-test each freshly-published package against its LIVE GitHub Pages tarball: install it into a throwaway
+ * Smoke-test each freshly-published package against its LIVE `@prerelease` Pages tarball (this run's build): install it into a throwaway
  * directory, then import every non-"." export to prove the published entrypoints resolve and load.
  *
  * Install with pnpm, not npm: pnpm is what consumers actually use, its auto-install-peers pulls the optional
@@ -20,7 +20,7 @@ const repo = (process.env["GITHUB_REPOSITORY"] ?? "").split("/").slice(1).join("
 
 for (const pkg of packages) {
 	const scoped = `@${owner}/${pkg}`;
-	const url = `https://${owner}.github.io/${repo}/${pkg}@latest.tgz`;
+	const url = `https://${owner}.github.io/${repo}/${pkg}@prerelease.tgz`;
 
 	const directory = mkdtempSync(path.join(tmpdir(), `smoke-${pkg.replace(/[\\/]/gu, "-")}-`));
 

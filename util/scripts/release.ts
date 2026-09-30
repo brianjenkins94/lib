@@ -184,6 +184,15 @@ export interface Decision {
 	"releases": Release[];
 }
 
+/** The series' highest PUBLISHED release tag as of `decision` (before its own promote), or undefined before any. */
+export function latestPublished(decision: Decision): string | undefined {
+	const published = decision.releases
+		.filter((release) => !release.isDraft && release.tagName.startsWith(decision.prefix) && parse(release.tagName.slice(decision.prefix.length)) !== null)
+		.sort((left, right) => compare(parse(left.tagName.slice(decision.prefix.length)) ?? [0, 0, 0], parse(right.tagName.slice(decision.prefix.length)) ?? [0, 0, 0]));
+
+	return published.at(-1)?.tagName;
+}
+
 /** The tag prefix of `workspace`'s release series: `v` for the repo root, `<workspace>@` for any other. */
 export function tagPrefix(workspace: string): string {
 	return workspace === "." ? "v" : `${workspace}@`;

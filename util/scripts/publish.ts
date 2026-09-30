@@ -1,7 +1,8 @@
+import type { Decision } from "./release";
 import { builtinModules } from "node:module";
 import * as os from "node:os";
 import * as path from "node:path";
-import { createGunzip, createGzip } from "node:zlib";
+import { createGzip } from "node:zlib";
 import { mapAsync } from "@brianjenkins94/util/array";
 import { isCI, isEntry } from "@brianjenkins94/util/env";
 import { exec } from "@brianjenkins94/util/exec";
@@ -14,7 +15,7 @@ import { externalSpecifiers, packageName } from "@brianjenkins94/util/vite/exter
 import tarStream from "tar-stream";
 import * as vite from "vite";
 import { build } from "./build";
-import { decide, syncRelease } from "./release";
+import { decide, gh, latestPublished, syncRelease, tagPrefix } from "./release";
 
 // util-publish runs in whatever repo invokes it (silo, lib, …) — the root is the cwd, not util's dir.
 const __root = process.cwd();
@@ -31,6 +32,70 @@ const config = juvy({
 	"npmToken": { "format": String, "default": "", "env": "NPM_TOKEN", "sensitive": true, "doc": "npm publish token ($NPM_TOKEN); empty → GitHub-Pages tarball only, no npm publish." },
 	"release": { "format": String, "default": "", "env": "RELEASE_WORKSPACES", "doc": "Workspaces to release in CI, as comma/space-separated globs (`*` spans one path segment, e.g. `packages/*`; `.` is the repo root) ($RELEASE_WORKSPACES). In CI, only these publish." }
 });
+
+/** One released package on the generated Pages index. */
+interface IndexEntry {
+	"workspace": string;
+	"name": string;
+	"description"?: string;
+	"decision": Decision;
+	/** The tag `@latest` serves, or undefined before the first release (then it serves main). */
+	"released"?: string;
+}
+
+const escapeHtml = (text: string): string => text.replace(/[&<>"]/gu, (character) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "\"": "&quot;" })[character] ?? character);
+
+/**
+ * The generated Pages index for a site with no page of its own: per released package, its current release
+ * (`@latest`), its prerelease (`@prerelease`, main), and every version on GitHub Releases.
+ */
+function indexPage(owner: string, repo: string, entries: IndexEntry[]): string {
+	const releases = `https://github.com/${owner}/${repo}/releases`;
+	const packages = [...entries].sort((left, right) => (left.workspace < right.workspace ? -1 : 1)).map(function({ workspace, name, description, decision, released }) {
+		const current = released === undefined
+			? "none yet &mdash; tracks main"
+			: `<a href="${releases}/tag/${encodeURIComponent(released)}"><code>${escapeHtml(released.slice(tagPrefix(workspace).length))}</code></a>`;
+
+		return `
+	<h2><code>${escapeHtml(name)}</code></h2>${description === undefined ? "" : `
+	<p class="muted">${escapeHtml(description)}</p>`}
+	<ul>
+		<li><a href="${workspace}@latest.tgz">Current release</a> &mdash; ${current}</li>
+		<li><a href="${workspace}@prerelease.tgz">Prerelease (latest from main)</a> &mdash; <code>${escapeHtml(decision.version)}</code></li>
+	</ul>
+	<p class="muted"><code>pnpm add https://${owner}.github.io/${repo}/${workspace}@latest.tgz</code></p>`;
+	}).join("\n");
+
+	return `<!DOCTYPE html>
+<html lang="en">
+<head>
+	<meta charset="utf-8">
+	<meta name="viewport" content="width=device-width, initial-scale=1">
+	<title>${escapeHtml(repo)}</title>
+	<style>
+		body { font-family: system-ui, -apple-system, sans-serif; max-width: 42rem; margin: 3rem auto; padding: 0 1rem; line-height: 1.55; color: #1a1a1a; }
+		h1 { margin-bottom: 0.25rem; }
+		h2 { margin-top: 2rem; font-size: 1.05rem; }
+		ul { padding-left: 1.25rem; }
+		li { margin: 0.35rem 0; }
+		a { color: #0645ad; }
+		code { background: #f2f2f2; padding: 0.1rem 0.3rem; border-radius: 3px; }
+		.muted { color: #666; font-size: 0.9rem; }
+	</style>
+</head>
+<body>
+	<h1>${escapeHtml(repo)}</h1>
+	<p class="muted">Packages published from <a href="https://github.com/${owner}/${repo}">${escapeHtml(owner)}/${escapeHtml(repo)}</a>.</p>
+${packages}
+
+	<h2>All versions</h2>
+	<ul>
+		<li><a href="${releases}">GitHub Releases</a> &mdash; every version, date-stamped downloads</li>
+	</ul>
+</body>
+</html>
+`;
+}
 
 // publish.ts is the `util-publish` CLI. Importing the module (e.g. the publish smoke-test that loads every
 // export) must be a no-op and must NOT eagerly parse/validate required CLI inputs — so gate the whole run on
@@ -158,6 +223,9 @@ if (isEntry(import.meta)) {
 	if (!buildResults.some(([workspace]) => workspace !== "." && isPublishable(workspace)) && isPublishable(".")) {
 		workspaces.push(".");
 	}
+
+	const pending: Promise<void>[] = [];
+	const indexEntries: IndexEntry[] = [];
 
 // TODO: Parallelize
 	for (const workspace of workspaces) {
@@ -307,56 +375,6 @@ if (isEntry(import.meta)) {
 			.filter((name) => publishable["peerDependencies"]?.[name] === undefined)
 			.sort();
 
-		const tarFile = path.join(distDirectory, workspace + "@latest.tgz");
-
-	// CI: the last-published tarball comes from Pages (each deploy replaces the site) — the change baseline.
-		if (isCI) {
-			const response = await fetch(`https://${owner}.github.io/${process.env["GITHUB_REPOSITORY"].split("/")[1]}/${workspace}@latest.tgz`);
-
-			if (response.ok) {
-				await fs.mkdir(path.dirname(tarFile), { "recursive": true });
-				await fs.writeFile(tarFile, Buffer.from(await response.arrayBuffer()));
-			}
-		}
-
-		let archiveFiles: Record<string, Buffer> | undefined;
-
-		if (fs.existsSync(tarFile)) {
-			archiveFiles = await new Promise(function(resolve, reject) {
-				const extract = tarStream.extract();
-
-				const input = fs.createReadStream(tarFile);
-
-				const files: Record<string, Buffer> = {};
-
-				extract.on("entry", function(header, stream, next) {
-					const chunks = [];
-
-					stream.on("data", function(chunk) {
-						chunks.push(chunk);
-					});
-
-					stream.on("end", function() {
-						if (path.resolve(path.dirname(tarFile), header.name).startsWith(path.dirname(tarFile))) {
-							files[header.name.substring("package/".length)] = Buffer.concat(chunks);
-						}
-
-						next();
-					});
-
-					stream.resume();
-				});
-
-				extract.on("finish", function() {
-					resolve(files);
-				});
-
-				input.pipe(createGunzip()).pipe(extract);
-			});
-
-			span.info("archiveVersion", { "version": JSON.parse(archiveFiles["package.json"]?.toString() ?? "{}")["version"] });
-		}
-
 	// Drop `scripts` from the published archive — they're build/dev tooling, and a lifecycle
 		const buildPackageJson = (version) => JSON.stringify(preBuilt ? {
 			...publishable,
@@ -404,19 +422,13 @@ if (isEntry(import.meta)) {
 		}, undefined, 2);
 
 	// CI: the release this build belongs to — its draft (the next version) or a promote (package.json bumped).
-	// The tarball carries that version, so `@latest` always names the release it will become.
 		const release = isCI ? await decide({ "workspace": workspace, "root": __root }) : undefined;
 		const version = release?.version ?? packageJson["version"] ?? "0.0.0";
 
 		files["package.json"] = Buffer.from(buildPackageJson(version));
 
-		const changed = !(archiveFiles && Object.keys(files).length === Object.keys(archiveFiles).length && Object.entries(files).every(([key, value]) => archiveFiles[key] !== undefined && value.equals(archiveFiles[key])));
-
 		if (release !== undefined) {
-			span.info("Release", { "release": release.tag, "mode": release.mode, "changed": changed });
-		} else if (!changed) {
-			span.info("No changes - skipping");
-			continue;
+			span.info("Release", { "release": release.tag, "mode": release.mode });
 		}
 
 	// Reproducible bytes (sorted entries, a fixed mtime — npm's own), so an unchanged package re-packs to the
@@ -433,49 +445,73 @@ if (isEntry(import.meta)) {
 
 		await fs.mkdir(outputDirectory, { "recursive": true });
 
-		const tarPath = path.join(outputDirectory, path.basename(workspace) + "@" + version + ".tgz");
+	// Two Pages channels in CI, like a repo's `/` vs `/prerelease/`: `@prerelease` is this run's build from main
+	// (at the draft's version), `@latest` the newest PUBLISHED release's tarball — until the first release, main.
+	// Locally there are no channels: the tarball is written at its own version.
+		const channel = (name: string): string => path.join(outputDirectory, path.basename(workspace) + "@" + name + ".tgz");
+		const tarPath = channel(release === undefined ? version : "prerelease");
 		const writeStream = fs.createWriteStream(tarPath);
 
 		span.info("Writing tar", { "path": tarPath });
 
-		writeStream.on("finish", async function() {
-			if (isCI && changed) {
-				await fs.copyFile(tarPath, path.join(outputDirectory, path.basename(workspace) + "@latest.tgz"));
-				span.info("Copied to latest");
-			}
+		pending.push(new Promise<void>(function(resolve) {
+			writeStream.on("finish", async function() {
+			// Every run, the tarball rides its release (canonical `<name>.tgz` on the draft — re-uploaded only when
+			// its bytes change — and date-stamped on a promote, which is published last), then `@latest` is staged.
+			// A failure fails the run via exitCode (like a build failure) rather than stranding the other packages.
+				if (release !== undefined) {
+					const base = String(packageJson["name"]).split("/").at(-1);
+					const released = release.mode === "promote" ? release.tag : latestPublished(release);
 
-		// Every run, the tarball rides its release (canonical `<name>.tgz` on the draft — re-uploaded only when its
-		// bytes change — and date-stamped on a promote, which is published last). A failure fails the run via
-		// exitCode (like a build failure) rather than stranding the other packages' in-flight writes.
-			if (release !== undefined) {
-				try {
-					await syncRelease(release, [{ "built": tarPath, "base": String(packageJson["name"]).split("/").at(-1), "ext": "tgz" }]);
-				} catch (error) {
-					console.error(`❌ ${workspace}: syncing release ${release.tag} failed: ${String(error)}`);
-					process.exitCode = 1;
+					try {
+						await syncRelease(release, [{ "built": tarPath, "base": base, "ext": "tgz" }]);
+
+						if (released === undefined || released === release.tag) {
+							await fs.copyFile(tarPath, channel("latest"));
+						} else {
+							await gh(["release", "download", released, "--pattern", `${base}.*.tgz`, "--output", channel("latest"), "--clobber"]);
+						}
+
+						span.info("Staged latest", { "release": released ?? "none (main)" });
+					} catch (error) {
+						console.error(`❌ ${workspace}: syncing release ${release.tag} failed: ${String(error)}`);
+						process.exitCode = 1;
+					}
+
+					indexEntries.push({ "workspace": workspace, "name": scopeName(packageJson["name"]), "description": packageJson["description"], "decision": release, "released": released });
 				}
-			}
 
-		// Also publish to the npm registry when a publishing token is present (so `npx @owner/pkg` works).
-		// The GitHub-Pages tarball above is the default channel; npm is additive and opt-in via the token.
-		// Auth is passed through the env so no .npmrc is required; the tarball's own publishConfig (access,
-		// provenance) is honored.
-			if (npmToken !== "" && changed) {
-			// exec auto-shells `npm` (a .cmd shim) on Windows — the site that previously lacked shell:true.
-				await exec("npm", ["publish", tarPath, "--access", "public"], {
-					"stdio": "inherit",
-					"env": { ...process.env, "npm_config_//registry.npmjs.org/:_authToken": npmToken }
-				});
-			}
-		});
+			// Also publish a released version to the npm registry when a publishing token is present (so
+			// `npx @owner/pkg` works). The GitHub-Pages tarballs above are the default channel; npm is additive and
+			// opt-in via the token. Auth is passed through the env so no .npmrc is required; the tarball's own
+			// publishConfig (access, provenance) is honored.
+				if (npmToken !== "" && release?.mode === "promote") {
+				// exec auto-shells `npm` (a .cmd shim) on Windows — the site that previously lacked shell:true.
+					await exec("npm", ["publish", tarPath, "--access", "public"], {
+						"stdio": "inherit",
+						"env": { ...process.env, "npm_config_//registry.npmjs.org/:_authToken": npmToken }
+					});
+				}
+
+				resolve();
+			});
+		}));
 
 		pack.pipe(createGzip()).pipe(writeStream);
 	}
 
-// Any build failure fails the run — but via `exitCode`, NOT `process.exit()`: the successful packages'
-// tarball writes / npm-publishes are still in flight (fire-and-forget streams above), and a hard exit
-// would truncate them. Setting the code lets the event loop drain (successes finish) then exits non-zero,
-// which publish.sh captures and propagates AFTER promoting those successes.
+	await Promise.all(pending);
+
+// A Pages site with no page of its own (a package-only repo like lib) gets a generated index of its packages.
+	const indexPath = path.join(distDirectory, "index.html");
+
+	if (isCI && indexEntries.length > 0 && !fs.existsSync(indexPath)) {
+		await fs.writeFile(indexPath, indexPage(owner, process.env["GITHUB_REPOSITORY"].split("/")[1], indexEntries));
+		console.log(`Generated ${path.relative(__root, indexPath)}`);
+	}
+
+// Any build failure fails the run — but via `exitCode`, NOT `process.exit()`, so every successful package
+// still ships before the run exits non-zero.
 	if (buildFailures.length > 0) {
 		console.error(`❌ ${buildFailures.length} package(s) failed to build: ${buildFailures.join(", ")}`);
 		process.exitCode = 1;
