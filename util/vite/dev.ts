@@ -135,10 +135,22 @@ export async function bootstrapOrRun(metaUrl: string, root: string, plugins: Plu
 
 /** Serve one package directory in dev (Vite middleware + manual HTML, since
  *  getViteDevServer uses appType:"custom"). */
-export async function serve(appRoot: string, port = 5173): Promise<void> {
-	const vite = await getViteDevServer(appRoot);
+/** A running `serve()`: where it listens, and how to stop it. */
+export interface DevServer {
+	"url": string;
+	"port": number;
+	/** Stop listening — and, by default, the shared Vite dev server too (its watchers keep a process alive: a test that
+	 *  owns the server stops it all; pass `{ vite: false }` if something else in the process still uses it). */
+	"close": (options?: { "vite"?: boolean }) => Promise<void>;
+}
 
-	http.createServer((req, res) => {
+/**
+ * Serve `appRoot` (its HTML pages and what they load) with the shared Vite dev server on `port` (0: any free port).
+ * Resolves once it's listening, with where and how to stop it — so a script or a test can own the server.
+ */
+export async function serve(appRoot: string, port = 5173): Promise<DevServer> {
+	const vite = await getViteDevServer(appRoot);
+	const server = http.createServer((req, res) => {
 		vite.middlewares(req, res, async () => {
 			try {
 				const urlPath = (req.url ?? "/").split("?")[0];
@@ -155,7 +167,30 @@ export async function serve(appRoot: string, port = 5173): Promise<void> {
 				res.end(String((err as Error)?.stack ?? err));
 			}
 		});
-	}).listen(port, () => { log.info(`${path.basename(appRoot)} → http://localhost:${port}/`); });
+	});
+
+	await new Promise<void>((resolve, reject) => {
+		server.once("error", reject);
+		server.listen(port, () => { resolve(); });
+	});
+
+	const bound = (server.address() as net.AddressInfo).port;
+	const url = `http://localhost:${bound}/`;
+
+	log.info(`${path.basename(appRoot)} → ${url}`);
+
+	return {
+		"url": url,
+		"port": bound,
+		"close": async ({ "vite": closeVite = true } = {}) => {
+			await new Promise<void>((resolve) => { server.close(() => { resolve(); }); });
+
+			if (closeVite) {
+				delete shared[SERVER];
+				await vite.close();
+			}
+		}
+	};
 }
 
 /** An Express view engine callback. */
