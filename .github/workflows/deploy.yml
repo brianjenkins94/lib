@@ -2,9 +2,8 @@
   "name": "deploy",
   # Reusable Pages-deploy workflow (called via `uses:` from a repo's own cd). The COMMON app-deploy shape:
   # checkout → shared setup → a caller-supplied build/publish command → pages-deploy. The caller owns the
-  # TRIGGER (push, or workflow_run after ci + the success gate); this owns the steps. `release: true` opts into
-  # a SIMPLE per-package util-release; repos needing bespoke release logic (lib, partner-api-docs — per-package
-  # matrices, AI notes) keep their own cd instead of calling this.
+  # TRIGGER (push, or workflow_run after ci + the success gate); this owns the steps. `release` names the
+  # workspaces util-publish releases (see util/scripts/release.ts).
   "on": {
     "workflow_call": {
       "inputs": {
@@ -13,7 +12,7 @@
         "workspace-packages": { "type": "string", "required": false, "default": "", "description": "Forwarded to the setup action: comma-separated globs to install as an ephemeral pnpm workspace (link sibling packages in CI)." },
         "strict-dep-builds": { "type": "string", "required": false, "default": "false", "description": "Forwarded to the setup action." },
         "node-version": { "type": "string", "required": false, "default": "lts/*", "description": "Forwarded to the setup action." },
-        "release": { "type": "string", "required": false, "default": "false", "description": "When \"true\", cut/promote a GitHub release per non-private package (util-release) before the run step; the caller must grant contents: write." }
+        "release": { "type": "string", "required": false, "default": "", "description": "Comma-separated globs of the workspaces util-publish releases (e.g. `packages/*,components/*`; `.` is the repo root): each non-private match gets its own GitHub release series, with its tarball attached — and in CI, only these publish. The caller must grant contents: write." }
       },
       "secrets": {
         "NPM_TOKEN": { "required": false }
@@ -21,8 +20,8 @@
     }
   },
   # pages + id-token for the Pages deploy (id-token also carries npm provenance); contents:write lets the
-  # opt-in `release` step cut GitHub releases. A caller's token is the INTERSECTION of its own grant and this
-  # block, so a repo that doesn't set `release: true` (and grants only contents:read) is unaffected.
+  # `release` workspaces' GitHub releases be cut. A caller's token is the INTERSECTION of its own grant and this
+  # block, so a repo that sets no `release` (and grants only contents:read) is unaffected.
   "permissions": {
     "contents": "write",
     "pages": "write",
@@ -46,32 +45,14 @@
           }
         },
         {
-          # Opt-in: ensure a GitHub release per publishable workspace BEFORE the build/publish step, so
-          # util-publish can attach its freshly-built tarball. util-release keeps ONE DRAFT tagged
-          # `<workspace>@<version>` (the tag util-publish looks up) for each non-private workspace matching
-          # `workspace-packages`, at that workspace's last published release + 1 minor; bumping the workspace's
-          # package.json.version past it promotes (util-publish publishes the release once its tarball is on).
-          # It also primes the archived `docs/<ws>@latest.tgz` from Pages (util-publish's change baseline). The
-          # globs scope to one level, so an app's bundled sub-packages never get a draft (hence never publish).
-          # Empty `workspace-packages` → the single-package `v<version>` release at the repo root instead.
-          "if": "${{ inputs.release == 'true' }}",
-          "name": "Cut GitHub releases (util-release)",
-          "env": {
-            "GH_TOKEN": "${{ github.token }}",
-            "WS_GLOBS": "${{ inputs.workspace-packages }}",
-            "GITHUB_REPOSITORY_OWNER": "${{ github.repository_owner }}"
-          },
-          "run": "npx util-release"
-        },
-        {
-          # GH_TOKEN so util-publish's `gh release view <ws>@<version>` can SEE the draft releases the step
-          # above cut — drafts are invisible to unauthenticated gh, so without it every package is skipped as
-          # "no GitHub release exists". GITHUB_REPOSITORY_OWNER scopes the published `@<owner>/<pkg>` name.
+          # GH_TOKEN so util-publish can see (drafts are invisible to unauthenticated gh), cut, and publish the
+          # releases of the RELEASE_WORKSPACES. GITHUB_REPOSITORY_OWNER scopes the published `@<owner>/<pkg>` name.
           "run": "${{ inputs.run }}",
           "env": {
             "NPM_TOKEN": "${{ secrets.NPM_TOKEN }}",
             "GH_TOKEN": "${{ github.token }}",
-            "GITHUB_REPOSITORY_OWNER": "${{ github.repository_owner }}"
+            "GITHUB_REPOSITORY_OWNER": "${{ github.repository_owner }}",
+            "RELEASE_WORKSPACES": "${{ inputs.release }}"
           }
         },
         {

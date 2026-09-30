@@ -1,28 +1,24 @@
 import * as path from "node:path";
 import * as url from "node:url";
-import { isCI, isEntry } from "@brianjenkins94/util/env";
+import { isEntry } from "@brianjenkins94/util/env";
 
 import { exec, fire } from "@brianjenkins94/util/exec";
 import * as fs from "@brianjenkins94/util/fs";
 
 /**
- * Cut or promote a GitHub release, in one of two modes — the `util-release` bin picks between them by what it's
- * given (see the run-guard); no config file needed:
+ * Cut or promote GitHub releases — one model for every repo, single-package or monorepo:
  *
- *   • MANIFEST mode (a single-package repo like partner-api-docs / sms-reference-app — run at the repo root
- *     with no workspace globs): the TAG is `vX.Y.Z` and `package.json.version` is the identity + promotion
- *     control — package.json.version > highest published `v*` release → `promote` (publish at that version),
- *     otherwise → `draft` (roll the single accumulating draft at `<published>+1` minor). Optional dated ASSET
- *     syncing (below) is content-aware: an artifact byte-identical to the one already on the release keeps its
- *     name, so a new date is stamped ONLY on a real content change. This is {@link release}.
+ *   • Each released package is its own SERIES: the repo root is tagged `vX.Y.Z`, any other workspace
+ *     `<workspace>@X.Y.Z`. Its `package.json.version` is the promotion control ({@link decideVersion}): above the
+ *     series' highest published release → `promote` (publish at that version); otherwise → `draft`, the ONE
+ *     accumulating draft at `<published>+1` minor, which holds still until a human bumps the version.
+ *   • The release is carried out AFTER the build ({@link syncRelease}): ensure the draft, sync its dated ASSETS
+ *     (content-aware — a byte-identical artifact keeps its name, so a new date is stamped ONLY on a real change),
+ *     and publish a promote last, so a release never goes out without its assets.
  *
- *   • CONTENT mode (a monorepo like editor — run with workspace globs, or inside one workspace): the SAME
- *     draft/promote decision, per workspace — the TAG is `<workspace>@X.Y.Z` and that workspace's
- *     `package.json.version` is its promotion control, against its own published `<workspace>@*` releases
- *     ({@link decideWorkspace}). {@link releaseWorkspace} only ensures the DRAFT exists at the decided tag (one
- *     per workspace; leftovers are deleted); util-publish, which recomputes the same decision, builds the
- *     tarball at that version, syncs it onto the release as a {@link syncDatedAsset} (only on a real content
- *     change), and publishes the release itself on a promote — so a release never goes out without its tarball.
+ * A repo that builds its own artifacts runs the `util-release` bin (with a `release.config.{ts,js}`), or calls
+ * {@link decide} + {@link syncRelease}, after building them — partner-api-docs, sms-reference-app. A monorepo's
+ * workspaces are released by util-publish, which builds each tarball and syncs it the same way.
  *
  * `gh` is shelled (auth via `GH_TOKEN` in the environment). Consumed as `@brianjenkins94/util/scripts/release`.
  */
@@ -86,86 +82,6 @@ export async function listReleases(limit = 200): Promise<Release[]> {
 /** The tag GitHub marks `isLatest` (newest published, non-draft, non-prerelease), or "" when there is none yet. */
 export async function latestRelease(): Promise<string> {
 	return (await gh(["release", "list", "--json", "tagName,isLatest", "--jq", "[.[] | select(.isLatest)][0].tagName // empty"])).trim();
-}
-
-/** The repo's git top-level, or cwd if not in a git tree (so a stray checkout still degrades sensibly). */
-async function gitTopLevel(): Promise<string> {
-	const result = await exec("git", ["rev-parse", "--show-toplevel"]);
-
-	return result.ok ? result.stdout.trim() : process.cwd();
-}
-
-const releaseExists = (tag: string): Promise<boolean> => fire("gh", ["release", "view", tag]);
-
-/**
- * CONTENT mode's decision for ONE workspace: {@link decideVersion} over that workspace's own `<workspace>@*`
- * releases, with its `package.json.version` as the control. `exists` says whether a release is already at the
- * tag — util-release cuts it; util-publish skips a workspace without one (it was never opted in).
- */
-export async function decideWorkspace(workspace: string, root = process.cwd()): Promise<{ "tag": string; "version": string; "mode": "draft" | "promote"; "exists": boolean; "releases": Release[] }> {
-	const pkgVersion = (JSON.parse(fs.readFileSync(path.join(root, workspace, "package.json"))) as { "version"?: string }).version ?? "0.0.0";
-	const releases = await listReleases(1000);
-	const { version, mode } = decideVersion(pkgVersion, releases, `${workspace}@`);
-	const tag = `${workspace}@${version}`;
-
-	return { "tag": tag, "version": version, "mode": mode, "exists": releases.some((release) => release.tagName === tag), "releases": releases };
-}
-
-/**
- * Download the currently-published `docs/<ws>@latest.tgz` from Pages into place, so both this script and
- * util-publish read the SAME version floor (util-publish doesn't fetch it — a prior step must). No-op off CI
- * or when the repo coordinates aren't in the environment; a 404 (nothing published yet) is left as absent.
- */
-async function primeArchive(gitRoot: string, workspace: string): Promise<void> {
-	const owner = process.env["GITHUB_REPOSITORY_OWNER"];
-	const repo = process.env["GITHUB_REPOSITORY"]?.split("/")[1];
-
-	if (owner === undefined || repo === undefined) { return; }
-
-	const response = await fetch(`https://${owner}.github.io/${repo}/${workspace}@latest.tgz`);
-
-	if (!response.ok) { return; }
-
-	const destination = path.join(gitRoot, "docs", `${workspace}@latest.tgz`);
-	await fs.mkdir(path.dirname(destination), { "recursive": true });
-	await fs.writeFile(destination, Buffer.from(await response.arrayBuffer()));
-}
-
-/**
- * CONTENT mode for ONE workspace: ensure its one DRAFT exists at the decided `<workspace>@<version>` — held at
- * the next version until a `package.json.version` bump promotes it — and delete any other leftover drafts of the
- * workspace. Never publishes (util-publish does, once the tarball is attached). `prime` fetches the archived
- * `docs/<ws>@latest.tgz` from Pages first (CI) — util-publish's content-change baseline.
- */
-export async function releaseWorkspace(workspace: string, options: { "gitRoot"?: string; "prime"?: boolean } = {}): Promise<{ "tag": string; "version": string; "mode": "draft" | "promote" }> {
-	const gitRoot = options.gitRoot ?? await gitTopLevel();
-
-	if (options.prime === true) { await primeArchive(gitRoot, workspace); }
-
-	const { tag, version, mode, exists, releases } = await decideWorkspace(workspace, gitRoot);
-	console.log(`release ${tag} (${mode})`);
-
-	if (!exists) {
-		await gh(["release", "create", tag, "--draft", "--title", tag, "--notes", `Release ${tag}`]);
-	}
-
-	for (const stale of releases.filter((release) => release.isDraft && release.tagName.startsWith(`${workspace}@`) && release.tagName !== tag)) {
-		await gh(["release", "delete", stale.tagName, "--yes"]);
-		console.log(`  deleted stale draft ${stale.tagName}`);
-	}
-
-	return { "tag": tag, "version": version, "mode": mode };
-}
-
-/** Create `tag` as a draft, or flip an existing release's draft state to match `mode` (idempotent). */
-export async function ensureReleaseTag(tag: string, mode: "draft" | "promote"): Promise<void> {
-	if (await releaseExists(tag)) {
-		await gh(["release", "edit", tag, `--draft=${String(mode === "draft")}`]);
-	} else if (mode === "draft") {
-		await gh(["release", "create", tag, "--draft", "--title", tag, "--notes", `Release ${tag}`]);
-	} else {
-		await gh(["release", "create", tag, "--title", tag, "--notes", `Release ${tag}`]);
-	}
 }
 
 const sameFile = (a: string, b: string): Promise<boolean> => fire("cmp", ["-s", a, b]);
@@ -245,73 +161,103 @@ export async function syncDatedAsset(options: DatedAsset & { "tag": string; "mod
 }
 
 export interface ReleaseOptions {
-	/** package.json path (relative to cwd) whose `version` is the control surface. Default `package.json`
-	 *  — e.g. sms-reference-app passes `app/package.json` (the product lives under app/). */
+	/** The package being released, relative to `root`. Default `.` — the repo root, tagged `vX.Y.Z`; any other
+	 *  workspace is its own series, tagged `<workspace>@X.Y.Z`. */
+	"workspace"?: string;
+	/** package.json path (relative to `root`) whose `version` is the control surface. Default
+	 *  `<workspace>/package.json` — e.g. sms-reference-app passes `app/package.json` (the product lives under app/). */
 	"versionFrom"?: string;
-	/** Optional dated release assets to sync. Paths are relative to cwd. Omit for a tag-only release. */
+	/** Optional dated release assets for the bin to sync. Paths are relative to `root`. Omit for a tag-only release. */
 	"assets"?: DatedAsset[];
+	/** The directory the paths above resolve against. Default cwd. */
+	"root"?: string;
+}
+
+/** One run's release: the tag + version it releases at, and whether it stays a draft or publishes. */
+export interface Decision {
+	"tag": string;
+	"version": string;
+	"mode": "draft" | "promote";
+	/** The series' tag prefix — `v`, or `<workspace>@`. */
+	"prefix": string;
+	/** Every release in the repo, as listed when deciding. */
+	"releases": Release[];
+}
+
+/** The tag prefix of `workspace`'s release series: `v` for the repo root, `<workspace>@` for any other. */
+export function tagPrefix(workspace: string): string {
+	return workspace === "." ? "v" : `${workspace}@`;
+}
+
+/** Decide this run's release for one package: {@link decideVersion} over its own series. */
+export async function decide(options: ReleaseOptions = {}): Promise<Decision> {
+	const root = options.root ?? process.cwd();
+	const workspace = options.workspace ?? ".";
+	const pkgVersion = (JSON.parse(fs.readFileSync(path.join(root, options.versionFrom ?? path.join(workspace, "package.json")))) as { "version"?: string }).version ?? "0.0.0";
+	const prefix = tagPrefix(workspace);
+	const releases = await listReleases(1000);
+	const { version, mode } = decideVersion(pkgVersion, releases, prefix);
+
+	return { "tag": prefix + version, "version": version, "mode": mode, "prefix": prefix, "releases": releases };
 }
 
 /**
- * The full flow: read the version, decide draft/promote vs the published releases, ensure the tag, then
- * sync any dated assets. Returns the decided `{ tag, version, mode }`.
+ * Carry out a {@link decide}d release, AFTER the build: ensure the draft exists at its tag, delete leftover
+ * drafts of the series BELOW it (a skipped version bump strands one; a draft above it is someone's plan, and
+ * is kept), sync the dated `assets` (absolute `built` paths) onto it, and — on a promote — publish it last.
  */
-export async function release(options: ReleaseOptions = {}): Promise<{ "tag": string; "version": string; "mode": "draft" | "promote" }> {
-	const root = process.cwd();
-	const pkgVersion = (JSON.parse(fs.readFileSync(path.join(root, options.versionFrom ?? "package.json"))) as { "version"?: string }).version ?? "0.0.0";
-
-	const { version, mode } = decideVersion(pkgVersion, await listReleases());
-	const tag = `v${version}`;
+export async function syncRelease(decision: Decision, assets: DatedAsset[] = []): Promise<void> {
+	const { tag, mode, prefix, releases } = decision;
+	const current = parse(decision.version) ?? [0, 0, 0];
 	console.log(`release ${tag} (${mode})`);
 
-	await ensureReleaseTag(tag, mode);
-
-	if (options.assets !== undefined && options.assets.length > 0) {
-		const tmp = path.join(root, ".release-tmp");
-		await fs.rm(tmp, { "recursive": true, "force": true });
-		const date = new Date().toISOString().slice(0, 10);
-
-		for (const asset of options.assets) {
-			await syncDatedAsset({ ...asset, "built": path.join(root, asset.built), tag, mode, date, tmp });
-		}
-
-		await fs.rm(tmp, { "recursive": true, "force": true });
+	if (!releases.some((release) => release.tagName === tag)) {
+		await gh(["release", "create", tag, "--draft", "--title", tag, "--notes", `Release ${tag}`]);
 	}
 
-	return { tag, version, mode };
+	// A stale draft is one of THIS series (so not e.g. a `vscode@…` tag under the root's `v` prefix) below the
+	// current one.
+	const isStale = (release: Release): boolean => {
+		const version = release.isDraft && release.tagName.startsWith(prefix) ? parse(release.tagName.slice(prefix.length)) : null;
+
+		return version !== null && compare(version, current) < 0;
+	};
+
+	for (const stale of releases.filter(isStale)) {
+		await gh(["release", "delete", stale.tagName, "--yes"]);
+		console.log(`  deleted stale draft ${stale.tagName}`);
+	}
+
+	if (assets.length > 0) {
+		const tmp = await fs.mkdtemp(path.join(fs.tmpdir(), "util-release-"));
+		const date = new Date().toISOString().slice(0, 10);
+
+		try {
+			for (const asset of assets) {
+				await syncDatedAsset({ ...asset, "tag": tag, "mode": mode, "date": date, "tmp": tmp });
+			}
+		} finally {
+			await fs.rm(tmp, { "recursive": true, "force": true });
+		}
+	}
+
+	if (mode === "promote") {
+		await gh(["release", "edit", tag, "--draft=false"]);
+		console.log(`  published ${tag}`);
+	}
 }
 
-// Run directly (the `util-release` bin). Mode by what it's given, no flag:
-//   • `--latest`                    → print the latest published `v*` tag (for a workflow to capture).
-//   • workspace globs (args, or the WS_GLOBS env — comma/space separated, e.g. `packages/* components/*`),
-//     or being run from inside a workspace sub-directory → CONTENT mode: a rolling draft per matching
-//     non-private workspace (globs scope to one level, so an app's bundled sub-packages are left out).
-//   • otherwise (repo root, no globs) → MANIFEST mode: load `release.config.{ts,js}` if present (default
-//     export is ReleaseOptions, or a function returning them), else a tag-only `v<version>` release.
+// Run directly (the `util-release` bin): `--latest` prints the latest published release tag (for a workflow to
+// capture); otherwise release the repo root per `release.config.{ts,js}` if present (default export is
+// ReleaseOptions, or a function returning them), else a tag-only `v<version>` release. A monorepo's workspaces
+// are released by util-publish, which builds their tarballs.
 if (isEntry(import.meta) && process.argv.includes("--latest")) {
 	console.log(await latestRelease());
 } else if (isEntry(import.meta)) {
-	const gitRoot = await gitTopLevel();
-	const cwdWorkspace = path.relative(gitRoot, process.cwd()).split(path.sep).join("/");
-	const globs = [...process.argv.slice(2), process.env["WS_GLOBS"] ?? ""].flatMap((argument) => argument.split(/[,\s]+/u)).filter(Boolean);
+	const configPath = ["release.config.ts", "release.config.js"].map((name) => path.resolve(process.cwd(), name)).find((file) => fs.existsSync(file));
+	const loaded = configPath === undefined ? {} : (await import(url.pathToFileURL(configPath).toString())).default as ReleaseOptions | (() => ReleaseOptions | Promise<ReleaseOptions>);
+	const config = typeof loaded === "function" ? await loaded() : loaded;
+	const root = config.root ?? process.cwd();
 
-	if (cwdWorkspace !== "" && cwdWorkspace !== ".") {
-		await releaseWorkspace(cwdWorkspace, { gitRoot, "prime": isCI });
-	} else if (globs.length > 0) {
-		// Publish every workspace whose dir matches a glob (`*` spans ONE path segment, e.g. `packages/*`, so
-		// an app's bundled sub-packages aren't published on their own), skipping private ones — `private` is the
-		// publish gate, and this (release) is the one place it filters.
-		const patterns = globs.map((glob) => new RegExp(`^${glob.replace(/[.+?^${}()|[\]\\]/gu, "\\$&").replace(/\*/gu, "[^/]+")}$`, "u"));
-
-		for (const workspace of await fs.findWorkspaces(gitRoot)) {
-			if (!workspace.private && patterns.some((pattern) => pattern.test(workspace.dir))) {
-				await releaseWorkspace(workspace.dir, { gitRoot, "prime": isCI });
-			}
-		}
-	} else {
-		const configPath = ["release.config.ts", "release.config.js"].map((name) => path.resolve(process.cwd(), name)).find((file) => fs.existsSync(file));
-		const config = configPath === undefined ? {} : (await import(url.pathToFileURL(configPath).toString())).default as ReleaseOptions | (() => ReleaseOptions | Promise<ReleaseOptions>);
-
-		await release(typeof config === "function" ? await config() : config);
-	}
+	await syncRelease(await decide(config), (config.assets ?? []).map((asset) => ({ ...asset, "built": path.join(root, asset.built) })));
 }

@@ -14,7 +14,7 @@
     "group": "${{ github.workflow }}-${{ github.ref }}"
   },
   # Must grant at least what the reusable deploy workflow needs (its token is the intersection): contents:write
-  # for util-release/util-publish to cut + publish releases, pages + id-token for the Pages deploy.
+  # for util-publish to cut + publish releases, pages + id-token for the Pages deploy.
   "permissions": {
     "contents": "write",
     "pages": "write",
@@ -24,14 +24,15 @@
     "cd": {
       # Only after a manual dispatch or a successful CI run on main (workflow_run fires on failure too).
       "if": "${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}",
-      # The same reusable deploy + release model as every other repo: one draft per workspace at its last
-      # published release + 1, promoted by bumping that workspace's package.json.version; util-publish attaches
-      # the tarball and publishes a promote. lib runs its OWN util-release/util-publish sources (it has no bins),
-      # so the release step rides `run` rather than `release: true`; and it passes no `workspace-packages`,
-      # which would turn the install into a pnpm workspace (lib installs each workspace on its own).
+      # The same reusable deploy + release model as every other repo: one draft per released workspace at its
+      # last published release + 1, promoted by bumping that workspace's package.json.version; util-publish
+      # attaches the tarball and publishes a promote. lib runs its OWN util-publish source (it has no bins), and
+      # passes no `workspace-packages`, which would turn the install into a pnpm workspace (lib installs each
+      # workspace on its own).
       "uses": "./.github/workflows/deploy.yml",
       "with": {
-        "run": "npx tsx util/scripts/release.ts util && pnpm run publish"
+        "run": "pnpm run publish",
+        "release": "util"
       }
     },
     "smoke-test": {

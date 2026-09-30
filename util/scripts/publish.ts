@@ -14,7 +14,7 @@ import { externalSpecifiers, packageName } from "@brianjenkins94/util/vite/exter
 import tarStream from "tar-stream";
 import * as vite from "vite";
 import { build } from "./build";
-import { decideWorkspace, gh, syncDatedAsset } from "./release";
+import { decide, syncRelease } from "./release";
 
 // util-publish runs in whatever repo invokes it (silo, lib, …) — the root is the cwd, not util's dir.
 const __root = process.cwd();
@@ -28,7 +28,8 @@ const distDirectory = path.join(__root, "docs");
 const config = juvy({
 	"workspaces": { "format": Array, "default": [], "positional": "rest", "env": false, "doc": "Workspaces to build + publish (default: every git-tracked publishable workspace)." },
 	"owner": { "format": String, "required": true, "env": "GITHUB_REPOSITORY_OWNER", "doc": "Scope of the published name, `@<owner>/<pkg>` ($GITHUB_REPOSITORY_OWNER — locally, e.g. GITHUB_REPOSITORY_OWNER=brianjenkins94)." },
-	"npmToken": { "format": String, "default": "", "env": "NPM_TOKEN", "sensitive": true, "doc": "npm publish token ($NPM_TOKEN); empty → GitHub-Pages tarball only, no npm publish." }
+	"npmToken": { "format": String, "default": "", "env": "NPM_TOKEN", "sensitive": true, "doc": "npm publish token ($NPM_TOKEN); empty → GitHub-Pages tarball only, no npm publish." },
+	"release": { "format": String, "default": "", "env": "RELEASE_WORKSPACES", "doc": "Workspaces to release in CI, as comma/space-separated globs (`*` spans one path segment, e.g. `packages/*`; `.` is the repo root) ($RELEASE_WORKSPACES). In CI, only these publish." }
 });
 
 // publish.ts is the `util-publish` CLI. Importing the module (e.g. the publish smoke-test that loads every
@@ -52,6 +53,8 @@ if (isEntry(import.meta)) {
 
 	const owner: string = config.get("owner");
 	const npmToken: string = config.get("npmToken");
+	const releaseGlobs: string = config.get("release");
+	const releasePatterns = releaseGlobs.split(/[,\s]+/u).filter(Boolean).map((glob) => new RegExp(`^${glob.replace(/[.+?^${}()|[\]\\]/gu, "\\$&").replace(/\*/gu, "[^/]+")}$`, "u"));
 
 	// The published name is `@<owner>/<pkg>` — but DON'T double-scope a source name that's ALREADY scoped
 	// (a package authored as `@scope/x` publishes as-is). Prepending unconditionally shipped e.g.
@@ -166,6 +169,11 @@ if (isEntry(import.meta)) {
 
 		if (packageJson["private"] === true) {
 			continue;   // never publish private packages (the monorepo root, example/fixture packages, …)
+		}
+
+	// In CI only the release workspaces publish — each onto its own GitHub release series (see release.ts).
+		if (isCI && !releasePatterns.some((pattern) => pattern.test(workspace))) {
+			continue;
 		}
 
 	// One span per published workspace: times its build/version/tar work and nests the steps below.
@@ -299,9 +307,17 @@ if (isEntry(import.meta)) {
 			.filter((name) => publishable["peerDependencies"]?.[name] === undefined)
 			.sort();
 
-		let archiveVersion;
-
 		const tarFile = path.join(distDirectory, workspace + "@latest.tgz");
+
+	// CI: the last-published tarball comes from Pages (each deploy replaces the site) — the change baseline.
+		if (isCI) {
+			const response = await fetch(`https://${owner}.github.io/${process.env["GITHUB_REPOSITORY"].split("/")[1]}/${workspace}@latest.tgz`);
+
+			if (response.ok) {
+				await fs.mkdir(path.dirname(tarFile), { "recursive": true });
+				await fs.writeFile(tarFile, Buffer.from(await response.arrayBuffer()));
+			}
+		}
 
 		let archiveFiles: Record<string, Buffer> | undefined;
 
@@ -338,10 +354,7 @@ if (isEntry(import.meta)) {
 				input.pipe(createGunzip()).pipe(extract);
 			});
 
-			const packageJson = JSON.parse(archiveFiles["package.json"]?.toString() ?? "{}");
-
-			archiveVersion = packageJson["version"];
-			span.info("archiveVersion", { "version": archiveVersion });
+			span.info("archiveVersion", { "version": JSON.parse(archiveFiles["package.json"]?.toString() ?? "{}")["version"] });
 		}
 
 	// Drop `scripts` from the published archive — they're build/dev tooling, and a lifecycle
@@ -390,40 +403,28 @@ if (isEntry(import.meta)) {
 			"version": version
 		}, undefined, 2);
 
-	// CI: the release this build belongs to — util-release's per-workspace draft/promote decision, recomputed
-	// identically (neither step has published yet).
-		const release = isCI ? await decideWorkspace(workspace, __root) : undefined;
-
-	// Build with the currently-published version so an unchanged package compares equal (no version churn).
-		let version = archiveVersion ?? packageJson["version"] ?? "0.1.0";
+	// CI: the release this build belongs to — its draft (the next version) or a promote (package.json bumped).
+	// The tarball carries that version, so `@latest` always names the release it will become.
+		const release = isCI ? await decide({ "workspace": workspace, "root": __root }) : undefined;
+		const version = release?.version ?? packageJson["version"] ?? "0.0.0";
 
 		files["package.json"] = Buffer.from(buildPackageJson(version));
 
-	// Build every run; publish only when the emitted artifact differs from the last published one — or on a
-	// promote, whose release still needs its tarball even when the content hasn't moved.
-		if (release?.mode !== "promote" && archiveFiles && Object.keys(files).length === Object.keys(archiveFiles).length && Object.entries(files).every(([key, value]) => archiveFiles[key] !== undefined && value.equals(archiveFiles[key]))) {
-			span.info("No changes - skipping release");
-			continue;
-		}
+		const changed = !(archiveFiles && Object.keys(files).length === Object.keys(archiveFiles).length && Object.entries(files).every(([key, value]) => archiveFiles[key] !== undefined && value.equals(archiveFiles[key])));
 
-	// Changed (or a promote): build at the release's version.
 		if (release !== undefined) {
-			({ version } = release);
-			files["package.json"] = Buffer.from(buildPackageJson(version));
-			span.info("Release version", { "release": release.tag, "mode": release.mode });
-		}
-
-	// Publish only a workspace util-release opted in, i.e. one with a release at the decided tag.
-		if (isCI && release?.exists !== true) {
-			console.error(`❌ Skipping ${workspace}: no GitHub release exists`);
+			span.info("Release", { "release": release.tag, "mode": release.mode, "changed": changed });
+		} else if (!changed) {
+			span.info("No changes - skipping");
 			continue;
 		}
-	// </>
 
+	// Reproducible bytes (sorted entries, a fixed mtime — npm's own), so an unchanged package re-packs to the
+	// SAME tarball and the release's content-aware asset sync leaves it (and its date stamp) alone.
 		const pack = tarStream.pack();
 
-		for (const [fileName, contents] of Object.entries(files)) {
-			pack.entry({ "name": "package/" + fileName.replace(/\\/gu, "/") }, contents);
+		for (const [fileName, contents] of Object.entries(files).sort(([left], [right]) => (left < right ? -1 : 1))) {
+			pack.entry({ "name": "package/" + fileName.replace(/\\/gu, "/"), "mtime": new Date("1985-10-26T08:15:00.000Z") }, contents);
 		}
 
 		pack.finalize();
@@ -438,24 +439,17 @@ if (isEntry(import.meta)) {
 		span.info("Writing tar", { "path": tarPath });
 
 		writeStream.on("finish", async function() {
-			if (isCI) {
+			if (isCI && changed) {
 				await fs.copyFile(tarPath, path.join(outputDirectory, path.basename(workspace) + "@latest.tgz"));
 				span.info("Copied to latest");
 			}
 
-		// Ride the tarball on its release (canonical `<name>.tgz` on the draft, date-stamped on a promote), then
-		// publish a promote — only now, so a release never goes out without its tarball. A failure fails the run
-		// via exitCode (like a build failure) rather than stranding the other packages' in-flight writes.
+		// Every run, the tarball rides its release (canonical `<name>.tgz` on the draft — re-uploaded only when its
+		// bytes change — and date-stamped on a promote, which is published last). A failure fails the run via
+		// exitCode (like a build failure) rather than stranding the other packages' in-flight writes.
 			if (release !== undefined) {
 				try {
-					const base = String(packageJson["name"]).split("/").at(-1);
-
-					await syncDatedAsset({ "built": tarPath, "base": base, "ext": "tgz", "tag": release.tag, "mode": release.mode, "tmp": path.join(os.tmpdir(), "util-publish", base) });
-
-					if (release.mode === "promote") {
-						await gh(["release", "edit", release.tag, "--draft=false"]);
-						console.log(`✅ Published release ${release.tag}`);
-					}
+					await syncRelease(release, [{ "built": tarPath, "base": String(packageJson["name"]).split("/").at(-1), "ext": "tgz" }]);
 				} catch (error) {
 					console.error(`❌ ${workspace}: syncing release ${release.tag} failed: ${String(error)}`);
 					process.exitCode = 1;
@@ -466,7 +460,7 @@ if (isEntry(import.meta)) {
 		// The GitHub-Pages tarball above is the default channel; npm is additive and opt-in via the token.
 		// Auth is passed through the env so no .npmrc is required; the tarball's own publishConfig (access,
 		// provenance) is honored.
-			if (npmToken !== "") {
+			if (npmToken !== "" && changed) {
 			// exec auto-shells `npm` (a .cmd shim) on Windows — the site that previously lacked shell:true.
 				await exec("npm", ["publish", tarPath, "--access", "public"], {
 					"stdio": "inherit",
