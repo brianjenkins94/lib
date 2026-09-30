@@ -14,6 +14,7 @@ import { externalSpecifiers, packageName } from "@brianjenkins94/util/vite/exter
 import tarStream from "tar-stream";
 import * as vite from "vite";
 import { build } from "./build";
+import { decideWorkspace, gh, syncDatedAsset } from "./release";
 
 // util-publish runs in whatever repo invokes it (silo, lib, …) — the root is the cwd, not util's dir.
 const __root = process.cwd();
@@ -389,37 +390,31 @@ if (isEntry(import.meta)) {
 			"version": version
 		}, undefined, 2);
 
+	// CI: the release this build belongs to — util-release's per-workspace draft/promote decision, recomputed
+	// identically (neither step has published yet).
+		const release = isCI ? await decideWorkspace(workspace, __root) : undefined;
+
 	// Build with the currently-published version so an unchanged package compares equal (no version churn).
 		let version = archiveVersion ?? packageJson["version"] ?? "0.1.0";
 
 		files["package.json"] = Buffer.from(buildPackageJson(version));
 
-	// Build every run; publish only when the emitted artifact differs from the last published one.
-		if (archiveFiles && Object.keys(files).length === Object.keys(archiveFiles).length && Object.entries(files).every(([key, value]) => archiveFiles[key] !== undefined && value.equals(archiveFiles[key]))) {
+	// Build every run; publish only when the emitted artifact differs from the last published one — or on a
+	// promote, whose release still needs its tarball even when the content hasn't moved.
+		if (release?.mode !== "promote" && archiveFiles && Object.keys(files).length === Object.keys(archiveFiles).length && Object.entries(files).every(([key, value]) => archiveFiles[key] !== undefined && value.equals(archiveFiles[key]))) {
 			span.info("No changes - skipping release");
 			continue;
 		}
 
-	// Changed (or first publish): bump the version off the published one and rebuild package.json.
-		if (archiveVersion) {
-			const [major, minor] = archiveVersion.split(".");
-
-			version = [major, parseInt(minor) + 1, 0].join(".");
+	// Changed (or a promote): build at the release's version.
+		if (release !== undefined) {
+			({ version } = release);
 			files["package.json"] = Buffer.from(buildPackageJson(version));
-			span.info("Bumping version", { "version": version });
+			span.info("Release version", { "release": release.tag, "mode": release.mode });
 		}
 
-	// Ensure a release exists for this package.
-		const isDraft = async () => {
-			span.info("Checking for release draft", { "release": workspace + "@" + version });
-			const gh = await exec("gh", ["release", "view", workspace + "@" + version, "--json", "isDraft", "--jq", ".isDraft"]);
-
-			span.info("gh release view", { "code": gh.exitCode, "output": gh.stdout });
-
-			return gh.ok && gh.stdout === "true";
-		};
-
-		if (isCI && !(await isDraft())) {
+	// Publish only a workspace util-release opted in, i.e. one with a release at the decided tag.
+		if (isCI && release?.exists !== true) {
 			console.error(`❌ Skipping ${workspace}: no GitHub release exists`);
 			continue;
 		}
@@ -446,6 +441,25 @@ if (isEntry(import.meta)) {
 			if (isCI) {
 				await fs.copyFile(tarPath, path.join(outputDirectory, path.basename(workspace) + "@latest.tgz"));
 				span.info("Copied to latest");
+			}
+
+		// Ride the tarball on its release (canonical `<name>.tgz` on the draft, date-stamped on a promote), then
+		// publish a promote — only now, so a release never goes out without its tarball. A failure fails the run
+		// via exitCode (like a build failure) rather than stranding the other packages' in-flight writes.
+			if (release !== undefined) {
+				try {
+					const base = String(packageJson["name"]).split("/").at(-1);
+
+					await syncDatedAsset({ "built": tarPath, "base": base, "ext": "tgz", "tag": release.tag, "mode": release.mode, "tmp": path.join(os.tmpdir(), "util-publish", base) });
+
+					if (release.mode === "promote") {
+						await gh(["release", "edit", release.tag, "--draft=false"]);
+						console.log(`✅ Published release ${release.tag}`);
+					}
+				} catch (error) {
+					console.error(`❌ ${workspace}: syncing release ${release.tag} failed: ${String(error)}`);
+					process.exitCode = 1;
+				}
 			}
 
 		// Also publish to the npm registry when a publishing token is present (so `npx @owner/pkg` works).

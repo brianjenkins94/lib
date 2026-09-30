@@ -47,9 +47,11 @@
         },
         {
           # Opt-in: ensure a GitHub release per publishable workspace BEFORE the build/publish step, so
-          # util-publish can attach its freshly-built tarball. util-release keeps a rolling DRAFT tagged
+          # util-publish can attach its freshly-built tarball. util-release keeps ONE DRAFT tagged
           # `<workspace>@<version>` (the tag util-publish looks up) for each non-private workspace matching
-          # `workspace-packages` — versioned off the archived `docs/<ws>@latest.tgz` it primes from Pages. The
+          # `workspace-packages`, at that workspace's last published release + 1 minor; bumping the workspace's
+          # package.json.version past it promotes (util-publish publishes the release once its tarball is on).
+          # It also primes the archived `docs/<ws>@latest.tgz` from Pages (util-publish's change baseline). The
           # globs scope to one level, so an app's bundled sub-packages never get a draft (hence never publish).
           # Empty `workspace-packages` → the single-package `v<version>` release at the repo root instead.
           "if": "${{ inputs.release == 'true' }}",

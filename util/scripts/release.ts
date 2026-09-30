@@ -16,13 +16,13 @@ import * as fs from "@brianjenkins94/util/fs";
  *     syncing (below) is content-aware: an artifact byte-identical to the one already on the release keeps its
  *     name, so a new date is stamped ONLY on a real content change. This is {@link release}.
  *
- *   • CONTENT mode (a monorepo like editor / lib — run with workspace globs, or inside one workspace): the TAG
- *     is `<workspace>@X.Y.Z` (the identity util-publish looks up) and the version rolls whenever the built
- *     artifact CHANGES. {@link releaseWorkspace} keeps one accumulating DRAFT per workspace at the next version
- *     — computed IDENTICALLY to util-publish (bump the minor off the archived `docs/<ws>@latest.tgz`, primed
- *     here from Pages, else `package.json.version` on the first ever release) — and never promotes: util-publish
- *     attaches the freshly-built tarball to that draft only when its bytes differ from `@latest`, and a human
- *     promotes the draft when ready.
+ *   • CONTENT mode (a monorepo like editor — run with workspace globs, or inside one workspace): the SAME
+ *     draft/promote decision, per workspace — the TAG is `<workspace>@X.Y.Z` and that workspace's
+ *     `package.json.version` is its promotion control, against its own published `<workspace>@*` releases
+ *     ({@link decideWorkspace}). {@link releaseWorkspace} only ensures the DRAFT exists at the decided tag (one
+ *     per workspace; leftovers are deleted); util-publish, which recomputes the same decision, builds the
+ *     tarball at that version, syncs it onto the release as a {@link syncDatedAsset} (only on a real content
+ *     change), and publishes the release itself on a promote — so a release never goes out without its tarball.
  *
  * `gh` is shelled (auth via `GH_TOKEN` in the environment). Consumed as `@brianjenkins94/util/scripts/release`.
  */
@@ -48,11 +48,14 @@ export function compare(a: [number, number, number], b: [number, number, number]
 	return 0;
 }
 
-/** The whole release control surface: next VERSION + MODE from package.json vs the published releases. */
-export function decideVersion(pkgVersion: string, releases: Release[]): { "version": string; "mode": "draft" | "promote" } {
+/**
+ * The whole release control surface: next VERSION + MODE from package.json vs the published releases whose tag
+ * is `<prefix><version>` — `v` for a single-package repo, `<workspace>@` for one workspace of a monorepo.
+ */
+export function decideVersion(pkgVersion: string, releases: Release[], prefix = "v"): { "version": string; "mode": "draft" | "promote" } {
 	const published = releases
-		.filter((release) => !release.isDraft && release.tagName.startsWith("v"))
-		.map((release) => parse(release.tagName.slice(1)))
+		.filter((release) => !release.isDraft && release.tagName.startsWith(prefix))
+		.map((release) => parse(release.tagName.slice(prefix.length)))
 		.filter((parsed): parsed is [number, number, number] => parsed !== null)
 		.sort(compare)
 		.at(-1) ?? [0, 0, 0];
@@ -92,38 +95,20 @@ async function gitTopLevel(): Promise<string> {
 	return result.ok ? result.stdout.trim() : process.cwd();
 }
 
-/** `X.Y.Z` → `X.(Y+1).0`; a non-semver input falls back to `0.1.0` (matching util-publish's floor). */
-function bumpMinor(version: string): string {
-	const parsed = parse(version);
-
-	return parsed === null ? "0.1.0" : `${parsed[0]}.${parsed[1] + 1}.0`;
-}
-
-/**
- * The version last shipped in `docs/<ws>@latest.tgz` (untar just its package.json), or undefined when no
- * such archive exists yet. This is the SAME floor util-publish reads, so the two agree on the next version.
- */
-async function archivedVersion(tgz: string): Promise<string | undefined> {
-	if (!fs.existsSync(tgz)) { return undefined; }
-
-	const result = await exec("tar", ["-xOzf", tgz, "package/package.json"]);
-
-	if (!result.ok) { return undefined; }
-
-	try {
-		return (JSON.parse(result.stdout) as { "version"?: string }).version;
-	} catch {
-		return undefined;
-	}
-}
-
 const releaseExists = (tag: string): Promise<boolean> => fire("gh", ["release", "view", tag]);
 
-/** Ensure a DRAFT release exists at `tag`, creating it if missing; NEVER flips an existing (maybe promoted) one. */
-async function ensureDraft(tag: string): Promise<void> {
-	if (await releaseExists(tag)) { return; }
+/**
+ * CONTENT mode's decision for ONE workspace: {@link decideVersion} over that workspace's own `<workspace>@*`
+ * releases, with its `package.json.version` as the control. `exists` says whether a release is already at the
+ * tag — util-release cuts it; util-publish skips a workspace without one (it was never opted in).
+ */
+export async function decideWorkspace(workspace: string, root = process.cwd()): Promise<{ "tag": string; "version": string; "mode": "draft" | "promote"; "exists": boolean; "releases": Release[] }> {
+	const pkgVersion = (JSON.parse(fs.readFileSync(path.join(root, workspace, "package.json"))) as { "version"?: string }).version ?? "0.0.0";
+	const releases = await listReleases(1000);
+	const { version, mode } = decideVersion(pkgVersion, releases, `${workspace}@`);
+	const tag = `${workspace}@${version}`;
 
-	await gh(["release", "create", tag, "--draft", "--title", tag, "--notes", `Release ${tag}`]);
+	return { "tag": tag, "version": version, "mode": mode, "exists": releases.some((release) => release.tagName === tag), "releases": releases };
 }
 
 /**
@@ -147,25 +132,29 @@ async function primeArchive(gitRoot: string, workspace: string): Promise<void> {
 }
 
 /**
- * CONTENT mode for ONE workspace: keep a rolling DRAFT at the next `<workspace>@<version>`, computed exactly
- * as util-publish will (bump the minor off the archived `docs/<ws>@latest.tgz`, else `package.json.version`
- * on the first release). `prime` fetches that archive from Pages first (CI). Never promotes — util-publish
- * attaches the built tarball to the draft on a real content change, and a human promotes it.
+ * CONTENT mode for ONE workspace: ensure its one DRAFT exists at the decided `<workspace>@<version>` — held at
+ * the next version until a `package.json.version` bump promotes it — and delete any other leftover drafts of the
+ * workspace. Never publishes (util-publish does, once the tarball is attached). `prime` fetches the archived
+ * `docs/<ws>@latest.tgz` from Pages first (CI) — util-publish's content-change baseline.
  */
-export async function releaseWorkspace(workspace: string, options: { "gitRoot"?: string; "prime"?: boolean } = {}): Promise<{ "tag": string; "version": string }> {
+export async function releaseWorkspace(workspace: string, options: { "gitRoot"?: string; "prime"?: boolean } = {}): Promise<{ "tag": string; "version": string; "mode": "draft" | "promote" }> {
 	const gitRoot = options.gitRoot ?? await gitTopLevel();
 
 	if (options.prime === true) { await primeArchive(gitRoot, workspace); }
 
-	const archive = await archivedVersion(path.join(gitRoot, "docs", `${workspace}@latest.tgz`));
-	const pkgVersion = (JSON.parse(fs.readFileSync(path.join(gitRoot, workspace, "package.json"))) as { "version"?: string }).version;
-	const version = archive !== undefined ? bumpMinor(archive) : (pkgVersion ?? "0.1.0");
-	const tag = `${workspace}@${version}`;
-	console.log(`release ${tag} (draft)`);
+	const { tag, version, mode, exists, releases } = await decideWorkspace(workspace, gitRoot);
+	console.log(`release ${tag} (${mode})`);
 
-	await ensureDraft(tag);
+	if (!exists) {
+		await gh(["release", "create", tag, "--draft", "--title", tag, "--notes", `Release ${tag}`]);
+	}
 
-	return { tag, version };
+	for (const stale of releases.filter((release) => release.isDraft && release.tagName.startsWith(`${workspace}@`) && release.tagName !== tag)) {
+		await gh(["release", "delete", stale.tagName, "--yes"]);
+		console.log(`  deleted stale draft ${stale.tagName}`);
+	}
+
+	return { "tag": tag, "version": version, "mode": mode };
 }
 
 /** Create `tag` as a draft, or flip an existing release's draft state to match `mode` (idempotent). */
