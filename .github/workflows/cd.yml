@@ -3,7 +3,7 @@
   "on": {
     "workflow_dispatch": null,
     # Fire automatically when CI finishes on main. workflow_run runs on the built-in GITHUB_TOKEN —
-    # no PAT/`gh workflow run` dispatch hand-off needed. The entry + deploy jobs gate on CI success.
+    # no PAT/`gh workflow run` dispatch hand-off needed. The cd job gates on CI success.
     "workflow_run": {
       "workflows": ["ci"],
       "types": ["completed"],
@@ -13,141 +13,35 @@
   "concurrency": {
     "group": "${{ github.workflow }}-${{ github.ref }}"
   },
-  # contents:write lets the built-in GITHUB_TOKEN cut + promote releases (no PAT needed); pages + id-token
-  # are for the Pages deploy. lib's cd is terminal — no release-triggered workflow depends on the release
-  # event cascading, which a GITHUB_TOKEN-created release wouldn't fire anyway.
+  # Must grant at least what the reusable deploy workflow needs (its token is the intersection): contents:write
+  # for util-release/util-publish to cut + publish releases, pages + id-token for the Pages deploy.
   "permissions": {
     "contents": "write",
     "pages": "write",
     "id-token": "write"
   },
   "jobs": {
-    #"changes": {
-    #   "runs-on": "ubuntu-latest",
-    #   "steps": [
-    #     { "uses": "actions/checkout@v4" },
-    #     { "uses": "./.github/actions/detect-changes", "id": "changes" }
-    #   ],
-    #   "outputs": {
-    #     "packages": "${{ steps.changes.outputs.packages }}"
-    #   },
-    #   "timeout-minutes": 15
-    #},
-    "list-packages": {
+    "cd": {
       # Only after a manual dispatch or a successful CI run on main (workflow_run fires on failure too).
       "if": "${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}",
-      "runs-on": "ubuntu-latest",
-      "steps": [
-        { "uses": "actions/checkout@v4" },
-        {
-          "id": "enumerate",
-          "shell": "bash",
-          "run": "echo \"packages=$(git ls-files */package.json */*/package.json | while read -r f; do [ \"$(jq -r '.private // false' \"$f\")\" = true ] || dirname \"$f\"; done | jq --raw-input --slurp --compact-output 'split(\"\\n\") | map(select(length > 0))')\" >> \"$GITHUB_OUTPUT\""
-        }
-      ],
-      "outputs": {
-        "packages": "${{ steps.enumerate.outputs.packages }}"
-      },
-      "timeout-minutes": 15
-    },
-    "release": {
-      "if": "needs.list-packages.outputs.packages != '' && needs.list-packages.outputs.packages != '[]'",
-      "runs-on": "ubuntu-latest",
-      "needs": ["list-packages"],
-      "strategy": {
-        "fail-fast": false,
-        "matrix": {
-          "package": "${{ fromJSON(needs.list-packages.outputs.packages) }}"
-        }
-      },
-      "steps": [
-        # fetch-depth 0 + tags so notes.ts can `git log`/`git diff` the range since the last published tag.
-        { "uses": "actions/checkout@v4", "with": { "fetch-depth": 0, "fetch-tags": true } },
-        { "uses": "./.github/actions/setup" },
-        {
-          "working-directory": "${{ matrix.package }}",
-          "run": "pnpm run --if-present build"
-        },
-        {
-          "id": "tag",
-          "env": {
-            "GH_TOKEN": "${{ secrets.GITHUB_TOKEN }}"
-          },
-          "run": "TAG_NAME=$(npx tsx .github/workflows/scripts/tag.ts \"${{ matrix.package }}\") && echo \"TAG_NAME=$TAG_NAME\" >> \"$GITHUB_OUTPUT\""
-        },
-        {
-          "uses": "softprops/action-gh-release@v2",
-          "with": {
-            "draft": true,
-            "tag_name": "${{ steps.tag.outputs.TAG_NAME }}",
-            "token": "${{ secrets.GITHUB_TOKEN }}"
-          }
-        },
-        {
-          # AI release notes from the code diff, regenerated each run over <last published tag>..HEAD and
-          # written to the draft body (guarded by a marker so hand-edits aren't clobbered). continue-on-error
-          # so a missing CLAUDE_CODE_OAUTH_TOKEN (or any hiccup) never blocks the release itself.
-          "name": "Draft AI release notes",
-          "continue-on-error": true,
-          "timeout-minutes": 5,
-          "env": {
-            "GH_TOKEN": "${{ secrets.GITHUB_TOKEN }}",
-            "CLAUDE_CODE_OAUTH_TOKEN": "${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}"
-          },
-          "run": "npm install -g @anthropic-ai/claude-code && npx tsx .github/workflows/scripts/notes.ts \"${{ matrix.package }}\" \"${{ steps.tag.outputs.TAG_NAME }}\""
-        }
-      ],
-      "timeout-minutes": 15
-    },
-    "publish": {
-      "runs-on": "ubuntu-latest",
-      "needs": ["list-packages", "release"],
-      "steps": [
-        { "uses": "actions/checkout@v4" },
-        { "uses": "./.github/actions/setup" },
-        { "run": "jq -r '.[]' <<< '${{ needs.list-packages.outputs.packages }}' | while read -r pkg; do curl --location --fail --show-error --silent --create-dirs --output \"docs/$pkg@latest.tgz\" \"https://${GITHUB_REPOSITORY_OWNER}.github.io/${GITHUB_REPOSITORY#*/}/$pkg@latest.tgz\" || rm -f \"docs/$pkg@latest.tgz\"; done" },
-        {
-          "env": {
-            "GH_TOKEN": "${{ secrets.GITHUB_TOKEN }}"
-          },
-          "run": "npx tsx .github/workflows/scripts/publish.ts $(jq --raw-output '.[]' <<< '${{ needs.list-packages.outputs.packages }}')"
-        },
-        {
-          # Ship even when a sibling package failed: publish.ts promoted the successes and exited non-zero
-          # only at the very end, so the docs/ tarballs that DID build are ready — deploy them regardless.
-          "if": "${{ !cancelled() }}",
-          "uses": "actions/upload-pages-artifact@v3",
-          "with": {
-            "path": "./docs"
-          }
-        }
-      ],
-      "timeout-minutes": 15
-    },
-    "deploy": {
-      "runs-on": "ubuntu-latest",
-      # !cancelled() (not the implicit success()) so a partial-failure publish still deploys the successes;
-      # AND gated on CI success so a workflow_run fired by a FAILED ci doesn't deploy (deploy uses
-      # !cancelled(), which would otherwise run through the skipped upstream jobs).
-      "if": "${{ !cancelled() && (github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success') }}",
-      "environment": {
-        "name": "github-pages",
-        "url": "${{ steps.deployment.outputs.page_url }}"
-      },
-      "needs": ["publish"],
-      "steps": [
-        { "uses": "actions/deploy-pages@v4" }
-      ],
-      "timeout-minutes": 15
+      # The same reusable deploy + release model as every other repo: one draft per workspace at its last
+      # published release + 1, promoted by bumping that workspace's package.json.version; util-publish attaches
+      # the tarball and publishes a promote. lib runs its OWN util-release/util-publish sources (it has no bins),
+      # so the release step rides `run` rather than `release: true`; and it passes no `workspace-packages`,
+      # which would turn the install into a pnpm workspace (lib installs each workspace on its own).
+      "uses": "./.github/workflows/deploy.yml",
+      "with": {
+        "run": "npx tsx util/scripts/release.ts util && pnpm run publish"
+      }
     },
     "smoke-test": {
+      # Install util from its LIVE Pages tarball and import every export.
       "runs-on": "ubuntu-latest",
-      "needs": ["list-packages", "deploy"],
-      "if": "needs.list-packages.outputs.packages != '' && needs.list-packages.outputs.packages != '[]'",
+      "needs": ["cd"],
       "steps": [
         { "uses": "actions/checkout@v4" },
         { "uses": "./.github/actions/setup" },
-        { "run": "npx tsx .github/workflows/scripts/smoke.ts $(jq --raw-output '.[]' <<< '${{ needs.list-packages.outputs.packages }}')" }
+        { "run": "npx tsx .github/workflows/scripts/smoke.ts util" }
       ],
       "timeout-minutes": 15
     }
