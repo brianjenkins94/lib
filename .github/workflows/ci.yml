@@ -9,9 +9,12 @@
     },
     "workflow_call": {}
   },
+  # One run per branch at a time. A pull request's superseded run is cancelled; on main a run always finishes and only
+  # the latest push waits behind it — cancelling there could starve cd (it deploys only after a successful ci) while
+  # pushes keep arriving faster than a run takes.
   "concurrency": {
     "group": "${{ github.workflow }}-${{ github.ref }}",
-    "cancel-in-progress": true
+    "cancel-in-progress": "${{ github.event_name == 'pull_request' }}"
   },
   "jobs": {
     "build-lint-test": {
