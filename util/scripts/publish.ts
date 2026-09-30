@@ -161,17 +161,23 @@ if (isEntry(import.meta)) {
  * don't block emit (tsc is best-effort). Alias imports like `@brianjenkins94/util/logger` survive verbatim:
  * in the published `@brianjenkins94/util` package they resolve as self-referential subpath imports, so no
  * rewriting is needed. `nestedDirs` (repo-relative) are excluded so a parent never ships a child's types.
+ *
+ * `rootDir` is the REPO root, not the workspace: a package that imports a sibling's sources (debug-mcp →
+ * `../observability/src/arch.ts`) pulls them into the program, and tsc writes a declaration for a file outside
+ * `rootDir` next to its SOURCE — litter in the working tree. Under the repo root everything lands in `outDir`, and a
+ * sibling's declaration is keyed as the build names its module (`observability/src/arch.d.ts`, the leading `../`
+ * dropped, beside `observability/src/arch.js`). Tests aren't shipped, so they aren't declared.
  */
-	async function emitDeclarations(workspace: string, nestedDirs: string[]): Promise<Record<string, Buffer>> {
+	async function emitDeclarations(workspace: string, nestedDirs: string[]): Promise<{ "inside": Record<string, Buffer>; "outside": Record<string, Buffer> }> {
 		const slug = workspace.replace(/[\\/]/gu, "-").replace(/^\.$/u, "root");
 		const outDir = path.join(os.tmpdir(), `dts-${slug}-${process.pid}`);
 		const configPath = path.join(__root, `.tsconfig.dts.${slug}.json`);
 
 		await fs.writeFile(configPath, JSON.stringify({
 			"extends": "./tsconfig.json",
-			"compilerOptions": { "noEmit": false, "declaration": true, "emitDeclarationOnly": true, "skipLibCheck": true, "outDir": outDir, "rootDir": path.join(__root, workspace) },
+			"compilerOptions": { "noEmit": false, "declaration": true, "emitDeclarationOnly": true, "skipLibCheck": true, "outDir": outDir, "rootDir": __root },
 			"include": [path.join(workspace, "**", "*.ts").replace(/\\/gu, "/")],
-			"exclude": ["node_modules", "**/node_modules", ...nestedDirs.map((dir) => dir + "/**")]
+			"exclude": ["node_modules", "**/node_modules", "**/test/**", "**/*.test.ts", ...nestedDirs.map((dir) => dir + "/**")]
 		}));
 
 		try {
@@ -179,7 +185,13 @@ if (isEntry(import.meta)) {
 		// code and a spawn failure. exec auto-shells `npx` (a .cmd shim) on Windows.
 			await exec("npx", ["tsc", "-p", configPath], { "cwd": __root }).catch(() => {});
 
-			return Object.fromEntries(await find(outDir).name("*.d.ts").exec(async (absolute): Promise<[string, Buffer]> => [path.relative(outDir, absolute).replace(/\\/gu, "/"), await fs.readFile(absolute, { "encoding": null })], { "concurrency": 16 }));
+			// Repo-relative in outDir → workspace-relative; outside the workspace (a sibling's), its `../` dropped.
+			const declared = await find(outDir).name("*.d.ts").exec(async (absolute): Promise<[string, Buffer]> => [path.relative(path.join(outDir, workspace), absolute).replace(/\\/gu, "/"), await fs.readFile(absolute, { "encoding": null })], { "concurrency": 16 });
+
+			return {
+				"inside": Object.fromEntries(declared.filter(([key]) => !key.startsWith("../"))),
+				"outside": Object.fromEntries(declared.filter(([key]) => key.startsWith("../")).map(([key, content]) => [key.replace(/^(?:\.\.\/)+/u, ""), content]))
+			};
 		} finally {
 			await fs.rm(outDir, { "recursive": true, "force": true });
 			await fs.rm(configPath, { "force": true });
@@ -266,6 +278,9 @@ if (isEntry(import.meta)) {
 		const isBin = (fileName: string) => /^scripts\/[^/]+\.js$/u.test(fileName) || binTargets.has(fileName);
 
 		let files: Record<string, Buffer>;
+		// An `exports` entry is built under its specifier's name (`.` → `index.js`) from wherever its source is
+		// (`src/index.ts`), whose declaration is keyed by the source (`src/index.d.ts`): entry name → that key.
+		const entryDeclarations = new Map<string, string>();
 
 		if (preBuilt) {
 			files = await collectBuiltFiles(path.join(__root, workspace).replace(/\\/gu, "/"), packageJson["files"]);
@@ -287,6 +302,8 @@ if (isEntry(import.meta)) {
 					const conditional = target as { "default"?: string; "import"?: string; "require"?: string; "types"?: string };
 					const file = typeof target === "string" ? target : (conditional.default ?? conditional.import ?? conditional.require ?? conditional.types);
 					const name = specifier === "." ? "index" : specifier.replace(/^\.\//u, "");
+
+					entryDeclarations.set(name, path.normalize(file).replace(/\\/gu, "/").replace(/^\.\//u, "").replace(/\.[^./]+$/u, ".d.ts"));
 
 					return [name, path.join(__root, workspace, file).replace(/\\/gu, "/")];
 				}));
@@ -347,8 +364,17 @@ if (isEntry(import.meta)) {
 				files[path.relative(path.join(__root, workspace), absolute).replace(/\\/gu, "/")] = await fs.readFile(absolute, { "encoding": null });
 			}, { "concurrency": 16 });
 
-		// Ship `.d.ts` for the transpiled sources — the esbuild/vite output above carries no types.
-			Object.assign(files, await emitDeclarations(workspace, nestedDirs));
+		// Ship `.d.ts` for the transpiled sources — the esbuild/vite output above carries no types. A sibling's
+		// (outside the workspace) only where the build shipped its module: an alias import stays external.
+			const declarations = await emitDeclarations(workspace, nestedDirs);
+
+			Object.assign(files, declarations.inside);
+
+			for (const [key, content] of Object.entries(declarations.outside)) {
+				if (files[key.replace(/\.d\.ts$/u, ".js")] !== undefined) {
+					files[key] = content;
+				}
+			}
 		}
 
 		const binFiles = Object.keys(files).filter(isBin);
@@ -384,10 +410,12 @@ if (isEntry(import.meta)) {
 			...publishable,
 			"name": scopeName(packageJson["name"]),
 			"exports": Object.fromEntries(Object.keys(files).filter((key) => key !== "package.json" && !key.endsWith(".d.ts")).flatMap((key) => {
-			// Pair each entry with its emitted declaration (if any) so TypeScript consumers get types;
-			// hand-written .mjs/.cjs have no sibling .d.ts and stay a bare target string.
-				const dtsKey = key.replace(/\.[^.]+$/u, ".d.ts");
-				const target = files[dtsKey] !== undefined ? { "types": "./" + dtsKey, "default": "./" + key } : "./" + key;
+			// Pair each entry with its emitted declaration (if any) so TypeScript consumers get types — its sibling, or
+			// for an `exports` entry built under another name, its source's; hand-written .mjs/.cjs have no .d.ts and
+			// stay a bare target string.
+				const sibling = key.replace(/\.[^.]+$/u, ".d.ts");
+				const dtsKey = files[sibling] !== undefined ? sibling : entryDeclarations.get(key.replace(/\.[^./]+$/u, ""));
+				const target = dtsKey !== undefined && files[dtsKey] !== undefined ? { "types": "./" + dtsKey, "default": "./" + key } : "./" + key;
 				const directory = path.dirname(key).replace(/\\/gu, "/");
 				const baseName = path.basename(key, path.extname(key));
 
