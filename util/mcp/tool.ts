@@ -404,11 +404,16 @@ export function makeToolCallback(server: McpServer, name: string, resolve: () =>
 /** Appended to every tool's inputSchema so a re-invocation can carry the approved confirmations (MRTR). */
 const APPROVED_FIELD = z.array(z.string()).optional().describe("Internal (MRTR): confirmation prompts the user has approved; supply when re-invoking after a CONFIRMATION REQUIRED result.");
 
-// The SDK RegisteredTool handle per name per server, kept so a tool can be UPDATED in place later (updateTool)
-// rather than only added. WeakMap-keyed on the server so it's collected with it.
-const registeredTools = new WeakMap<McpServer, Map<string, { "update": (updates: Record<string, unknown>) => void }>>();
+// The SDK RegisteredTool handle per name per server, kept so a tool can be UPDATED in place later (updateTool), or
+// removed (removeTool), rather than only added. WeakMap-keyed on the server so it's collected with it.
+interface ToolHandle {
+	"update": (updates: Record<string, unknown>) => void;
+	"remove": () => void;
+}
 
-function registryFor(server: McpServer): Map<string, { "update": (updates: Record<string, unknown>) => void }> {
+const registeredTools = new WeakMap<McpServer, Map<string, ToolHandle>>();
+
+function registryFor(server: McpServer): Map<string, ToolHandle> {
 	let registry = registeredTools.get(server);
 
 	if (registry === undefined) {
@@ -453,4 +458,25 @@ export function updateTool(server: McpServer, tool: McpTool): void {
 		"paramsSchema": { ...(tool.config.inputSchema ?? {}), "_approved": APPROVED_FIELD },
 		"callback": makeToolCallback(server, tool.name, () => tool)
 	});
+}
+
+/** Remove tool `name` from the LIVE server and notify the client (tools/list_changed) — e.g. a tool whose provider
+ *  went away. Returns whether it was registered (through this module). */
+export function removeTool(server: McpServer, name: string): boolean {
+	const registry = registryFor(server);
+	const existing = registry.get(name);
+
+	if (existing === undefined) {
+		return false;
+	}
+
+	existing.remove();
+	registry.delete(name);
+
+	return true;
+}
+
+/** The names of the tools registered on `server` through this module (registerTool / updateTool). */
+export function toolNames(server: McpServer): string[] {
+	return [...registryFor(server).keys()];
 }
