@@ -301,8 +301,11 @@ export function polyfillNodeRolldown(builtins = builtinModules): RolldownPlugin 
 			}).join("\n") || "export default {};";
 		},
 		"transform": function(code, id) {
-			// Skip the polyfills themselves; inject only where `process` is read as a free global.
-			if (id.includes("node-stdlib-browser") || !(/(?<![\w.$])process\b/u).test(code)) {
+			// Skip the polyfills themselves; inject only where `process` is read as a free global — a property read
+			// (`process.platform`, `process["env"]`), in a module that doesn't declare a `process` of its own. Merely
+			// containing the word isn't enough: turndown (via just-bash) has `function process(node)`, and a `var process`
+			// on top of that is a redeclaration that fails the whole dependency bundle.
+			if (id.includes("node-stdlib-browser") || !(/(?<![\w.$])process\s*[.[]/u).test(code) || (/\b(?:function|var|let|const|class)\s+process\b/u).test(code)) {
 				return null;
 			}
 
