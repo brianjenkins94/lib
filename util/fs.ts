@@ -4,7 +4,7 @@ import type { FileFinder } from "@brianjenkins94/util/find";
 import * as fs from "node:fs";
 import * as path from "node:path";
 
-export { createReadStream, createWriteStream, existsSync, writeFileSync } from "node:fs";
+export { createReadStream, createWriteStream, existsSync, readdirSync, statSync, writeFileSync } from "node:fs";
 export { appendFile, copyFile, cp, glob, mkdir, mkdtemp, readdir, realpath, rename, rm, stat, unlink, writeFile } from "node:fs/promises";
 // The OS temp directory (where mkdtemp-based scratch dirs go) — colocated here so a consumer needing a
 // temp file reaches for one fs facade rather than mixing in node:os.
