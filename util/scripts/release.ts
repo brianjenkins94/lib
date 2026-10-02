@@ -251,7 +251,12 @@ export async function syncRelease(decision: Decision, assets: DatedAsset[] = [])
 	}
 
 	if (mode === "promote") {
-		await gh(["release", "edit", tag, "--draft=false"]);
+		// The tag goes on the commit these assets were built from — the checkout — not wherever main has moved since
+		// (a draft's target is the branch, which GitHub resolves only when it publishes).
+		const head = await exec("git", ["rev-parse", "HEAD"]).catch(() => ({ "ok": false, "stdout": "" }));
+		const target = head.ok ? ["--target", head.stdout.trim()] : [];
+
+		await gh(["release", "edit", tag, ...target, "--draft=false"]);
 		console.log(`  published ${tag}`);
 	}
 }

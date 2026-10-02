@@ -35,7 +35,10 @@
         "url": "${{ steps.deploy.outputs.page_url }}"
       },
       "steps": [
-        { "uses": "actions/checkout@v4" },
+        # The commit the caller's CI passed, not main's head: a workflow_run (and a workflow called from one) checks out
+        # the default branch as it is NOW, so a push that landed during that CI run would ship — Pages and @latest
+        # tarballs alike — before its own CI ran. A manual dispatch has no CI run behind it: empty ref, main's head.
+        { "uses": "actions/checkout@v4", "with": { "ref": "${{ github.event.workflow_run.head_sha }}" } },
         {
           "uses": "brianjenkins94/lib/.github/actions/setup@main",
           "with": {
