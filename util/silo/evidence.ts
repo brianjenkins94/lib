@@ -324,3 +324,51 @@ export function foldBranches(known: Observation[], branches: { "span": string; "
 		"arms": addArms(before?.arms ?? [], report.arms)
 	}));
 }
+
+// ── samples: the values themselves, on this machine only ──
+
+/** A few distinct primitives seen at a value site — "only ever `"left"` or `"right"`" — kept in `.silo/local/` on the
+ *  machine that saw them: values can be tokens, emails or anything else, so they're never committed. */
+export interface Samples { "span": string; "values": (string | number | boolean)[] }
+
+/** At most this many distinct values a site keeps, the newest first. */
+export const MAX_SAMPLES = 5;
+
+/** Where this machine keeps the samples of `file` (repo-relative), from the repo root. */
+export function samplesPath(file: string): string {
+	return `${LOCAL_DIR}/samples/${file}.jsonl`;
+}
+
+/** The samples in a samples file, junk skipped. */
+export function parseSamples(text: string): Samples[] {
+	const bySpan = new Map<string, Samples>();
+
+	for (const line of text.split("\n")) {
+		try {
+			const value = JSON.parse(line) as Partial<Samples>;
+
+			if (typeof value.span === "string" && Array.isArray(value.values)) {
+				bySpan.set(value.span, value as Samples);
+			}
+		} catch { /* not a line of ours */ }
+	}
+
+	return [...bySpan.values()];
+}
+
+/** One run's samples folded in: each site's newest distinct values first, MAX_SAMPLES of them. Only spans in `keep`
+ *  stay (the file's value evidence: a site whose evidence has faded away takes its samples with it). */
+export function foldSamples(known: Samples[], reports: Samples[], keep: Set<string>): Samples[] {
+	const bySpan = new Map(known.map((samples) => [samples.span, samples.values]));
+
+	for (const { span, values } of reports) {
+		bySpan.set(span, [...new Set([...values, ...bySpan.get(span) ?? []])].slice(0, MAX_SAMPLES));
+	}
+
+	return [...bySpan].filter(([span]) => keep.has(span)).map(([span, values]) => ({ "span": span, "values": values }));
+}
+
+/** A samples file's text: one site a line, sorted by span. */
+export function samplesText(samples: Samples[]): string {
+	return [...samples].sort((a, b) => a.span.localeCompare(b.span)).map((each) => JSON.stringify(each) + "\n").join("");
+}
