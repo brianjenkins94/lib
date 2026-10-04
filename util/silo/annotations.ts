@@ -198,8 +198,17 @@ export function sameShapeStrategy(weights: ShapeWeights = SHAPE_WEIGHTS): Strate
 
 export const sameShape = sameShapeStrategy();
 
-/** The strategies tried, in order. */
+/** The strategies tried, in order, for an authored annotation (a note, a decision): it's kept until found or decided. */
 export const PIPELINE: Strategy[] = [sameSpan, moved, reidentified, sameShape];
+
+/** The strategies for an observed annotation (coverage, timings, values): it has only its span id, and when that's
+ *  gone it fades — new runs make new evidence — rather than being looked for. */
+export const OBSERVED: Strategy[] = [sameSpan, moved];
+
+/** A reference to span `id` of `file` for an observed annotation: the id alone, all OBSERVED looks at. */
+export function observedRef(id: string, file: string): SpanRef {
+	return { "span": id, "key": "bablr1", "file": file, "shape": { "type": "", "atoms": [] }, "context": {} };
+}
 
 // ── policy ──
 
