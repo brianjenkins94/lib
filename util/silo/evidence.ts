@@ -10,6 +10,8 @@
  *                                                line per (span, kind), sorted, summaries that fade as runs go by
  *   .silo/.gitattributes                         `*.jsonl merge=union`: a branch merge keeps both sides' lines,
  *                                                and the reader folds a span's duplicates
+ *   .silo/local/                                 what stays on this machine (raw CPU profiles, full per-run detail):
+ *                                                `.silo/.gitignore` keeps it out of git; everything else goes in
  *
  * No fs, no vscode, no node: whatever runs the program (the editor, a CLI, CI) gathers the facts and writes the lines
  * through its own file system; this decides their shape and where they go.
@@ -163,6 +165,12 @@ const FORGOTTEN = 0.05;
 export function evidencePath(user: string, environment: Environment, file: string): string {
 	return `${SILO_DIR}/evidence/${slug(user) ?? "local"}/${environmentKey(environment)}/${file}.jsonl`;
 }
+
+/** What stays on this machine, never committed: raw CPU profiles, full per-run detail. */
+export const LOCAL_DIR = `${SILO_DIR}/local`;
+
+/** What `.silo/.gitignore` says: `local/` stays out of git; everything else in `.silo/` goes in. */
+export const GITIGNORE = "local/\n";
 
 /** What `.silo/.gitattributes` says: evidence and run files merge line by line, keeping both sides. */
 export const GITATTRIBUTES = "*.jsonl merge=union\n";
