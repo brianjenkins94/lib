@@ -100,12 +100,13 @@ export function referTo(shapes: SpanShape[], id: string, file: string, blob?: st
 export interface Candidate { "span": string; "file": string; "start"?: number; "end"?: number; "score": number; "strategy": string }
 
 /** What strategies look in: the file the reference names, as it is now. `elsewhere` finds a span id in another file;
- *  `reidentified` is the id the baseline's node maps to in this file, when the baseline could be re-identified. */
+ *  `reidentified` is where the span's node went, by the structural diff from its baseline to this text (BABLR's
+ *  `follow`): the same node (`kept` — a container survives edits inside it), or the one that replaced it. */
 export interface Surroundings {
 	"file": string;
 	"shapes": SpanShape[];
 	"elsewhere"?: (id: string) => { "file": string; "shape": SpanShape } | undefined;
-	"reidentified"?: string;
+	"reidentified"?: { "id": string; "how": "kept" | "replaced" };
 }
 
 export interface Strategy { "name": string; "find": (ref: SpanRef, here: Surroundings) => Candidate[] }
@@ -128,11 +129,27 @@ export const moved: Strategy = {
 	}
 };
 
-/** The baseline's node, re-identified onto the current text, is this span. */
-export const reidentified: Strategy = {
-	"name": "re-identified",
-	"find": (_ref, here) => here.shapes.filter((shape) => shape.id === here.reidentified).map((shape) => candidate(shape, here.file, 0.9, "re-identified"))
-};
+/** How the re-identified strategy scores what the structural diff followed: a `base` (lower for a node an edit
+ *  replaced than for one it kept), plus `weight` times how much of the node's head — its first `head` tokens, roughly a
+ *  call's callee and first arguments, a function's name and signature — survived. The head matters because the diff
+ *  matches containers by type alone: `fn(foo, bar, baz)` replaced by `other(1)` is still "the same" call to it. */
+export interface FollowWeights { "kept": number; "replaced": number; "weight": number; "head": number }
+
+export const FOLLOW_WEIGHTS: FollowWeights = { "kept": 0.6, "replaced": 0.5, "weight": 0.35, "head": 8 };
+
+/** The baseline's node, followed onto the current text by the structural diff, is this span. */
+export function reidentifiedStrategy(weights: FollowWeights = FOLLOW_WEIGHTS): Strategy {
+	return {
+		"name": "re-identified",
+		"find": (ref, here) => {
+			const followed = here.reidentified;
+
+			return followed === undefined ? [] : here.shapes.filter((shape) => shape.id === followed.id).map((shape) => candidate(shape, here.file, (followed.how === "kept" ? weights.kept : weights.replaced) + weights.weight * similarity(ref.shape.atoms.slice(0, weights.head), shape.atoms.slice(0, weights.head)), "re-identified"));
+		}
+	};
+}
+
+export const reidentified = reidentifiedStrategy();
 
 /** Twice the longest common subsequence of two token lists over their total length: 1 the same, 0 nothing shared. */
 export function similarity(a: string[], b: string[]): number {
