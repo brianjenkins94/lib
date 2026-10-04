@@ -54,6 +54,8 @@ export interface RunEnvelope {
 	 *  oid) — exact for uncommitted code, and the version its observations describe. */
 	"commit"?: string;
 	"files": Record<string, string>;
+	/** Every version of a file the run ran, when it ran more than one (a preview's hot updates): oids, oldest first. */
+	"versions"?: Record<string, string[]>;
 }
 
 /** silo's folder, at the repo root. */
