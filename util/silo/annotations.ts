@@ -96,8 +96,9 @@ export function referTo(shapes: SpanShape[], id: string, file: string, blob?: st
 
 // ── strategies ──
 
-/** A span a strategy found for a reference, how sure it is (0–1), and which strategy found it. */
-export interface Candidate { "span": string; "file": string; "start"?: number; "end"?: number; "score": number; "strategy": string }
+/** A span a strategy found for a reference — its node type, when known (`If`, `CallExpression`) — how sure it is (0–1),
+ *  and which strategy found it. */
+export interface Candidate { "span": string; "file": string; "start"?: number; "end"?: number; "type"?: string; "score": number; "strategy": string }
 
 /** What strategies look in: the file the reference names, as it is now. `elsewhere` finds a span id in another file;
  *  `reidentified` is where the span's node went, by the structural diff from its baseline to this text (BABLR's
@@ -111,7 +112,7 @@ export interface Surroundings {
 
 export interface Strategy { "name": string; "find": (ref: SpanRef, here: Surroundings) => Candidate[] }
 
-const candidate = (shape: SpanShape, file: string, score: number, strategy: string): Candidate => ({ "span": shape.id, "file": file, "start": shape.start, "end": shape.end, "score": score, "strategy": strategy });
+const candidate = (shape: SpanShape, file: string, score: number, strategy: string): Candidate => ({ "span": shape.id, "file": file, "start": shape.start, "end": shape.end, "type": shape.type, "score": score, "strategy": strategy });
 
 /** Its id is in the file. */
 export const sameSpan: Strategy = {
