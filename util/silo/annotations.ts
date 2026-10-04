@@ -37,6 +37,10 @@ export interface SpanRef {
 	"shape": { "type": string; "atoms": string[] };
 	/** Where it was: the ids of the spans just before and after it (neighbours usually survive an edit to the span). */
 	"context": { "before"?: string; "after"?: string };
+	/** What it was, beyond its shape (the typed strategy's signals; optional): TypeScript's type for it, as text, and the
+	 *  type tags of the values runs saw go through it (RUNTIME-EVIDENCE.md). */
+	"inferred"?: string;
+	"observed"?: string[];
 }
 
 /** Something attached to a span: a note, a dismissed suggestion, a call site's decision… `kind` says which. */
@@ -108,6 +112,8 @@ export interface Surroundings {
 	"shapes": SpanShape[];
 	"elsewhere"?: (id: string) => { "file": string; "shape": SpanShape } | undefined;
 	"reidentified"?: { "id": string; "how": "kept" | "replaced" };
+	/** What a span of this file is, beyond its shape, where the caller knows: its TypeScript type and observed tags. */
+	"types"?: (id: string) => { "inferred"?: string; "observed"?: string[] } | undefined;
 }
 
 export interface Strategy { "name": string; "find": (ref: SpanRef, here: Surroundings) => Candidate[] }
@@ -199,8 +205,49 @@ export function sameShapeStrategy(weights: ShapeWeights = SHAPE_WEIGHTS): Strate
 
 export const sameShape = sameShapeStrategy();
 
-/** The strategies tried, in order, for an authored annotation (a note, a decision): it's kept until found or decided. */
-export const PIPELINE: Strategy[] = [sameSpan, moved, reidentified, sameShape];
+/** How the typed strategy moves a candidate's score: up by `match` when its TypeScript type is the reference's, down by
+ *  `mismatch` when it isn't; up by `overlap` when the types runs saw go through it share any with the reference's, down
+ *  by `disjoint` when they share none. */
+export interface TypedWeights { "match": number; "mismatch": number; "overlap": number; "disjoint": number }
+
+export const TYPED_WEIGHTS: TypedWeights = { "match": 0.1, "mismatch": 0.25, "overlap": 0.05, "disjoint": 0.15 };
+
+/** Whether a TypeScript type says anything about what a span is: `any` and `unknown` (untyped code) don't. */
+function informative(type: string | undefined): type is string {
+	return type !== undefined && type !== "any" && type !== "unknown";
+}
+
+/** A re-scorer of `shapes`' candidates (RUNTIME-EVIDENCE.md, the typed strategy): where the reference and a candidate
+ *  both say what they are — TypeScript's type, the tags runs observed — agreement lifts the candidate and disagreement
+ *  lowers it. It finds nothing the shape didn't, and a reference or candidate without types scores as the shape had it
+ *  (so does one typed `any` or `unknown`: untyped code says nothing). */
+export function typedStrategy(shapes: Strategy = sameShape, weights: TypedWeights = TYPED_WEIGHTS): Strategy {
+	return {
+		"name": "typed",
+		"find": (ref, here) => shapes.find(ref, here).map((found) => {
+			const theirs = here.types?.(found.span);
+			let score = found.score;
+
+			if (informative(ref.inferred) && informative(theirs?.inferred)) {
+				score += ref.inferred === theirs!.inferred ? weights.match : -weights.mismatch;
+			}
+
+			if (ref.observed !== undefined && ref.observed.length > 0 && theirs?.observed !== undefined && theirs.observed.length > 0) {
+				score += ref.observed.some((tag) => theirs.observed!.includes(tag)) ? weights.overlap : -weights.disjoint;
+			}
+
+			const clamped = Math.min(1, Math.max(0, score));
+
+			return clamped === found.score ? found : { ...found, "score": clamped, "strategy": "typed" };
+		})
+	};
+}
+
+export const typed = typedStrategy();
+
+/** The strategies tried, in order, for an authored annotation (a note, a decision): it's kept until found or decided.
+ *  The last is the shape, re-scored by type where types are known. */
+export const PIPELINE: Strategy[] = [sameSpan, moved, reidentified, typed];
 
 /** The strategies for an observed annotation (coverage, timings, values): it has only its span id, and when that's
  *  gone it fades — new runs make new evidence — rather than being looked for. */
