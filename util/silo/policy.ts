@@ -122,24 +122,29 @@ export function globToPattern(glob: string): string {
 
 export interface Operator {
 	"label": string;
-	/** The schema of the argument it takes — what its input is drawn from. */
-	"argument": Schema;
+	/** The schema of the argument it takes, given its target's — what its input is drawn from (`is` takes a value of
+	 *  the target's own, `is any of` a list of them, `matches` a glob). */
+	"argument": (target: Schema) => Schema;
 	/** What a row with it compiles to: the schema its target's value must be valid against. */
 	"compile": (argument: unknown) => Schema;
 }
 
+const itemsOf = (schema: Schema): Schema => (typeof schema === "object" && schema["items"] !== undefined ? schema["items"] as Schema : true);
+const TEXT: Schema = { "type": "string" };
+const GLOB: Schema = { "type": "string", "format": "glob" };
+
 /** Every row's operator — "is" and "contains" are on strings, "includes" on arrays; a target's type offers its own. */
 export const OPERATORS: Record<string, Operator> = {
-	"is": { "label": "is", "argument": true, "compile": (argument) => ({ "const": argument }) },
-	"is_not": { "label": "is not", "argument": true, "compile": (argument) => ({ "not": { "const": argument } }) },
-	"is_any_of": { "label": "is any of", "argument": { "type": "array" }, "compile": (argument) => ({ "enum": argument }) },
-	"starts_with": { "label": "starts with", "argument": { "type": "string" }, "compile": (argument) => ({ "type": "string", "pattern": `^${escape(argument as string)}` }) },
-	"contains": { "label": "contains", "argument": { "type": "string" }, "compile": (argument) => ({ "type": "string", "pattern": escape(argument as string) }) },
-	"matches": { "label": "matches", "argument": { "type": "string", "format": "glob" }, "compile": (argument) => ({ "type": "string", "pattern": globToPattern(argument as string) }) },
-	"does_not_match": { "label": "does not match", "argument": { "type": "string", "format": "glob" }, "compile": (argument) => ({ "not": { "type": "string", "pattern": globToPattern(argument as string) } }) },
-	"includes": { "label": "includes", "argument": true, "compile": (argument) => ({ "type": "array", "contains": { "const": argument } }) },
+	"is": { "label": "is", "argument": (target) => target, "compile": (argument) => ({ "const": argument }) },
+	"is_not": { "label": "is not", "argument": (target) => target, "compile": (argument) => ({ "not": { "const": argument } }) },
+	"is_any_of": { "label": "is any of", "argument": (target) => ({ "type": "array", "items": target }), "compile": (argument) => ({ "enum": argument }) },
+	"starts_with": { "label": "starts with", "argument": () => TEXT, "compile": (argument) => ({ "type": "string", "pattern": `^${escape(argument as string)}` }) },
+	"contains": { "label": "contains", "argument": () => TEXT, "compile": (argument) => ({ "type": "string", "pattern": escape(argument as string) }) },
+	"matches": { "label": "matches", "argument": () => GLOB, "compile": (argument) => ({ "type": "string", "pattern": globToPattern(argument as string) }) },
+	"does_not_match": { "label": "does not match", "argument": () => GLOB, "compile": (argument) => ({ "not": { "type": "string", "pattern": globToPattern(argument as string) } }) },
+	"includes": { "label": "includes", "argument": itemsOf, "compile": (argument) => ({ "type": "array", "contains": { "const": argument } }) },
 	// The escape hatch: a row whose argument IS the schema, for what the catalog doesn't offer.
-	"schema": { "label": "is valid against", "argument": { "type": ["object", "boolean"] }, "compile": (argument) => argument as Schema }
+	"schema": { "label": "is valid against", "argument": () => ({ "type": ["object", "boolean"] }), "compile": (argument) => argument as Schema }
 };
 
 /** Which operators each type of target offers (ui-predicate's types). */
@@ -147,6 +152,28 @@ export const TYPES: Record<string, string[]> = {
 	"string": ["is", "is_not", "is_any_of", "starts_with", "contains", "matches", "does_not_match", "schema"],
 	"array": ["is", "includes", "schema"]
 };
+
+export interface Target {
+	"label": string;
+	"type_id": string;
+	/** The schema of the value it is — what `is` takes, and where its examples are. */
+	"schema": Schema;
+	"description"?: string;
+}
+
+/** What a rule can be about: the facts where the program is (ui-predicate's targets) — at a call, its capability and
+ *  the resource it reaches; at a run, the program and its arguments. A subject is an object of these. */
+export const TARGETS: Record<string, Target> = {
+	"capability": { "label": "capability", "type_id": "string", "schema": { "type": "string", "examples": ["fs:read", "fs:write", "net", "net.ws", "exec", "eval", "env"] }, "description": "What a call can do" },
+	"resource": { "label": "resource", "type_id": "string", "schema": { "type": "string" }, "description": "What it reaches: a path, a URL, a command" },
+	"program": { "label": "program", "type_id": "string", "schema": { "type": "string" }, "description": "The file run, from the workspace root" },
+	"process.argv": { "label": "process.argv", "type_id": "array", "schema": { "type": "array", "items": { "type": "string" } }, "description": "The program's arguments" }
+};
+
+/** The schema of a row's argument: its operator's, given its target's (a target not in the catalog: any value). */
+export function argumentSchema(target_id: string, operator_id: string): Schema | undefined {
+	return OPERATORS[operator_id]?.argument(TARGETS[target_id]?.schema ?? true);
+}
 
 export interface ActionType {
 	"label": string;
@@ -353,7 +380,7 @@ export const POLICY_SCHEMA = {
 			},
 			"required": ["target_id", "operator_id"],
 			"additionalProperties": false,
-			"allOf": Object.entries(OPERATORS).map(([id, { argument }]) => ({ "if": { "properties": { "operator_id": { "const": id } } }, "then": { "properties": { "argument": argument }, "required": ["argument"] } }))
+			"allOf": Object.entries(OPERATORS).map(([id, { argument }]) => ({ "if": { "properties": { "operator_id": { "const": id } } }, "then": { "properties": { "argument": argument(true) }, "required": ["argument"] } }))
 		},
 		"action": {
 			"type": "object",

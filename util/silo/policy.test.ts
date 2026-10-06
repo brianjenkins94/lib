@@ -1,5 +1,5 @@
 import { strict as assert } from "node:assert";
-import { checkPolicy, effectiveDisposition, globToPattern, parsePolicy, problemOf, ruleFor, ruleMatches, toSchema, withoutRule, withRule, type Policy, type Rule } from "./policy";
+import { argumentSchema, checkPolicy, effectiveDisposition, globToPattern, parsePolicy, problemOf, ruleFor, ruleMatches, TARGETS, toSchema, TYPES, withoutRule, withRule, type Policy, type Rule } from "./policy";
 
 // Globs.
 assert.equal(new RegExp(globToPattern("/workspace/**"), "u").test("/workspace/a/b.txt"), true);
@@ -89,3 +89,15 @@ assert.match(checkPolicy({ "rules": [{ "when": { "logicalType_id": "most", "pred
 // Files read as before.
 assert.deepEqual(parsePolicy("not json"), { "version": 1, "rules": [] });
 assert.deepEqual(parsePolicy(JSON.stringify(policy)), policy);
+
+// The catalog: a row's argument follows its target.
+assert.deepEqual(argumentSchema("resource", "is"), { "type": "string" });
+assert.deepEqual(argumentSchema("capability", "is_any_of"), { "type": "array", "items": TARGETS.capability.schema });
+assert.deepEqual(argumentSchema("process.argv", "includes"), { "type": "string" });
+assert.deepEqual(argumentSchema("resource", "matches"), { "type": "string", "format": "glob" });
+assert.equal(argumentSchema("somewhere", "is"), true);
+assert.equal(argumentSchema("resource", "resembles"), undefined);
+
+for (const [id, { type_id }] of Object.entries(TARGETS)) {
+	assert.ok(TYPES[type_id] !== undefined, `${id}'s type has operators`);
+}
