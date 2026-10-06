@@ -150,6 +150,7 @@ export const OPERATORS: Record<string, Operator> = {
 
 /** Which operators each type of target offers (ui-predicate's types). */
 export const TYPES: Record<string, string[]> = {
+	"any": ["is", "is_not", "schema"],
 	"string": ["is", "is_not", "is_any_of", "starts_with", "contains", "matches", "does_not_match", "schema"],
 	"number": ["is", "is_not", "is_any_of", "schema"],
 	"boolean": ["is", "is_not"],
@@ -163,6 +164,8 @@ export interface Target {
 	"type_id": string;
 	/** The schema of the value it is — what `is` takes, and where its examples are. */
 	"schema": Schema;
+	/** What `give` takes for it, when not a list of its values, each a run's (process.argv's): a call's result is one. */
+	"given"?: Schema;
 	"description"?: string;
 }
 
@@ -177,7 +180,10 @@ export const TARGETS: Record<string, Target> = {
 	// `span`: a span reference (annotations.ts SpanRef) — found again through edits, as an authored annotation is. At a
 	// stop, the subject's `at` is the reference of a rule placed there; a variable in scope is `variables.<name>` (named
 	// per stop, so its host adds it to the catalog).
-	"at": { "label": "at", "type_id": "span", "schema": { "type": "object", "format": "span" }, "description": "Where in the code: a statement, followed through edits" }
+	"at": { "label": "at", "type_id": "span", "schema": { "type": "object", "format": "span" }, "description": "Where in the code: a statement, followed through edits" },
+	// What a call returns, given instead of the call (RULES.md, slice 2): a fetch's body (JSON, or text), a read's
+	// contents, a command's output.
+	"result": { "label": "result", "type_id": "any", "schema": true, "given": true, "description": "What the call returns: a fetch's body, a read's contents, a command's output" }
 };
 
 /** The places a rule is about: each `at is <span reference>` among its rows. */
@@ -216,7 +222,7 @@ export const ACTIONS: Record<string, ActionType> = {
 	"allow": { "label": "allow" },
 	"deny": { "label": "deny" },
 	"ask": { "label": "ask" },
-	"give": { "label": "give", "targets": ["process.argv"], "argument": (target) => ({ "type": "array", "items": target, "minItems": 1 }) },
+	"give": { "label": "give", "targets": ["process.argv", "result"], "argument": (target) => ({ "type": "array", "items": target, "minItems": 1 }) },
 	"set": { "label": "set", "targets": [], "argument": (target) => target },
 	"stop": { "label": "stop" }
 };
@@ -224,7 +230,9 @@ export const ACTIONS: Record<string, ActionType> = {
 /** The schema of an action's argument, given what it acts on (a target not in the catalog: any value); undefined: it
  *  takes none. */
 export function actionSchema(action_id: string, target_id?: string): Schema | undefined {
-	return ACTIONS[action_id]?.argument?.(TARGETS[target_id ?? ""]?.schema ?? true);
+	const target = TARGETS[target_id ?? ""];
+
+	return action_id === "give" && target?.given !== undefined ? target.given : ACTIONS[action_id]?.argument?.(target?.schema ?? true);
 }
 
 // ── Compiling and matching ──
@@ -326,6 +334,19 @@ export function given(policy: Policy, subject: Subject, target_id: string): { "r
 
 		if (give !== undefined && Array.isArray(give.argument) && ruleMatches(rule, subject)) {
 			return { "rule": rule, "values": give.argument };
+		}
+	}
+
+	return undefined;
+}
+
+/** What the first rule matching a call gives as its result (instead of the call): the value, with the rule. */
+export function givenResult(policy: Policy, subject: Subject): { "rule": Rule; "value": unknown } | undefined {
+	for (const rule of policy.rules) {
+		const give = rule.then.find((action) => action.action_id === "give" && action.target_id === "result");
+
+		if (give !== undefined && ruleMatches(rule, subject)) {
+			return { "rule": rule, "value": give.argument };
 		}
 	}
 
@@ -441,7 +462,7 @@ export const POLICY_SCHEMA = {
 			"additionalProperties": false,
 			"allOf": Object.entries(ACTIONS).map(([id, { targets, argument }]) => ({ "if": { "properties": { "action_id": { "const": id } } }, "then": { "allOf": [
 				targets === undefined ? { "not": { "required": ["target_id"] } } : { "required": ["target_id"] },
-				argument === undefined ? { "not": { "required": ["argument"] } } : { "properties": { "argument": argument(true) }, "required": ["argument"] }
+				argument === undefined ? { "not": { "required": ["argument"] } } : { "properties": { "argument": id === "give" ? true : argument(true) }, "required": ["argument"] }
 			] } }))
 		}
 	}

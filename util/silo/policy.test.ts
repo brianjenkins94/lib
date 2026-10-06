@@ -1,5 +1,5 @@
 import { strict as assert } from "node:assert";
-import { actionSchema, argumentSchema, checkPolicy, given, placesOf, effectiveDisposition, globToPattern, parsePolicy, problemOf, ruleFor, ruleMatches, TARGETS, toSchema, TYPES, withoutRule, withRule, type Policy, type Rule } from "./policy";
+import { actionSchema, argumentSchema, checkPolicy, given, givenResult, placesOf, effectiveDisposition, globToPattern, parsePolicy, problemOf, ruleFor, ruleMatches, TARGETS, toSchema, TYPES, withoutRule, withRule, type Policy, type Rule } from "./policy";
 
 // Globs.
 assert.equal(new RegExp(globToPattern("/workspace/**"), "u").test("/workspace/a/b.txt"), true);
@@ -125,3 +125,12 @@ assert.equal(ruleMatches(setRate, { "program": "tax.js", "at": { ...place, "span
 assert.equal(ruleMatches(setRate, { "program": "tax.js", "at": place, "variables": { "country": "US" } }), false);
 assert.deepEqual(argumentSchema("at", "is"), { "type": "object", "format": "span" });
 assert.deepEqual(checkPolicy({ "rules": [setRate] }), []);
+
+// A call's result, given instead of the call: one value, not a list of runs.
+const fakeRates: Rule = { "when": { "logicalType_id": "all", "predicates": [{ "target_id": "capability", "operator_id": "is", "argument": "net" }, { "target_id": "resource", "operator_id": "matches", "argument": "https://api.example.com/**" }] }, "then": [{ "action_id": "give", "target_id": "result", "argument": { "CA": 0.13 } }] };
+
+assert.deepEqual(givenResult({ "version": 1, "rules": [fakeRates] }, { "capability": "net", "resource": "https://api.example.com/rates" }), { "rule": fakeRates, "value": { "CA": 0.13 } });
+assert.equal(givenResult({ "version": 1, "rules": [fakeRates] }, { "capability": "net", "resource": "https://elsewhere.org/" }), undefined);
+assert.equal(actionSchema("give", "result"), true);
+assert.deepEqual(checkPolicy({ "rules": [fakeRates] }), []);
+assert.equal(effectiveDisposition({ "version": 1, "rules": [fakeRates] }, "net", "https://api.example.com/rates", true), "review", "giving a result decides nothing for a real call");
