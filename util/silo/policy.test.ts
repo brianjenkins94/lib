@@ -1,5 +1,5 @@
 import { strict as assert } from "node:assert";
-import { actionSchema, argumentSchema, checkPolicy, given, effectiveDisposition, globToPattern, parsePolicy, problemOf, ruleFor, ruleMatches, TARGETS, toSchema, TYPES, withoutRule, withRule, type Policy, type Rule } from "./policy";
+import { actionSchema, argumentSchema, checkPolicy, given, placesOf, effectiveDisposition, globToPattern, parsePolicy, problemOf, ruleFor, ruleMatches, TARGETS, toSchema, TYPES, withoutRule, withRule, type Policy, type Rule } from "./policy";
 
 // Globs.
 assert.equal(new RegExp(globToPattern("/workspace/**"), "u").test("/workspace/a/b.txt"), true);
@@ -114,3 +114,14 @@ assert.equal(actionSchema("allow"), undefined);
 assert.deepEqual(checkPolicy(withMock), []);
 assert.notDeepEqual(checkPolicy({ "rules": [{ ...mocked, "then": [{ "action_id": "give", "argument": [["x"]] }] }] }), [], "give names its target");
 assert.notDeepEqual(checkPolicy({ "rules": [{ ...mocked, "then": [{ "action_id": "allow", "target_id": "process.argv" }] }] }), [], "allow takes none");
+
+// A place in the code: at is a span reference; a variable in scope as variables.<name>.
+const place = { "span": "9f3a", "key": "bablr1", "file": "/workspace/tax.js", "shape": { "type": "VariableDeclaration", "atoms": ["const", "rate", "=", "0"] }, "context": {} };
+const setRate: Rule = { "when": { "logicalType_id": "all", "predicates": [{ "target_id": "program", "operator_id": "is", "argument": "tax.js" }, { "target_id": "at", "operator_id": "is", "argument": place }, { "target_id": "variables.country", "operator_id": "is", "argument": "FR" }] }, "then": [{ "action_id": "set", "target_id": "variables.rate", "argument": 0.25 }] };
+
+assert.deepEqual(placesOf(setRate), [place]);
+assert.equal(ruleMatches(setRate, { "program": "tax.js", "at": structuredClone(place), "variables": { "country": "FR", "rate": 0.2 } }), true);
+assert.equal(ruleMatches(setRate, { "program": "tax.js", "at": { ...place, "span": "other" }, "variables": { "country": "FR" } }), false);
+assert.equal(ruleMatches(setRate, { "program": "tax.js", "at": place, "variables": { "country": "US" } }), false);
+assert.deepEqual(argumentSchema("at", "is"), { "type": "object", "format": "span" });
+assert.deepEqual(checkPolicy({ "rules": [setRate] }), []);

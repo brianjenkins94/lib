@@ -151,7 +151,11 @@ export const OPERATORS: Record<string, Operator> = {
 /** Which operators each type of target offers (ui-predicate's types). */
 export const TYPES: Record<string, string[]> = {
 	"string": ["is", "is_not", "is_any_of", "starts_with", "contains", "matches", "does_not_match", "schema"],
-	"array": ["is", "includes", "schema"]
+	"number": ["is", "is_not", "is_any_of", "schema"],
+	"boolean": ["is", "is_not"],
+	"array": ["is", "includes", "schema"],
+	// A place in the code: one statement, by its span reference (annotations.ts) — the same place, or not.
+	"span": ["is"]
 };
 
 export interface Target {
@@ -169,8 +173,28 @@ export const TARGETS: Record<string, Target> = {
 	"resource": { "label": "resource", "type_id": "string", "schema": { "type": "string" }, "description": "What it reaches: a path, a URL, a command" },
 	"program": { "label": "program", "type_id": "string", "schema": { "type": "string" }, "description": "The file run, from the workspace root" },
 	// `command-line`: written as you'd type them after `node file.js` (an annotation, for an editor's input).
-	"process.argv": { "label": "process.argv", "type_id": "array", "schema": { "type": "array", "items": { "type": "string" }, "format": "command-line" }, "description": "The program's arguments" }
+	"process.argv": { "label": "process.argv", "type_id": "array", "schema": { "type": "array", "items": { "type": "string" }, "format": "command-line" }, "description": "The program's arguments" },
+	// `span`: a span reference (annotations.ts SpanRef) — found again through edits, as an authored annotation is. At a
+	// stop, the subject's `at` is the reference of a rule placed there; a variable in scope is `variables.<name>` (named
+	// per stop, so its host adds it to the catalog).
+	"at": { "label": "at", "type_id": "span", "schema": { "type": "object", "format": "span" }, "description": "Where in the code: a statement, followed through edits" }
 };
+
+/** The places a rule is about: each `at is <span reference>` among its rows. */
+export function placesOf(rule: Rule): unknown[] {
+	const places: unknown[] = [];
+	const walk = (predicate: Predicate): void => {
+		if ("predicates" in predicate) {
+			predicate.predicates.forEach(walk);
+		} else if (predicate.target_id === "at" && predicate.operator_id === "is") {
+			places.push(predicate.argument);
+		}
+	};
+
+	walk(rule.when);
+
+	return places;
+}
 
 /** The schema of a row's argument: its operator's, given its target's (a target not in the catalog: any value). */
 export function argumentSchema(target_id: string, operator_id: string): Schema | undefined {
