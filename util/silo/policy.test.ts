@@ -1,5 +1,5 @@
 import { strict as assert } from "node:assert";
-import { argumentSchema, checkPolicy, effectiveDisposition, globToPattern, parsePolicy, problemOf, ruleFor, ruleMatches, TARGETS, toSchema, TYPES, withoutRule, withRule, type Policy, type Rule } from "./policy";
+import { actionSchema, argumentSchema, checkPolicy, given, effectiveDisposition, globToPattern, parsePolicy, problemOf, ruleFor, ruleMatches, TARGETS, toSchema, TYPES, withoutRule, withRule, type Policy, type Rule } from "./policy";
 
 // Globs.
 assert.equal(new RegExp(globToPattern("/workspace/**"), "u").test("/workspace/a/b.txt"), true);
@@ -31,7 +31,7 @@ assert.equal((toSchema(writes) as Record<string, unknown>)["$schema"], "https://
 const argv: Rule = { "when": { "logicalType_id": "all", "predicates": [
 	{ "target_id": "program", "operator_id": "matches", "argument": "**/tax.js" },
 	{ "target_id": "process.argv", "operator_id": "includes", "argument": "--live" }
-] }, "then": [{ "action_id": "give", "argument": ["CA", "SPRING10"] }] };
+] }, "then": [{ "action_id": "give", "target_id": "process.argv", "argument": [["CA", "SPRING10"]] }] };
 const policy: Policy = { "version": 1, "rules": [
 	argv,
 	{ "when": { "logicalType_id": "all", "predicates": [{ "target_id": "capability", "operator_id": "is", "argument": "net" }, { "target_id": "resource", "operator_id": "starts_with", "argument": "https://api.example.com/" }] }, "then": [{ "action_id": "allow" }] },
@@ -101,3 +101,16 @@ assert.equal(argumentSchema("resource", "resembles"), undefined);
 for (const [id, { type_id }] of Object.entries(TARGETS)) {
 	assert.ok(TYPES[type_id] !== undefined, `${id}'s type has operators`);
 }
+
+// give: what the program reads, with values of its own — each a run's.
+const mocked: Rule = { "when": { "logicalType_id": "all", "predicates": [{ "target_id": "program", "operator_id": "is", "argument": "tax.js" }] }, "then": [{ "action_id": "give", "target_id": "process.argv", "argument": [["CA", "SPRING10"], ["FR"]] }] };
+const withMock: Policy = { "version": 1, "rules": [mocked, ...policy.rules] };
+
+assert.deepEqual(given(withMock, { "program": "tax.js" }, "process.argv"), { "rule": mocked, "values": [["CA", "SPRING10"], ["FR"]] });
+assert.equal(given(withMock, { "program": "other.js" }, "process.argv"), undefined);
+assert.equal(given(withMock, { "program": "tax.js" }, "fetch"), undefined);
+assert.deepEqual(actionSchema("give", "process.argv"), { "type": "array", "items": TARGETS["process.argv"].schema, "minItems": 1 });
+assert.equal(actionSchema("allow"), undefined);
+assert.deepEqual(checkPolicy(withMock), []);
+assert.notDeepEqual(checkPolicy({ "rules": [{ ...mocked, "then": [{ "action_id": "give", "argument": [["x"]] }] }] }), [], "give names its target");
+assert.notDeepEqual(checkPolicy({ "rules": [{ ...mocked, "then": [{ "action_id": "allow", "target_id": "process.argv" }] }] }), [], "allow takes none");

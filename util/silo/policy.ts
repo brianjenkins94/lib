@@ -66,9 +66,10 @@ export interface Compound {
 
 export type Predicate = Comparison | Compound;
 
-/** What to do when a rule matches, with the action's argument (`give`'s value). */
+/** What to do when a rule matches: the action, what it acts on (`give` process.argv), and its argument (what it gives). */
 export interface Action {
 	"action_id": string;
+	"target_id"?: string;
 	"argument"?: unknown;
 }
 
@@ -177,20 +178,29 @@ export function argumentSchema(target_id: string, operator_id: string): Schema |
 
 export interface ActionType {
 	"label": string;
-	/** The schema of the argument it takes; absent: none. */
-	"argument"?: Schema;
+	/** The targets it can act on; absent: it takes none. (`set`'s — a variable at a stop — are named per stop, so its
+	 *  host adds them.) */
+	"targets"?: string[];
+	/** The schema of the argument it takes, given its target's; absent: none. */
+	"argument"?: (target: Schema) => Schema;
 }
 
-/** Every rule's action. `allow` / `deny` / `ask` decide a call; `give` answers a read with a value (process.argv's, a
- *  call's result); `set` a variable's; `stop` pauses there. */
+/** Every rule's action. `allow` / `deny` / `ask` decide a call; `give` answers what the program reads — process.argv —
+ *  with values of its own, each a run of its own (one value, one run); `set` a variable; `stop` pauses there. */
 export const ACTIONS: Record<string, ActionType> = {
 	"allow": { "label": "allow" },
 	"deny": { "label": "deny" },
 	"ask": { "label": "ask" },
-	"give": { "label": "give", "argument": true },
-	"set": { "label": "set", "argument": true },
+	"give": { "label": "give", "targets": ["process.argv"], "argument": (target) => ({ "type": "array", "items": target, "minItems": 1 }) },
+	"set": { "label": "set", "targets": [], "argument": (target) => target },
 	"stop": { "label": "stop" }
 };
+
+/** The schema of an action's argument, given what it acts on (a target not in the catalog: any value); undefined: it
+ *  takes none. */
+export function actionSchema(action_id: string, target_id?: string): Schema | undefined {
+	return ACTIONS[action_id]?.argument?.(TARGETS[target_id ?? ""]?.schema ?? true);
+}
 
 // ── Compiling and matching ──
 
@@ -282,6 +292,19 @@ export function parsePolicy(text: string): Policy {
 	} catch {
 		return { ...EMPTY_POLICY };
 	}
+}
+
+/** What the first rule matching the subject gives `target_id` (process.argv): its values, each a run's — with the rule. */
+export function given(policy: Policy, subject: Subject, target_id: string): { "rule": Rule; "values": unknown[] } | undefined {
+	for (const rule of policy.rules) {
+		const give = rule.then.find((action) => action.action_id === "give" && action.target_id === target_id);
+
+		if (give !== undefined && Array.isArray(give.argument) && ruleMatches(rule, subject)) {
+			return { "rule": rule, "values": give.argument };
+		}
+	}
+
+	return undefined;
 }
 
 /** The first rule that matches the subject and has one of `actions` (any action, without), or undefined. */
@@ -386,11 +409,15 @@ export const POLICY_SCHEMA = {
 			"type": "object",
 			"properties": {
 				"action_id": { "enum": Object.keys(ACTIONS) },
+				"target_id": { "type": "string" },
 				"argument": true
 			},
 			"required": ["action_id"],
 			"additionalProperties": false,
-			"allOf": Object.entries(ACTIONS).map(([id, { argument }]) => ({ "if": { "properties": { "action_id": { "const": id } } }, "then": argument === undefined ? { "not": { "required": ["argument"] } } : { "properties": { "argument": argument }, "required": ["argument"] } }))
+			"allOf": Object.entries(ACTIONS).map(([id, { targets, argument }]) => ({ "if": { "properties": { "action_id": { "const": id } } }, "then": { "allOf": [
+				targets === undefined ? { "not": { "required": ["target_id"] } } : { "required": ["target_id"] },
+				argument === undefined ? { "not": { "required": ["argument"] } } : { "properties": { "argument": argument(true) }, "required": ["argument"] }
+			] } }))
 		}
 	}
 };
