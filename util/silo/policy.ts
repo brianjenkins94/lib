@@ -168,7 +168,8 @@ export const TARGETS: Record<string, Target> = {
 	"capability": { "label": "capability", "type_id": "string", "schema": { "type": "string", "examples": ["fs:read", "fs:write", "net", "net.ws", "exec", "eval", "env"] }, "description": "What a call can do" },
 	"resource": { "label": "resource", "type_id": "string", "schema": { "type": "string" }, "description": "What it reaches: a path, a URL, a command" },
 	"program": { "label": "program", "type_id": "string", "schema": { "type": "string" }, "description": "The file run, from the workspace root" },
-	"process.argv": { "label": "process.argv", "type_id": "array", "schema": { "type": "array", "items": { "type": "string" } }, "description": "The program's arguments" }
+	// `command-line`: written as you'd type them after `node file.js` (an annotation, for an editor's input).
+	"process.argv": { "label": "process.argv", "type_id": "array", "schema": { "type": "array", "items": { "type": "string" }, "format": "command-line" }, "description": "The program's arguments" }
 };
 
 /** The schema of a row's argument: its operator's, given its target's (a target not in the catalog: any value). */
