@@ -16,7 +16,7 @@
     "@modelcontextprotocol/sdk": "*",
     "@opensearch-project/opensearch": "*",
     "@wakaru/cli": "*",
-    "ajv": "*",
+    "ajv": "^8",
     "cmd-ts": "*",
     "ejs": "*",
     "esbuild": "*",
