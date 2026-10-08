@@ -78,6 +78,14 @@ decided = withoutRule(decided, "net", "https://b.example.com");
 assert.equal(effectiveDisposition(decided, "net", "https://b.example.com", true), "review");
 assert.deepEqual(checkPolicy(decided), []);
 
+// Skip: a decision like the others — stored as its own action, it's what the call gets, ahead of a broader allow; and the
+// policy file's schema takes it.
+decided = withRule(withRule(decided, "fs:write", "/workspace/**", "allow"), "fs:write", "/workspace/out.txt", "skip");
+assert.equal(effectiveDisposition(decided, "fs:write", "/workspace/out.txt", true), "skip");
+assert.deepEqual(decided.rules[0].then, [{ "action_id": "skip" }]);
+assert.deepEqual(checkPolicy(decided), []);
+assert.equal(effectiveDisposition({ "version": 1, "rules": [{ "when": { "logicalType_id": "all", "predicates": [{ "target_id": "capability", "operator_id": "is", "argument": "exec" }] }, "then": [{ "action_id": "skip" }] }] }, "exec", "rm -rf /", true), "skip", "every exec, skipped by one rule");
+
 // The file's schema: every rule above is valid; malformed ones are said where.
 assert.deepEqual(checkPolicy(policy), []);
 assert.notDeepEqual(checkPolicy({ "rules": [{ "capability": "net", "resource": "x", "disposition": "allow" }] }), []);

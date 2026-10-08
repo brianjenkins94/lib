@@ -30,15 +30,17 @@ export function isDangerous(cap: string): boolean {
 //
 // A rule is `{ when, then }`: WHEN the program reaches something (a call, an input, a line) whose facts — the SUBJECT,
 // e.g. `{ capability: "fs:write", resource: "/workspace/out.txt" }` — match its rows, THEN do its actions (allow, deny,
-// ask; give a value; stop). `when` is stored as rows in ui-predicate's shape (github.com/FGRibreau/ui-predicate, kept
+// skip, ask; give a value; stop). `when` is stored as rows in ui-predicate's shape (github.com/FGRibreau/ui-predicate, kept
 // JSON-compatible): a compound `{ logicalType_id, predicates }` of comparisons `{ target_id, operator_id, argument }`,
 // so a rule round-trips with a predicate editor exactly and keeps what was meant (`matches /workspace/**` stays a glob).
 // Each row COMPILES to JSON Schema (an operator says what it compiles to), and a rule matches when its subject is valid
 // against the compiled schema, by ajv. POLICY_SCHEMA is the file's own JSON Schema, for editors to check and complete
 // policy files by hand.
 
-/** A stored decision. `review` is never stored — it's the computed default for an undecided dangerous call. */
-export type Disposition = "allow" | "deny";
+/** A stored decision. `skip`: the call isn't made, and the program goes on as if it had done nothing — a debugger's
+ *  stand-in answers it (an enforcer with no stand-in to give treats it as `deny`: it isn't made either way). `review`
+ *  is never stored — it's the computed default for an undecided dangerous call. */
+export type Disposition = "allow" | "deny" | "skip";
 /** The effective disposition shown in the UI (stored decision, or the computed default). */
 export type Effective = Disposition | "review";
 
@@ -216,11 +218,13 @@ export interface ActionType {
 	"argument"?: (target: Schema) => Schema;
 }
 
-/** Every rule's action. `allow` / `deny` / `ask` decide a call; `give` answers what the program reads — process.argv —
- *  with values of its own, each a run of its own (one value, one run); `set` a variable; `stop` pauses there. */
+/** Every rule's action. `allow` / `deny` / `skip` / `ask` decide a call; `give` answers what the program reads —
+ *  process.argv — with values of its own, each a run of its own (one value, one run); `set` a variable; `stop` pauses
+ *  there. */
 export const ACTIONS: Record<string, ActionType> = {
 	"allow": { "label": "allow" },
 	"deny": { "label": "deny" },
+	"skip": { "label": "skip" },
 	"ask": { "label": "ask" },
 	"give": { "label": "give", "targets": ["process.argv", "result"], "argument": (target) => ({ "type": "array", "items": target, "minItems": 1 }) },
 	"set": { "label": "set", "targets": [], "argument": (target) => target },
@@ -358,7 +362,7 @@ export function ruleFor(policy: Policy, subject: Subject, actions?: string[]): R
 	return policy.rules.find((rule) => (actions === undefined || rule.then.some(({ action_id }) => actions.includes(action_id))) && ruleMatches(rule, subject));
 }
 
-const DECISIONS = ["allow", "deny", "ask"];
+const DECISIONS = ["allow", "deny", "skip", "ask"];
 
 /** The effective disposition for a call: the first rule deciding it wins (`ask` → review); otherwise dangerous →
  *  review, safe → allow. */
