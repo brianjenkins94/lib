@@ -267,8 +267,11 @@ if (isEntry(import.meta)) {
 		const isNested = (entry: string) => nestedDirs.some((dir) => entry.startsWith(dir + "/")) || nestedAbs.some((dir) => entry.startsWith(dir + path.sep));
 
 	// A package that declares `files` (e.g. the monaco-vscode-api bundle) ships its own pre-built
-	// output — `build()` above already produced it. Everything else is built from source here.
-		const preBuilt = Array.isArray(packageJson["files"]);
+	// output — `build()` above already produced it. So does one whose `publishConfig.directory` names a built folder
+	// (npm's and pnpm's field: pack that folder instead): it ships the folder whole — a built site (the editor's, its
+	// workbench app → docs/), less the tarballs this run writes beside it. Everything else is built from source here.
+		const directory = packageJson["publishConfig"]?.["directory"] as string | undefined;
+		const preBuilt = Array.isArray(packageJson["files"]) || typeof directory === "string";
 
 	// Runnable CLIs get a shebang (Node strips it on import, so they stay importable too) and a bin entry.
 	// Two sources: anything under scripts/ (convention → bin `${pkg}-${name}`), and any path a package
@@ -282,7 +285,9 @@ if (isEntry(import.meta)) {
 		// (`src/index.ts`), whose declaration is keyed by the source (`src/index.d.ts`): entry name → that key.
 		const entryDeclarations = new Map<string, string>();
 
-		if (preBuilt) {
+		if (typeof directory === "string") {
+			files = Object.fromEntries(Object.entries(await collectBuiltFiles(path.join(__root, workspace, directory).replace(/\\/gu, "/"), ["."])).filter(([key]) => !key.endsWith(".tgz")));
+		} else if (preBuilt) {
 			files = await collectBuiltFiles(path.join(__root, workspace).replace(/\\/gu, "/"), packageJson["files"]);
 		} else {
 			const rawExports = packageJson["exports"];
@@ -402,7 +407,13 @@ if (isEntry(import.meta)) {
 			.sort();
 
 	// Drop `scripts` from the published archive — they're build/dev tooling, and a lifecycle
-		const buildPackageJson = (version) => JSON.stringify(preBuilt ? {
+		// A built folder's manifest is the folder's: what it is, not the workspace's sources (their exports, their
+		// dependencies) — a site's tarball installs nothing.
+		const buildPackageJson = (version) => JSON.stringify(typeof directory === "string" ? {
+			"name": scopeName(packageJson["name"]),
+			...packageJson["description"] === undefined ? {} : { "description": packageJson["description"] },
+			"version": version
+		} : preBuilt ? {
 			...publishable,
 			"name": scopeName(packageJson["name"]),
 			"version": version
