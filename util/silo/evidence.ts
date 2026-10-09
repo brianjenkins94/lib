@@ -56,6 +56,18 @@ export interface RunEnvelope {
 	"files": Record<string, string>;
 	/** Every version of a file the run ran, when it ran more than one (a preview's hot updates): oids, oldest first. */
 	"versions"?: Record<string, string[]>;
+	/** What it did to the world — and what it didn't: each gated call (a capability, the resource it reached) once per
+	 *  way it went, with how many calls went that way. Absent when it made no gated call. */
+	"effects"?: Effect[];
+}
+
+/** One kind of gated call a run made, and how it went: `made` for real; `denied` (it failed, as a refused call does);
+ *  `skipped` (not made — the program went on as if it had done nothing); `given` (a rule's result in its place). */
+export interface Effect {
+	"capability": string;
+	"resource": string;
+	"how": "made" | "denied" | "skipped" | "given";
+	"calls": number;
 }
 
 /** silo's folder, at the repo root. */
