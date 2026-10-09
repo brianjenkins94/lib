@@ -150,6 +150,59 @@ export function parseRuns(text: string): RunEnvelope[] {
 	return [...runs.values()];
 }
 
+/** What to ask the run ledger: runs that ran `file` (their entry, or any file they ran), by `user`, ended `since` (ISO);
+ *  and of their effects, those whose capability is `capability` (`fs` matches `fs:read` and `fs:write`), whose resource
+ *  contains `resource`, that went `how` — given any of these three, only the runs with such an effect. */
+export interface RunQuery {
+	"file"?: string;
+	"user"?: string;
+	"since"?: string;
+	"capability"?: string;
+	"resource"?: string;
+	"how"?: Effect["how"];
+	/** Runs answered, newest first, at most (default 20); the effects rollup is over every run that matched. */
+	"limit"?: number;
+}
+
+/** The ledger's answer: how many runs matched, the newest of them, and their effects added up — each kind of call with
+ *  its calls across those runs, how many runs made it, and the first and last time (the runs' ends). */
+export interface RunAnswer {
+	"total": number;
+	"runs": RunEnvelope[];
+	"effects": (Effect & { "runs": number; "first": string; "last": string })[];
+}
+
+/** Ask runs (parseRuns') a RunQuery. */
+export function queryRuns(runs: RunEnvelope[], query: RunQuery = {}): RunAnswer {
+	const byEffect = query.capability !== undefined || query.resource !== undefined || query.how !== undefined;
+	const wanted = (effect: Effect): boolean => (query.capability === undefined || effect.capability === query.capability || effect.capability.startsWith(query.capability + ":"))
+		&& (query.resource === undefined || effect.resource.includes(query.resource))
+		&& (query.how === undefined || effect.how === query.how);
+	const matched = runs.filter((run) => (query.file === undefined || run.entry === query.file || query.file in run.files)
+		&& (query.user === undefined || run.user === query.user)
+		&& (query.since === undefined || run.endedAt >= query.since)
+		&& (!byEffect || (run.effects ?? []).some(wanted))).toSorted((a, b) => b.endedAt.localeCompare(a.endedAt));
+	const effects = new Map<string, RunAnswer["effects"][number]>();
+
+	// (newest first, so the first a kind is seen in is its last)
+	for (const run of matched) {
+		for (const effect of (run.effects ?? []).filter(wanted)) {
+			const key = `${effect.how}\0${effect.capability}\0${effect.resource}`;
+			const known = effects.get(key);
+
+			if (known === undefined) {
+				effects.set(key, { ...effect, "runs": 1, "first": run.endedAt, "last": run.endedAt });
+			} else {
+				known.calls += effect.calls;
+				known.runs += 1;
+				known.first = run.endedAt;
+			}
+		}
+	}
+
+	return { "total": matched.length, "runs": matched.slice(0, query.limit ?? 20), "effects": [...effects.values()].toSorted((a, b) => b.runs - a.runs || a.capability.localeCompare(b.capability) || a.resource.localeCompare(b.resource)) };
+}
+
 /** What runs observed at one span of one file. Spans are BABLR `spanAnchors` ids — content-addressed, so a span keeps
  *  its id when code around it moves or changes, and gets a new one when it's edited itself (its evidence stays behind
  *  and fades). `key` names the scheme that made the id, so a change of scheme is explicit. Each kind keeps two sorts of
