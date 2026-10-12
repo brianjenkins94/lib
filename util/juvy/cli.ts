@@ -15,7 +15,8 @@
  */
 import type { CommandHelpData, Example, SubcommandsHelpData } from "cmd-ts";
 import type { Juvy } from "./index";
-import { HelpRequested } from "./index";
+import { isEntry } from "@brianjenkins94/util/env";
+import { HelpRequested, juvy } from "./index";
 
 // ---------------------------------------------------------------------------------------------------------
 // Descriptors — plain data (NOT cmd-ts commands)
@@ -147,34 +148,35 @@ function didYouMean(token: string, node: JuvyApp): string {
 
 const HELP_FLAGS = new Set(["--help", "-h"]);
 
-/** Where a command's output goes: a process's stdout and stderr (`run`), or anywhere else (`invoke`) — a shell that
- *  isn't a process, a test. */
-export interface Io {
-	"out": (text: string) => void;
-	"err": (text: string) => void;
+/** What `run` writes to and exits through: a process — the real one, unless it's given another shaped like these parts
+ *  of one (a shell that isn't a process, a test). */
+export interface RunProcess {
+	"stdout": { "write": (text: string) => unknown };
+	"stderr": { "write": (text: string) => unknown };
+	"exitCode"?: number | string | null;
+	"exit": (code?: number | string | null) => unknown;
 }
 
-const processIo: Io = { "out": (text) => { process.stdout.write(text); }, "err": (text) => { process.stderr.write(text); } };
-
-async function dispatch(node: JuvyCommand | JuvyApp, argv: string[], path: string[], io: Io): Promise<{ "exitCode": number; "value"?: unknown }> {
+async function dispatch(node: JuvyCommand | JuvyApp, argv: string[], path: string[], proc: RunProcess): Promise<void> {
 	if (node.kind === "subcommands") {
 		const token = argv[0];
 
 		if (token === undefined || HELP_FLAGS.has(token)) {
-			io.out(await renderSubcommandsHelp(node, path) + "\n");
+			proc.stdout.write(await renderSubcommandsHelp(node, path) + "\n");
 
-			return { "exitCode": 0 };
+			return;
 		}
 
 		const match = findCommand(node, token);
 
 		if (match === undefined) {
-			io.err(`error: unknown ${node.name} command '${token}'.${didYouMean(token, node)}\n\n` + await renderSubcommandsHelp(node, path) + "\n");
+			proc.stderr.write(`error: unknown ${node.name} command '${token}'.${didYouMean(token, node)}\n\n` + await renderSubcommandsHelp(node, path) + "\n");
+			proc.exitCode = 1;
 
-			return { "exitCode": 1 };
+			return;
 		}
 
-		return dispatch(match, argv.slice(1), [...path, match.name], io);
+		return dispatch(match, argv.slice(1), [...path, match.name], proc);
 	}
 
 	// leaf command: juvy owns parsing (flags + positionals) and validation. `--help` is asked of the parse, so a command
@@ -184,9 +186,9 @@ async function dispatch(node: JuvyCommand | JuvyApp, argv: string[], path: strin
 			await node.config.parse(argv);
 		} catch (error) {
 			if (error instanceof HelpRequested) {
-				io.out(await renderCommandHelp(node, path) + "\n");
+				proc.stdout.write(await renderCommandHelp(node, path) + "\n");
 
-				return { "exitCode": 0 };
+				return;
 			}
 
 			throw error;
@@ -194,25 +196,12 @@ async function dispatch(node: JuvyCommand | JuvyApp, argv: string[], path: strin
 
 		node.config.validate();
 	} else if (argv.some((argument) => HELP_FLAGS.has(argument))) {
-		io.out(await renderCommandHelp(node, path) + "\n");
+		proc.stdout.write(await renderCommandHelp(node, path) + "\n");
 
-		return { "exitCode": 0 };
+		return;
 	}
 
-	return { "exitCode": 0, "value": await node.handler(node.config as Juvy) };
-}
-
-/** Route `argv` through the app — routing, parsing, validation, help, the handler — writing through `io` rather than to
- *  a process, which it never touches: the exit code (1 for an unknown command, a bad argument or a handler that threw,
- *  each said on `err`) and what the handler returned. `run` is this, on a process. */
-export async function invoke(app: JuvyCommand | JuvyApp, argv: string[], io: Io): Promise<{ "exitCode": number; "value"?: unknown }> {
-	try {
-		return await dispatch(app, argv, [app.name], io);
-	} catch (error) {
-		io.err((error instanceof Error ? error.message : String(error)) + "\n");
-
-		return { "exitCode": 1 };
-	}
+	await node.handler(node.config as Juvy);
 }
 
 // ---------------------------------------------------------------------------------------------------------
@@ -225,28 +214,26 @@ export interface RunOptions {
 	"onExit"?: () => void;
 	"signals"?: NodeJS.Signals[];
 	"exit"?: boolean;
+	/** Where it writes and how it exits: the process, by default. */
+	"process"?: RunProcess;
 }
 
 /** Route argv through the app (juvy parses + validates), with lifecycle scaffolding (signals + graceful exit). */
 export async function run(app: JuvyCommand | JuvyApp, options: RunOptions = {}): Promise<void> {
-	const { argv = process.argv.slice(2), onError, onExit, signals = ["SIGINT", "SIGUSR1", "SIGUSR2"], exit = true } = options;
+	const { argv = process.argv.slice(2), onError, onExit, signals = ["SIGINT", "SIGUSR1", "SIGUSR2"], exit = true, "process": proc = process } = options;
 
 	if (onExit !== undefined) {
 		for (const signal of [...signals, "exit" as NodeJS.Signals]) { process.on(signal, onExit); }
 	}
 
 	try {
-		const { exitCode } = await dispatch(app, argv, [app.name], processIo);
-
-		if (exitCode !== 0) {
-			process.exitCode = exitCode;
-		}
+		await dispatch(app, argv, [app.name], proc);
 	} catch (error) {
-		if (onError !== undefined) { await onError(error); } else { process.stderr.write((error instanceof Error ? error.message : String(error)) + "\n"); }
-		process.exitCode = 1;
+		if (onError !== undefined) { await onError(error); } else { proc.stderr.write((error instanceof Error ? error.message : String(error)) + "\n"); }
+		proc.exitCode = 1;
 	}
 
-	if (exit) { process.exit(process.exitCode ?? 0); }
+	if (exit) { proc.exit(proc.exitCode ?? 0); }
 }
 
 // ---------------------------------------------------------------------------------------------------------
@@ -299,4 +286,51 @@ export function liftGlobals(argv: string[], specs: Record<string, GlobalFlag>): 
 	}
 
 	return { "values": values, "argv": args };
+}
+
+if (isEntry(import.meta)) {
+	void (async function() {
+		const assert: typeof import("node:assert").strict = (await import("node:assert")).strict;
+
+		// --- run, on a process of its own: what it writes and how it exits, never the real one's ---
+
+		const ran = async (app: JuvyCommand | JuvyApp, argv: string[]): Promise<{ "out": string; "err": string; "exitCode": unknown }> => {
+			const proc: RunProcess & { "out": string; "err": string } = {
+				"out": "",
+				"err": "",
+				"stdout": { "write": (text: string) => { proc.out += text; } },
+				"stderr": { "write": (text: string) => { proc.err += text; } },
+				"exit": () => undefined
+			};
+
+			await run(app, { "argv": argv, "exit": false, "process": proc });
+
+			return { "out": proc.out, "err": proc.err, "exitCode": proc.exitCode };
+		};
+		let greeted = "";
+		const app = subcommands({ "name": "tool", "commands": [
+			command({ "name": "greet", "description": "Say hello.", "config": juvy({ "name": { "format": String, "default": "world", "positional": true } }), "handler": (config) => { greeted = `hello ${config.get("name")}`; } })
+		] });
+
+		assert.deepEqual(await ran(app, ["greet", "you"]), { "out": "", "err": "", "exitCode": undefined });
+		assert.equal(greeted, "hello you");
+
+		const misspelled = await ran(app, ["gret"]);
+
+		assert.equal(misspelled.exitCode, 1);
+		assert.match(misspelled.err, /unknown tool command 'gret'\. Did you mean 'greet'\?/u);
+		assert.match((await ran(app, ["greet", "--help"])).out, /Say hello\./u);
+
+		const bad = await ran(app, ["greet", "--loud"]);
+
+		assert.equal(bad.exitCode, 1);
+		assert.match(bad.err, /Unknown option '--loud'/u);
+
+		// --- with stopEarly, a --help after the first positional is the program's ---
+
+		let passed: unknown;
+
+		await ran(command({ "name": "run", "config": juvy({ "args": { "format": Array, "default": [], "positional": "rest" } }, { "stopEarly": true }), "handler": (config) => { passed = config.get("args"); } }), ["app.ts", "--help"]);
+		assert.deepEqual(passed, ["app.ts", "--help"]);
+	})();
 }

@@ -30,7 +30,7 @@
  * - An empty env var (`KEY=`) is treated as unset: the default applies, or `required` fires.
  */
 import { pascalCaseToKebabCase, pascalCaseToScreamingSnakeCase } from "@brianjenkins94/util/text"; // browser-safe (pure string ops)
-import { getRuntime } from "@brianjenkins94/util/env"; // shared runtime detection (env pulls node:path/url — polyfilled at bundle time)
+import { getRuntime, isEntry } from "@brianjenkins94/util/env"; // shared runtime detection (env pulls node:path/url — polyfilled at bundle time)
 import { getKeyOfObjectByPath, getOrCreateKeyOfObjectByPath } from "@brianjenkins94/util/object"; // browser-safe (pure object traversal)
 
 // ---------------------------------------------------------------------------------------------------------
@@ -545,4 +545,26 @@ export function juvy(schema: Schema, options: JuvyOptions = {}): Juvy {
 	importEnv();
 
 	return api;
+}
+
+if (isEntry(import.meta)) {
+	void (async function() {
+		const assert: typeof import("node:assert").strict = (await import("node:assert")).strict;
+
+		// --- parse: flags, a short one, a positional rest ---
+
+		const plain = await juvy({ "all": { "format": Boolean, "default": false, "short": "a" }, "files": { "format": Array, "default": [], "positional": "rest" } }).parse(["-a", "x.ts", "y.ts"]);
+
+		assert.equal(plain.get("all"), true);
+		assert.deepEqual(plain.get("files"), ["x.ts", "y.ts"]);
+
+		// --- stopEarly: what comes after the first positional is the program's, unparsed (`node --inspect app.ts --port 3`) ---
+
+		const node = (): Juvy => juvy({ "inspect": { "format": Boolean, "default": false }, "eval": { "format": String, "default": "", "short": "e" }, "args": { "format": Array, "default": [], "positional": "rest" } }, { "stopEarly": true });
+
+		assert.deepEqual((await node().parse(["--inspect", "app.ts", "--port", "3"])).get("args"), ["app.ts", "--port", "3"]);
+		assert.equal((await node().parse(["-e", "console.log(1)", "first"])).get("eval"), "console.log(1)", "a string option's value isn't the first positional");
+		assert.deepEqual((await node().parse(["-e", "x", "first", "--flag"])).get("args"), ["first", "--flag"]);
+		await assert.rejects(node().parse(["--nope", "app.ts"]), /Unknown option '--nope'/u, "before the first positional, still strict");
+	})();
 }
