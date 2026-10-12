@@ -7,6 +7,7 @@
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
 
 import type { Snapshot } from "./history";
+import { isEntry } from "@brianjenkins94/util/env";
 import { execFileSync, spawn } from "node:child_process";
 
 export interface GitSnapshotsOptions {
@@ -108,4 +109,15 @@ export async function *gitSnapshots(repo: string, options: GitSnapshotsOptions =
 
 		yield { "id": id, "date": date, "files": files };
 	}
+}
+
+if (isEntry(import.meta)) {
+	void (async function() {
+		const assert: typeof import("node:assert").strict = (await import("node:assert")).strict;
+
+		// A bare date is the whole day (git would read it as that day at the current time).
+		assert.equal(wholeDay("2026-10-12", "start"), "2026-10-12 00:00:00");
+		assert.equal(wholeDay("2026-10-12", "end"), "2026-10-12 23:59:59");
+		assert.equal(wholeDay("7 days ago", "start"), "7 days ago");
+	})();
 }
