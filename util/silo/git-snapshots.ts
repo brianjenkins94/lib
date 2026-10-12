@@ -14,10 +14,10 @@ export interface GitSnapshotsOptions {
 	"ref"?: string;
 	/** Follow only first parents — the branch's own line, a merge counted once (default true). */
 	"firstParent"?: boolean;
-	/** Only commits at or after this date (anything `git log --since` takes), after the last commit before it as the
-	 *  baseline they're compared with. */
+	/** Only commits at or after this date (anything `git log --since` takes; a bare date is that whole day), after the
+	 *  last commit before it as the baseline they're compared with. */
 	"since"?: string;
-	/** Only commits at or before this date (anything `git log --until` takes). */
+	/** Only commits at or before this date (anything `git log --until` takes; a bare date is that whole day). */
 	"until"?: string;
 }
 
@@ -74,14 +74,22 @@ export function gitObjects(repo: string): GitObjects {
 	};
 }
 
+/** A bare date (`2026-10-12`) as the whole day: git reads one as that day at the CURRENT time of day, so a span "since
+ *  today" would silently start now. Anything else (`7 days ago`, a timestamp) is git's to read. */
+export function wholeDay(date: string, end: "start" | "end"): string {
+	return /^\d{4}-\d{2}-\d{2}$/u.test(date) ? date + (end === "start" ? " 00:00:00" : " 23:59:59") : date;
+}
+
 /** The commits from `ref` back, oldest first, each as a snapshot of its tree. */
 export async function *gitSnapshots(repo: string, options: GitSnapshotsOptions = {}): AsyncGenerator<Snapshot> {
-	const args = ["log", "--reverse", "--format=%H%x09%cI", ...options.firstParent === false ? [] : ["--first-parent"], ...options.since === undefined ? [] : ["--since=" + options.since], ...options.until === undefined ? [] : ["--until=" + options.until], options.ref ?? "HEAD"];
+	const since = options.since === undefined ? undefined : wholeDay(options.since, "start");
+	const until = options.until === undefined ? undefined : wholeDay(options.until, "end");
+	const args = ["log", "--reverse", "--format=%H%x09%cI", ...options.firstParent === false ? [] : ["--first-parent"], ...since === undefined ? [] : ["--since=" + since], ...until === undefined ? [] : ["--until=" + until], options.ref ?? "HEAD"];
 	const commits = execFileSync("git", args, { "cwd": repo, "encoding": "utf8", "maxBuffer": 1 << 28 }).trim().split("\n").filter(Boolean);
 
 	// A span starts from the last commit before it, so its first commit has something to be compared with.
-	if (options.since !== undefined) {
-		const baseline = execFileSync("git", ["log", "-1", "--format=%H%x09%cI", ...options.firstParent === false ? [] : ["--first-parent"], "--before=" + options.since, options.ref ?? "HEAD"], { "cwd": repo, "encoding": "utf8" }).trim();
+	if (since !== undefined) {
+		const baseline = execFileSync("git", ["log", "-1", "--format=%H%x09%cI", ...options.firstParent === false ? [] : ["--first-parent"], "--before=" + since, options.ref ?? "HEAD"], { "cwd": repo, "encoding": "utf8" }).trim();
 
 		if (baseline !== "") {
 			commits.unshift(baseline);

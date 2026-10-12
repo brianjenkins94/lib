@@ -1,6 +1,7 @@
 import type { Snapshot, Step } from "./history";
 import { strict as assert } from "node:assert";
 import { featuresOf, fileFingerprint, waysIn } from "./features";
+import { wholeDay } from "./git-snapshots";
 import { featuresMarkdown, foldIds, historyMarkdown, narrate, replay, tried } from "./history";
 
 // Snapshots in memory: each file's content is its own id.
@@ -92,3 +93,8 @@ const document = featuresMarkdown(features.values(), { "title": "Notes" });
 
 assert.match(document, /^# Notes\n\n4 ways in, in 1 area/u);
 assert.ok(document.includes("- command `notes.add`: Notes: Add Note") && document.includes("- Plumbing: `files.{read,write}`."), document);
+
+// A bare date is the whole day (git would read it as that day at the current time).
+assert.equal(wholeDay("2026-10-12", "start"), "2026-10-12 00:00:00");
+assert.equal(wholeDay("2026-10-12", "end"), "2026-10-12 23:59:59");
+assert.equal(wholeDay("7 days ago", "start"), "7 days ago");
