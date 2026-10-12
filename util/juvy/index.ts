@@ -137,6 +137,10 @@ export interface JuvyOptions {
 	"env"?: EnvSource;
 	/** Set false to NOT auto-derive an env var for every leaf (#379 default is on). */
 	"deriveEnv"?: boolean;
+	/** `.parse()` stops at the first positional: it and everything after it are positionals, unparsed — what a command
+	 *  that runs another needs (`node app.ts --port 3`: `--port` is the program's, not node's). Options before it are
+	 *  parsed as usual. */
+	"stopEarly"?: boolean;
 }
 
 interface NormalizedProp extends PropertySchema {
@@ -458,8 +462,37 @@ export function juvy(schema: Schema, options: JuvyOptions = {}): Juvy {
 			let values: Record<string, unknown>;
 			let positionals: string[];
 
+			// stopEarly: only what comes before the first positional is parsed (a string option's value isn't a positional);
+			// that positional and the rest are kept as they are.
+			let head = argv;
+			let tail: string[] = [];
+
+			if (options.stopEarly === true) {
+				for (let index = 0; index < argv.length; index += 1) {
+					const token = argv[index]!;
+
+					if (token === "--") {
+						[head, tail] = [argv.slice(0, index), argv.slice(index + 1)];
+						break;
+					}
+
+					if (!token.startsWith("-") || token === "-") {
+						[head, tail] = [argv.slice(0, index), argv.slice(index)];
+						break;
+					}
+
+					const name = token.startsWith("--") ? token.slice(2).split("=")[0] : undefined;
+					const option = name !== undefined ? parseOptions[name] : Object.values(parseOptions).find((each) => each.short === token.slice(1));
+
+					if (option?.type === "string" && !token.includes("=") && !(token.startsWith("-") && !token.startsWith("--") && token.length > 2)) {
+						index += 1; // its value
+					}
+				}
+			}
+
 			try {
-				({ values, positionals } = parseArgs({ "args": argv, "options": parseOptions, "allowPositionals": true, "strict": true }));
+				({ values, positionals } = parseArgs({ "args": head, "options": parseOptions, "allowPositionals": true, "strict": true }));
+				positionals = [...positionals, ...tail];
 			} catch (error) {
 				throw new Error((error as Error).message.replace(/\.\s+To [\s\S]*/u, "."), { "cause": error });
 			}

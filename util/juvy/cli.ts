@@ -15,6 +15,7 @@
  */
 import type { CommandHelpData, Example, SubcommandsHelpData } from "cmd-ts";
 import type { Juvy } from "./index";
+import { HelpRequested } from "./index";
 
 // ---------------------------------------------------------------------------------------------------------
 // Descriptors — plain data (NOT cmd-ts commands)
@@ -146,41 +147,72 @@ function didYouMean(token: string, node: JuvyApp): string {
 
 const HELP_FLAGS = new Set(["--help", "-h"]);
 
-async function dispatch(node: JuvyCommand | JuvyApp, argv: string[], path: string[]): Promise<void> {
+/** Where a command's output goes: a process's stdout and stderr (`run`), or anywhere else (`invoke`) — a shell that
+ *  isn't a process, a test. */
+export interface Io {
+	"out": (text: string) => void;
+	"err": (text: string) => void;
+}
+
+const processIo: Io = { "out": (text) => { process.stdout.write(text); }, "err": (text) => { process.stderr.write(text); } };
+
+async function dispatch(node: JuvyCommand | JuvyApp, argv: string[], path: string[], io: Io): Promise<{ "exitCode": number; "value"?: unknown }> {
 	if (node.kind === "subcommands") {
 		const token = argv[0];
 
 		if (token === undefined || HELP_FLAGS.has(token)) {
-			process.stdout.write(await renderSubcommandsHelp(node, path) + "\n");
+			io.out(await renderSubcommandsHelp(node, path) + "\n");
 
-			return;
+			return { "exitCode": 0 };
 		}
 
 		const match = findCommand(node, token);
 
 		if (match === undefined) {
-			process.stderr.write(`error: unknown ${node.name} command '${token}'.${didYouMean(token, node)}\n\n` + await renderSubcommandsHelp(node, path) + "\n");
-			process.exitCode = 1;
+			io.err(`error: unknown ${node.name} command '${token}'.${didYouMean(token, node)}\n\n` + await renderSubcommandsHelp(node, path) + "\n");
 
-			return;
+			return { "exitCode": 1 };
 		}
 
-		return dispatch(match, argv.slice(1), [...path, match.name]);
+		return dispatch(match, argv.slice(1), [...path, match.name], io);
 	}
 
-	// leaf command
-	if (argv.some((argument) => HELP_FLAGS.has(argument))) {
-		process.stdout.write(await renderCommandHelp(node, path) + "\n");
-
-		return;
-	}
-
+	// leaf command: juvy owns parsing (flags + positionals) and validation. `--help` is asked of the parse, so a command
+	// that stops at its first positional (`stopEarly`) leaves a `--help` after it to what it runs.
 	if (node.config !== undefined) {
-		await node.config.parse(argv);   // juvy owns parsing (flags + positionals)
-		node.config.validate();          // and validation
+		try {
+			await node.config.parse(argv);
+		} catch (error) {
+			if (error instanceof HelpRequested) {
+				io.out(await renderCommandHelp(node, path) + "\n");
+
+				return { "exitCode": 0 };
+			}
+
+			throw error;
+		}
+
+		node.config.validate();
+	} else if (argv.some((argument) => HELP_FLAGS.has(argument))) {
+		io.out(await renderCommandHelp(node, path) + "\n");
+
+		return { "exitCode": 0 };
 	}
 
-	await node.handler(node.config as Juvy);
+	return { "exitCode": 0, "value": await node.handler(node.config as Juvy) };
+}
+
+/** Route `argv` through the app — routing, parsing, validation, help, the handler — writing through `io` rather than to
+ *  a process, which it never touches: the exit code (1 for an unknown command, a bad argument or a handler that threw,
+ *  each said on `err`) and what the handler returned. `run` is this, on a process. */
+export async function invoke(app: JuvyCommand | JuvyApp, argv: string[], io: Io): Promise<{ "exitCode": number; "value"?: unknown }> {
+	try {
+		return await dispatch(app, argv, [app.name], io);
+	} catch (error) {
+		io.err((error instanceof Error ? error.message : String(error)) + "\n");
+
+		return { "exitCode": 1 };
+	}
 }
 
 // ---------------------------------------------------------------------------------------------------------
@@ -204,7 +236,11 @@ export async function run(app: JuvyCommand | JuvyApp, options: RunOptions = {}):
 	}
 
 	try {
-		await dispatch(app, argv, [app.name]);
+		const { exitCode } = await dispatch(app, argv, [app.name], processIo);
+
+		if (exitCode !== 0) {
+			process.exitCode = exitCode;
+		}
 	} catch (error) {
 		if (onError !== undefined) { await onError(error); } else { process.stderr.write((error instanceof Error ? error.message : String(error)) + "\n"); }
 		process.exitCode = 1;
