@@ -443,11 +443,9 @@ export function juvy(schema: Schema, options: JuvyOptions = {}): Juvy {
 			return api;
 		},
 		async parse(argv = (globalThis as any).process?.argv?.slice(2) ?? []) {
-			// node's util.parseArgs (native + typed). In a browser build node:util is the util polyfill, which has none:
-			// there it's @pkgjs/parseargs (Node's own, as a package) — an optional dependency (`@external`), so a
-			// consumer that parses in a browser installs it and nobody else pays for it.
-			const util = await import("node:util") as { "parseArgs"?: typeof import("node:util").parseArgs };
-			const parseArgs = util.parseArgs ?? (await import(/*! @external */ "@pkgjs/parseargs") as { "parseArgs": typeof import("node:util").parseArgs }).parseArgs;
+			// node's util.parseArgs (native + typed). `.parse()` is a Node front door — browsers have no argv —
+			// so this stays node:util; alias it to @pkgjs/parseargs via @external only if you ever need it in-browser.
+			const { parseArgs } = await import("node:util");
 			const specs = api.getArgSpecs();
 			const flagSpecs = specs.filter((spec) => !spec.positional);
 			const positionalSpecs = specs.filter((spec) => spec.positional);
