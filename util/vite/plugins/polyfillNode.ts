@@ -149,7 +149,7 @@ export function polyfillNode(builtins = builtinModules): PluginOption {
 				if (match !== undefined) {
 					return Object.entries(await import(match)).map(function([key, value]) {
 						// An object-valued default (e.g. `import fs from "node:fs"`) keeps its members as no-ops too, not `undefined`.
-						return `export ${key === "default" ? "default" : `const ${key} =`} ${typeof value === "function" ? "() => {}" : key === "default" && typeof value === "object" && value !== null ? `{ ${Object.entries(value).map(([member, inner]) => `${JSON.stringify(member)}: ${typeof inner === "function" ? "() => {}" : undefined}`).join(", ")} }` : undefined};`;
+						return `export ${key === "default" ? "default" : `const ${key} =`} ${typeof value === "function" ? "function () {}" : key === "default" && typeof value === "object" && value !== null ? `{ ${Object.entries(value).map(([member, inner]) => `${JSON.stringify(member)}: ${typeof inner === "function" ? "function () {}" : undefined}`).join(", ")} }` : undefined};`;
 					}).join("\n");
 				}
 			}
@@ -232,7 +232,7 @@ export function polyfillNodeEsbuild(builtins = builtinModules): EsbuildPlugin {
 				const real = await import(args.path).catch(() => ({}));
 				const contents = Object.entries(real).map(function([key, value]) {
 					// An object-valued default (e.g. `import fs from "node:fs"`) keeps its members as no-ops too, not `undefined`.
-					return `export ${key === "default" ? "default" : `const ${key} =`} ${typeof value === "function" ? "() => {}" : key === "default" && typeof value === "object" && value !== null ? `{ ${Object.entries(value).map(([member, inner]) => `${JSON.stringify(member)}: ${typeof inner === "function" ? "() => {}" : "undefined"}`).join(", ")} }` : "undefined"};`;
+					return `export ${key === "default" ? "default" : `const ${key} =`} ${typeof value === "function" ? "function () {}" : key === "default" && typeof value === "object" && value !== null ? `{ ${Object.entries(value).map(([member, inner]) => `${JSON.stringify(member)}: ${typeof inner === "function" ? "function () {}" : "undefined"}`).join(", ")} }` : "undefined"};`;
 				}).join("\n");
 
 				return { "contents": contents || "export default {};", "loader": "js" };
@@ -297,7 +297,7 @@ export function polyfillNodeRolldown(builtins = builtinModules): RolldownPlugin 
 
 			return Object.entries(real).map(function([key, value]) {
 				// An object-valued default (e.g. `import fs from "node:fs"`) keeps its members as no-ops too, not `undefined`.
-				return `export ${key === "default" ? "default" : `const ${key} =`} ${typeof value === "function" ? "() => {}" : key === "default" && typeof value === "object" && value !== null ? `{ ${Object.entries(value).map(([member, inner]) => `${JSON.stringify(member)}: ${typeof inner === "function" ? "() => {}" : "undefined"}`).join(", ")} }` : "undefined"};`;
+				return `export ${key === "default" ? "default" : `const ${key} =`} ${typeof value === "function" ? "function () {}" : key === "default" && typeof value === "object" && value !== null ? `{ ${Object.entries(value).map(([member, inner]) => `${JSON.stringify(member)}: ${typeof inner === "function" ? "function () {}" : "undefined"}`).join(", ")} }` : "undefined"};`;
 			}).join("\n") || "export default {};";
 		},
 		"transform": function(code, id) {
