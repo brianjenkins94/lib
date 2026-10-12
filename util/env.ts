@@ -1,14 +1,15 @@
 import * as path from "node:path";
 import * as url from "node:url";
 
-const __filename = import.meta.url.startsWith("file:") ? url.fileURLToPath(import.meta.url) : import.meta.url;
-const __dirname = path.dirname(__filename);
+// Import-safe in a browser with no polyfills (juvy and fido import this): node:path and node:url are used only when the
+// module is loaded from a file, and `process` is read through globalThis.
+const fromFile = import.meta.url.startsWith("file:");
 
-export const __root = path.join(__dirname, "..");
+export const __root = fromFile ? path.join(path.dirname(url.fileURLToPath(import.meta.url)), "..") : new URL("..", import.meta.url).href;
 
-export const isWindows = process.platform === "win32";
+export const isWindows = (globalThis as { "process"?: { "platform"?: string } }).process?.platform === "win32";
 
-export const isCI = Boolean(process.env["CI"]) === true;
+export const isCI = Boolean((globalThis as { "process"?: { "env"?: Record<string, string | undefined> } }).process?.env?.["CI"]);
 
 // SOURCE: https://github.com/sinclairzx81/carbon/blob/main/src/runtime/runtime.mts
 
@@ -32,9 +33,10 @@ export function getRuntime() {
  * bundleable for the browser (fido pulls `isBrowser` from here).
  */
 export function isEntry(meta: { "url": string }): boolean {
-	const entry = process.argv[1];
+	// (In a browser there's no entry — and no `process` to ask; modules ask this at load.)
+	const entry = isBrowser ? undefined : (globalThis as { "process"?: { "argv"?: string[] } }).process?.argv?.[1];
 
-	if (isBrowser || entry === undefined) {
+	if (entry === undefined) {
 		return false;
 	}
 
