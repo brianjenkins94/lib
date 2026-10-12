@@ -15,8 +15,10 @@ import { z } from "zod";
 import * as path from "node:path";
 import { shortHash } from "@brianjenkins94/util/hash";
 // The broker scope leaf (zero-dep ALS) — the Vite plugin's rewritten node:fs/child_process shim reads the same
-// store to gate fs/exec, and the fetch wrap reads it for net; the gate logic (closures) is built below.
-import { type BrokerScope, brokerStore } from "./broker";
+// store to gate fs/exec, and the fetch wrap reads it for net; the gate logic (closures) is built below. Loaded only
+// when a server brokers a handler, so importing this module for its definitions (as a page does) never loads
+// node:async_hooks.
+import type { BrokerScope } from "./broker";
 import { sinks } from "@brianjenkins94/util/logger";
 // The run ledger + registry (util/silo) — oxc-free (util/fs only), so recording/gating never pulls the kernels.
 import { type SiloPaths, siloPaths } from "@brianjenkins94/util/silo/paths";
@@ -296,7 +298,7 @@ function installBroker(): void {
 	if (typeof realFetch !== "function") { return; }
 
 	globalThis.fetch = async function(this: unknown, input: any, init?: any) {
-		const gateNet = brokerStore.getStore()?.gateNet;
+		const gateNet = (await import("./broker.js")).brokerStore.getStore()?.gateNet;
 
 		if (gateNet === undefined) { return realFetch.call(this, input, init); }
 
@@ -374,7 +376,7 @@ export function makeToolCallback(server: McpServer, name: string, resolve: () =>
 			const runHandler = () => resolved.handler(toolArgs, context);
 			// A brokered server gates the handler's node-side net + fs calls inside a broker scope; others run bare.
 			const result = brokeredServers.has(server)
-				? await brokerStore.run({ "name": name, ...makeGates(name, serverPaths.get(server), approved) }, runHandler)
+				? await (await import("./broker.js")).brokerStore.run({ "name": name, ...makeGates(name, serverPaths.get(server), approved) }, runHandler)
 				: await runHandler();
 
 			recordToolRun(server, name, sha, result.isError ? 1 : 0);
