@@ -7,8 +7,8 @@ import { build } from "esbuild";
 
 import * as env from "./env";
 
-// util/env loads however it's loaded: as an ES module, as Node CommonJS, and bundled for a browser in either format — the
-// editor's extensions bundle util as CommonJS for a realm with no `process` and stubbed `node:` built-ins.
+// util/env loads as an ES module and as CommonJS — in Node, and bundled for a browser, where the editor's extensions bundle
+// util as CommonJS with stubbed `node:` built-ins (and a `process` shim).
 const source = url.fileURLToPath(new URL("env.ts", import.meta.url));
 
 /** env bundled as CommonJS for `platform`, run in a fresh realm made of `globals`; its exports. */
@@ -25,8 +25,8 @@ async function commonjs(platform: "browser" | "node", globals: Record<string, un
 assert.equal(env.__root, path.join(path.dirname(source), ".."));
 assert.equal(env.isBrowser, false);
 
-// As CommonJS in a browser realm: no process, no file system, node: built-ins empty — it loads, and says so.
-const browser = await commonjs("browser", { "require": () => ({}), "window": {}, "self": { addEventListener() {} } });
+// As CommonJS in a browser realm: no file system, node: built-ins empty — it loads, and says so.
+const browser = await commonjs("browser", { "require": () => ({}), "window": {}, "self": { addEventListener() {} }, "process": { "platform": "browser", "env": {}, "argv": [] } });
 
 assert.equal(browser.isBrowser, true);
 assert.equal(browser.__root, "/", "no file system: no root to speak of");
