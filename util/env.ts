@@ -56,3 +56,18 @@ export function isEntry(meta?: { "url"?: string }): boolean {
 
 	return file === url.pathToFileURL(real).href;
 }
+
+if (isEntry(import.meta)) {
+	void (async function() {
+		const assert: typeof import("node:assert").strict = (await import("node:assert")).strict;
+
+		// As an ES module: util's root is the folder holding util/.
+		assert.equal(__root, path.join(path.dirname(url.fileURLToPath(import.meta.url)), ".."));
+
+		// This module is what Node started: by its import.meta, and — as a CommonJS bundle passes it — by an empty one.
+		assert.equal(isEntry(import.meta), true);
+		assert.equal(isEntry({}), true);
+		assert.equal(isEntry(undefined), true);
+		assert.equal(isEntry({ "url": "file:///x.js" }), false, "another module isn't the entry");
+	})();
+}
