@@ -3,7 +3,8 @@
  *
  * A run is evidence about one version of the code in one environment. Its ENVELOPE says whose run it was, where it ran
  * and on what code; what it observed (coverage, time, values, capabilities) attaches to spans of that code and joins the
- * envelope by its run id. Everything lives in git under `.silo/`, so it travels with the repo:
+ * envelope by its run id. Everything lives in git under `.silo/`, so it travels with the repo (the whole layout, and
+ * who writes what: ./layout):
  *
  *   .silo/runs/<user>.jsonl                      one envelope per run, appended (a run kept local goes in
  *                                                local/runs/<user>.jsonl instead: RunScope)
@@ -17,6 +18,8 @@
  * No fs, no vscode, no node: whatever runs the program (the editor, a CLI, CI) gathers the facts and writes the lines
  * through its own file system; this decides their shape and where they go.
  */
+
+import { evidencePathFor, slug } from "./layout.js";
 
 /** Where a run ran — a coarse class detected automatically, plus a name its user chose (never a fingerprint). */
 export interface Environment {
@@ -74,16 +77,6 @@ export interface Effect {
 	"calls": number;
 }
 
-/** silo's folder, at the repo root. */
-export const SILO_DIR = ".silo";
-
-/** A safe file-name part: lowercase letters, digits, `.`, `_`, `-`. Undefined for nothing usable. */
-export function slug(value: string): string | undefined {
-	const result = value.toLowerCase().replace(/[^a-z0-9._-]+/gu, "-").replace(/^-+|-+$/gu, "");
-
-	return result === "" ? undefined : result;
-}
-
 /** The user a git config names, as a slug: its `[user]` section's email local part, else its name. */
 export function userSlug(gitConfig: string): string | undefined {
 	let inUser = false;
@@ -118,19 +111,6 @@ export function userSlug(gitConfig: string): string | undefined {
 	const source = email === undefined ? name : email.split("@")[0];
 
 	return source === undefined ? undefined : slug(source);
-}
-
-/**
- * Who a run is evidence for. `shared` runs are committed — each user writes only their own file, and `*.jsonl
- * merge=union` keeps everyone's lines across branches, so collaborators never conflict — and they're the runs a
- * teammate sees. `local` runs stay on this machine (under `local/`, which `.silo/.gitignore` keeps out of git): what's
- * too frequent or too personal to put in everyone's history, such as every call an MCP server's tools take.
- */
-export type RunScope = "shared" | "local";
-
-/** Where `user`'s run envelopes go, from the repo root: shared runs in `runs/`, local ones in `local/runs/`. */
-export function runsPath(user: string, scope: RunScope = "shared"): string {
-	return `${SILO_DIR}/${scope === "local" ? "local/" : ""}runs/${slug(user) ?? "local"}.jsonl`;
 }
 
 /** An environment's key — its name and class — for partitioning what it observed: `laptop.tsval.chromium-140.macos`.
@@ -315,17 +295,8 @@ const FORGOTTEN = 0.05;
 
 /** Where `user`'s runs in `environment` keep what they observed of `file` (repo-relative), from the repo root. */
 export function evidencePath(user: string, environment: Environment, file: string): string {
-	return `${SILO_DIR}/evidence/${slug(user) ?? "local"}/${environmentKey(environment)}/${file}.jsonl`;
+	return evidencePathFor(user, environmentKey(environment), file);
 }
-
-/** What stays on this machine, never committed: raw CPU profiles, full per-run detail. */
-export const LOCAL_DIR = `${SILO_DIR}/local`;
-
-/** What `.silo/.gitignore` says: `local/` stays out of git; everything else in `.silo/` goes in. */
-export const GITIGNORE = "local/\n";
-
-/** What `.silo/.gitattributes` says: evidence and run files merge line by line, keeping both sides. */
-export const GITATTRIBUTES = "*.jsonl merge=union\n";
 
 /** The observations in an evidence file — junk skipped, and a span's duplicate lines (a branch merge brings both
  *  sides') folded to the one last reported. */
@@ -458,11 +429,6 @@ export interface Samples { "span": string; "values": (string | number | boolean)
 
 /** At most this many distinct values a site keeps, the newest first. */
 export const MAX_SAMPLES = 5;
-
-/** Where this machine keeps the samples of `file` (repo-relative), from the repo root. */
-export function samplesPath(file: string): string {
-	return `${LOCAL_DIR}/samples/${file}.jsonl`;
-}
 
 /** The samples in a samples file, junk skipped. */
 export function parseSamples(text: string): Samples[] {

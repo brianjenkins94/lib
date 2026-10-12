@@ -5,11 +5,12 @@
  * process (a command line, an MCP server) and says what such a process runs on and who runs it. How far to trust what
  * an entry does is `./evidence`'s `confidence`, over the envelopes read here.
  *
- * The registry (`registry.json`) is local trust state, gitignored: per unit, the scopes approved for it and the caps
- * and imports seen when they were.
+ * The registry (`.silo/local/registry.json`) is local trust state, never committed — one person's grant isn't another's:
+ * per unit, the scopes approved for it and the caps and imports seen when they were.
  */
 
-import type { Environment, RunEnvelope, RunScope } from "./evidence.js";
+import type { Environment, RunEnvelope } from "./evidence.js";
+import type { RunScope } from "./layout.js";
 import type { SiloPaths } from "./paths.js";
 
 import * as os from "node:os";
@@ -18,7 +19,8 @@ import * as path from "node:path";
 import { isEntry } from "@brianjenkins94/util/env";
 import * as fs from "@brianjenkins94/util/fs";
 
-import { envelopeLine, parseRuns, runsPath, userSlug } from "./evidence.js";
+import { envelopeLine, parseRuns, userSlug } from "./evidence.js";
+import { runsPath } from "./layout.js";
 import { ensureSiloDir, siloPaths } from "./paths.js";
 
 /** Every run in the ledger this machine has: every user's shared runs, and the runs kept local here. */
@@ -80,9 +82,10 @@ export async function saveRegistry(paths: SiloPaths, registry: Registry): Promis
 	fs.writeFileSync(paths.registry, JSON.stringify(registry, null, 2) + "\n");
 }
 
-/** Sync variant — for the sync fs gate, which can't await. Assumes `.silo/` exists (it does once a baseline /
- *  ledger has been written); throws if not, which the caller swallows (the grant just isn't persisted). */
+/** Sync variant — for the sync fs gate, which can't await. A failure throws, which the caller swallows (the grant just
+ *  isn't persisted). */
 export function saveRegistrySync(paths: SiloPaths, registry: Registry): void {
+	fs.mkdirSync(path.dirname(paths.registry), { "recursive": true });
 	fs.writeFileSync(paths.registry, JSON.stringify(registry, null, 2) + "\n");
 }
 

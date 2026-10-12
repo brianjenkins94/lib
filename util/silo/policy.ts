@@ -320,7 +320,7 @@ export function problemOf(rule: Rule): string | undefined {
 	return validator instanceof Error ? validator.message : undefined;
 }
 
-/** Parse a policy file's text (`policy.json` or a `<user>.policy.json`), tolerating malformed input (→ empty policy). */
+/** Parse a policy file's text (`policy.json`, or a person's `policy/<user>.json`), tolerating malformed input (→ empty policy). */
 export function parsePolicy(text: string): Policy {
 	try {
 		const parsed = JSON.parse(text) as Partial<Policy>;
@@ -412,7 +412,7 @@ export function withoutRule(policy: Policy, capability: string, resource: string
 
 // ── The file's schema ──
 
-/** A policy file's JSON Schema — for an editor to check and complete `.silo/policy.json` and `.silo/<you>.policy.json`.
+/** A policy file's JSON Schema — for an editor to check and complete `.silo/policy.json` and `.silo/policy/<you>.json`.
  *  Each operator's and action's argument is checked against its own schema. */
 export const POLICY_SCHEMA = {
 	"$schema": "https://json-schema.org/draft/2020-12/schema",

@@ -1,6 +1,6 @@
 /**
  * silo — the `.silo/` location + file layout (Node, oxc-free). Extracted from the prototype's `shared/paths.ts`.
- * Kept dependency-light (only `util/fs` and the pure `./evidence`) so a consumer can keep the run ledger / baseline
+ * Kept dependency-light (only `util/fs` and the pure `./layout`) so a consumer can keep the run ledger / baseline
  * without pulling the oxc-based analysis kernels — `./audit` (baseline + drift) and `./runs` (the ledger's Node side)
  * both build on this, and so can `util/mcp`.
  */
@@ -9,7 +9,7 @@ import * as path from "node:path";
 
 import * as fs from "@brianjenkins94/util/fs";
 
-import { GITATTRIBUTES, GITIGNORE } from "./evidence.js";
+import { baselinePath, GITATTRIBUTES, GITIGNORE, LOCAL_DIR, registryPath, reviewPath, runsPath, withLines } from "./layout.js";
 
 /** Resolve the silo root, git-`.git`-style. The nearest ancestor holding a `.silo/` is authoritative — you
  *  pick the scope by where you commit it (monorepo root → one baseline; sub-package → its own). If none
@@ -25,32 +25,44 @@ export function findRoot(start: string): string {
 	return fs.closest(start, has(".silo")) ?? fs.closest(start, isWorkspaceRoot) ?? fs.closest(start, has("package.json")) ?? start;
 }
 
-/** The `.silo/` file layout for a project root. `baseline.json` + `review.json` are the committed contract. The run
- *  ledger (`./evidence`: one envelope per run, a file per user) is `runs/` for shared runs, committed so they travel
- *  with the repo, and `local/runs/` for runs kept on this machine. `registry.json` (per-unit approved scopes/caps) is
- *  local trust state — one person's grant isn't another's — gitignored by `ensureSiloDir`. */
+/** The `.silo/` files a Node process uses, as absolute paths under `root` — what each is, and whether it's shared, is
+ *  `./layout`'s. */
 export interface SiloPaths { "root": string; "siloDir": string; "baseline": string; "review": string; "runs": string; "localRuns": string; "registry": string }
 
 export function siloPaths(root: string = findRoot(process.cwd())): SiloPaths {
-	const siloDir = path.join(root, ".silo");
+	const at = (relative: string): string => path.join(root, ...relative.split("/"));
 
 	return {
 		"root": root,
-		"siloDir": siloDir,
-		"baseline": path.join(siloDir, "baseline.json"),
-		"review": path.join(siloDir, "review.json"),
-		"runs": path.join(siloDir, "runs"),
-		"localRuns": path.join(siloDir, "local", "runs"),
-		"registry": path.join(siloDir, "registry.json")
+		"siloDir": at(".silo"),
+		"baseline": at(baselinePath()),
+		"review": at(reviewPath()),
+		"runs": path.dirname(at(runsPath("local"))),
+		"localRuns": path.dirname(at(runsPath("local", "local"))),
+		"registry": at(registryPath())
 	};
 }
 
-/** Create `.silo/` lazily, with the same two files the editor gives it (`./evidence`): `.gitignore` (`local/` stays on
- *  this machine, and so do the prototype's derived files) and `.gitattributes` (its JSONL merges by line). */
+/** `.silo/`'s two files, as the layout says them, made sure of once per process: `.gitignore` (`local/` stays on this
+ *  machine) and `.gitattributes` (line files merge by line). A person's own lines are kept; only what's missing is
+ *  added, the same way the editor does it. */
+const seeded = new Set<string>();
+
 export async function ensureSiloDir(paths: SiloPaths): Promise<void> {
-	if (!fs.existsSync(paths.siloDir)) {
-		await fs.mkdir(paths.siloDir, { "recursive": true });
-		fs.writeFileSync(path.join(paths.siloDir, ".gitignore"), GITIGNORE + "registry.json\nfingerprints.json\neslintcache\npending-review.json\n");
-		fs.writeFileSync(path.join(paths.siloDir, ".gitattributes"), GITATTRIBUTES);
+	if (seeded.has(paths.siloDir)) {
+		return;
 	}
+
+	await fs.mkdir(path.join(paths.root, ...LOCAL_DIR.split("/")), { "recursive": true });
+
+	for (const [name, wanted] of [[".gitignore", GITIGNORE], [".gitattributes", GITATTRIBUTES]] as const) {
+		const file = path.join(paths.siloDir, name);
+		const updated = withLines(fs.existsSync(file) ? fs.readFileSync(file) : "", wanted);
+
+		if (updated !== undefined) {
+			fs.writeFileSync(file, updated);
+		}
+	}
+
+	seeded.add(paths.siloDir);
 }

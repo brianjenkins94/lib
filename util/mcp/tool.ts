@@ -22,7 +22,8 @@ import type { BrokerScope } from "./broker";
 import { sinks } from "@brianjenkins94/util/logger";
 // The run ledger + registry (util/silo) — oxc-free (util/fs only), so recording/gating never pulls the kernels.
 import { type SiloPaths, siloPaths } from "@brianjenkins94/util/silo/paths";
-import { type Confidence, confidence, type RunScope } from "@brianjenkins94/util/silo/evidence";
+import { type Confidence, confidence } from "@brianjenkins94/util/silo/evidence";
+import type { RunScope } from "@brianjenkins94/util/silo/layout";
 import { appendRun, gitUser, loadRegistry, loadRuns, nodeEnvironment, saveRegistrySync } from "@brianjenkins94/util/silo/runs";
 // The broker's shared decision core (BERNARD redline + JUDICIAL) — reused for runtime net + fs gating.
 import { judicial, redline } from "@brianjenkins94/util/silo/enforce/decide.mjs";

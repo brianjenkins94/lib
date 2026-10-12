@@ -19,7 +19,6 @@
  * folded by annotation id (the line updated last wins); a dismissal is a tombstone line, so a merge can't resurrect it.
  */
 
-import { SILO_DIR, slug } from "./evidence.js";
 
 /** One span of a text as strategies see it: its id, node type, offsets, and tokens (whitespace and comments left out). */
 export interface SpanShape { "id": string; "type": string; "start": number; "end": number; "atoms": string[] }
@@ -346,11 +345,6 @@ export function evaluate(cases: EditCase[], pipeline: Strategy[] = PIPELINE, pol
 }
 
 // ── storage ──
-
-/** Where `user`'s annotations of `collection` on `file` (repo-relative) go, from the repo root. */
-export function annotationsPath(collection: string, user: string, file: string): string {
-	return `${SILO_DIR}/${slug(collection) ?? "annotations"}/${slug(user) ?? "local"}/${file}.jsonl`;
-}
 
 /** The annotations in a file, each once: a branch merge can bring two versions of one in; the one updated last wins,
  *  tombstones included (filter on `dismissed` for the live ones). Lines that aren't one are skipped. */
