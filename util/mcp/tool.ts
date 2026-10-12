@@ -22,7 +22,8 @@ import type { BrokerScope } from "./broker";
 import { sinks } from "@brianjenkins94/util/logger";
 // The run ledger + registry (util/silo) — oxc-free (util/fs only), so recording/gating never pulls the kernels.
 import { type SiloPaths, siloPaths } from "@brianjenkins94/util/silo/paths";
-import { type Confidence, confidence, loadRegistry, recordRun, saveRegistrySync } from "@brianjenkins94/util/silo/runs";
+import { type Confidence, confidence, type RunScope } from "@brianjenkins94/util/silo/evidence";
+import { appendRun, gitUser, loadRegistry, loadRuns, nodeEnvironment, saveRegistrySync } from "@brianjenkins94/util/silo/runs";
 // The broker's shared decision core (BERNARD redline + JUDICIAL) — reused for runtime net + fs gating.
 import { judicial, redline } from "@brianjenkins94/util/silo/enforce/decide.mjs";
 
@@ -104,8 +105,8 @@ export interface ToolContext {
 	 */
 	"progress": (progress: number, total?: number) => void;
 	/**
-	 * This tool's trust confidence from the server's run ledger (`.silo/runs.jsonl`) — a churn-decayed score
-	 * that rises with clean runs and decays when the tool changes. `undefined` if the server keeps no ledger
+	 * This tool's trust confidence from the server's run ledger (`.silo/runs/`) — a score that rises with clean
+	 * runs and fades when the tool changes. `undefined` if the server keeps no ledger
 	 * (a colocated bind() that never went through serveMcp/runBridge).
 	 */
 	"confidence": () => Confidence | undefined;
@@ -180,16 +181,22 @@ function confirmationResult(error: ConfirmationRequired): ToolResult {
 	};
 }
 
-// ── Run ledger: every tool invocation is appended to the server's `.silo/runs.jsonl` (via util/silo/runs), so
-//    a server accrues a churn-decayed trust score per tool with no per-tool wiring. The server's `.silo/` root
-//    is set by serveMcp/runStdio and runBridge (configureServerRuns); without it, recording is a silent no-op
-//    (e.g. a colocated bind() that never went through serveMcp). The consumer owns `.silo/`'s gitignore. ──
+// ── Run ledger: every tool invocation is a run in the server's run ledger (util/silo/evidence's envelopes — the one
+//    ledger, the editor's too), so a server accrues a trust score per tool with no per-tool wiring. A tool's run names
+//    it as its entry (`tool:<name>`) and its content hash as that entry's version. Kept LOCAL by default
+//    (`.silo/local/runs/<user>.jsonl`, out of git): a server's tools are called far more often than anyone would want
+//    in a shared history, and a tool's confidence is then this machine's. `configureServerRuns(…, { "share": true })`
+//    puts them in the committed `.silo/runs/` instead, beside collaborators'. The server's `.silo/` root is set by
+//    serveMcp/runStdio and runBridge; without it, recording is a silent no-op (e.g. a colocated bind() that never went
+//    through serveMcp). ──
 const serverPaths = new WeakMap<McpServer, SiloPaths>();
+const serverRuns = new WeakMap<McpServer, { "user": string; "scope": RunScope }>();
 
-/** Point a server's run ledger at `root`'s `.silo/`. Called by the serve paths; a consumer decides whether to
- *  commit or gitignore `.silo/runs.jsonl` — the framework just maintains it. */
-export function configureServerRuns(server: McpServer, root: string): void {
+/** Point a server's run ledger at `root`'s `.silo/` — its runs kept local unless `share` (see above). Called by the
+ *  serve paths. */
+export function configureServerRuns(server: McpServer, root: string, options: { "share"?: boolean } = {}): void {
 	serverPaths.set(server, siloPaths(root));
+	serverRuns.set(server, { "user": gitUser(root) ?? "local", "scope": options.share === true ? "shared" : "local" });
 }
 
 /** A tool's content hash — config + handler source — so its confidence decays when the tool definition changes. */
@@ -197,20 +204,37 @@ async function shaOfTool(tool: McpTool): Promise<string> {
 	return shortHash(JSON.stringify(tool.config ?? {}) + String(tool.handler));
 }
 
+/** A tool, as a run's entry. */
+const toolEntry = (name: string): string => "tool:" + name;
+
 /** Confidence for a tool (by its content hash) from the server's ledger (undefined when the server keeps no `.silo/`). */
 function confidenceForTool(server: McpServer, name: string, sha: string): Confidence | undefined {
 	const paths = serverPaths.get(server);
 
-	return paths === undefined ? undefined : confidence(paths, name, sha);
+	return paths === undefined ? undefined : confidence(loadRuns(paths), toolEntry(name), sha);
 }
 
 /** Append a run to the ledger — best-effort, so a ledger write never affects the tool's result. */
-function recordToolRun(server: McpServer, name: string, sha: string, exit: number): void {
+function recordToolRun(server: McpServer, name: string, sha: string, startedAt: string, exit: number): void {
 	const paths = serverPaths.get(server);
 
-	if (paths === undefined) { return; }
+	const runs = serverRuns.get(server);
 
-	void recordRun(paths, { "script": name, "ts": new Date().toISOString(), "sha": sha, "exit": exit, "mode": "apply" }).catch(() => {});
+	if (paths === undefined || runs === undefined) { return; }
+
+	void appendRun(paths, {
+		"type": "run",
+		"id": crypto.randomUUID(),
+		"title": name,
+		"entry": toolEntry(name),
+		"cwd": "",
+		"startedAt": startedAt,
+		"endedAt": new Date().toISOString(),
+		"exit": exit,
+		"user": runs.user,
+		"environment": nodeEnvironment(),
+		"files": { [toolEntry(name)]: sha }
+	}, runs.scope).catch(() => {});
 }
 
 // ── Runtime capability broker. During a brokered tool handler, node-side `fetch` (net) and every `util/fs`
@@ -341,6 +365,7 @@ export function makeToolCallback(server: McpServer, name: string, resolve: () =>
 		const resolved = candidate;   // narrowed — used by the handler call below
 		// Its content hash, once for this call: what its confidence and its run in the ledger are keyed on.
 		const sha = await shaOfTool(resolved);
+		const startedAt = new Date().toISOString();
 
 		const context: ToolContext = {
 			"signal": extra.signal,
@@ -379,7 +404,7 @@ export function makeToolCallback(server: McpServer, name: string, resolve: () =>
 				? await (await import("./broker.js")).brokerStore.run({ "name": name, ...makeGates(name, serverPaths.get(server), approved) }, runHandler)
 				: await runHandler();
 
-			recordToolRun(server, name, sha, result.isError ? 1 : 0);
+			recordToolRun(server, name, sha, startedAt, result.isError ? 1 : 0);
 
 			return result;
 		} catch (error) {
@@ -387,7 +412,7 @@ export function makeToolCallback(server: McpServer, name: string, resolve: () =>
 				return confirmationResult(error);   // an MRTR gate — nothing executed, not a run
 			}
 
-			recordToolRun(server, name, sha, 1);
+			recordToolRun(server, name, sha, startedAt, 1);
 
 			return fail(`${name} failed: ${error instanceof Error ? error.message : String(error)}`);
 		}

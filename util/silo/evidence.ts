@@ -5,7 +5,8 @@
  * and on what code; what it observed (coverage, time, values, capabilities) attaches to spans of that code and joins the
  * envelope by its run id. Everything lives in git under `.silo/`, so it travels with the repo:
  *
- *   .silo/runs/<user>.jsonl                      one envelope per run, appended
+ *   .silo/runs/<user>.jsonl                      one envelope per run, appended (a run kept local goes in
+ *                                                local/runs/<user>.jsonl instead: RunScope)
  *   .silo/evidence/<user>/<env>/<file>.jsonl     what that user's runs in that environment observed of <file>: one
  *                                                line per (span, kind), sorted, summaries that fade as runs go by
  *   .silo/.gitattributes                         `*.jsonl merge=union`: a branch merge keeps both sides' lines,
@@ -19,8 +20,9 @@
 
 /** Where a run ran — a coarse class detected automatically, plus a name its user chose (never a fingerprint). */
 export interface Environment {
-	/** What ran the code: tsval's interpreter, the almostnode runtime, or the browser (a preview). */
-	"runtime": "tsval" | "almostnode" | "preview";
+	/** What ran the code: tsval's interpreter, the almostnode runtime, the browser (a preview), or a Node process (a
+	 *  command line, an MCP server's tool). */
+	"runtime": "tsval" | "almostnode" | "preview" | "node";
 	/** The engine under it, major version only: `chromium-140`, `firefox-131`, `node-24`. */
 	"engine": string;
 	/** The OS family: `macos`, `windows`, `linux`, `android`, `ios`, or `unknown`. */
@@ -37,7 +39,8 @@ export interface RunEnvelope {
 	"type": "run";
 	/** The run's id: what its observations carry to join it. A UUID — records outlive the session that made them. */
 	"id": string;
-	/** What was run, as typed (`node app.ts`, `npm run dev`), and the file or folder it ran (repo-relative). */
+	/** What was run, as typed (`node app.ts`, `npm run dev`), and the file or folder it ran (repo-relative) — or, for
+	 *  something run that isn't a file, its kind and name (`tool:<name>`, an MCP server's tool). */
 	"title": string;
 	"entry": string;
 	"cwd": string;
@@ -51,7 +54,8 @@ export interface RunEnvelope {
 	"user": string;
 	"environment": Environment;
 	/** The commit checked out when it ran, if any, and the blob oid of each file it ran (repo-relative path → git blob
-	 *  oid) — exact for uncommitted code, and the version its observations describe. */
+	 *  oid) — exact for uncommitted code, and the version its observations describe. A named entry (`tool:<name>`) is
+	 *  listed by its own version: a hash of its content. */
 	"commit"?: string;
 	"files": Record<string, string>;
 	/** Every version of a file the run ran, when it ran more than one (a preview's hot updates): oids, oldest first. */
@@ -116,9 +120,17 @@ export function userSlug(gitConfig: string): string | undefined {
 	return source === undefined ? undefined : slug(source);
 }
 
-/** Where `user`'s run envelopes go, from the repo root. */
-export function runsPath(user: string): string {
-	return `${SILO_DIR}/runs/${slug(user) ?? "local"}.jsonl`;
+/**
+ * Who a run is evidence for. `shared` runs are committed — each user writes only their own file, and `*.jsonl
+ * merge=union` keeps everyone's lines across branches, so collaborators never conflict — and they're the runs a
+ * teammate sees. `local` runs stay on this machine (under `local/`, which `.silo/.gitignore` keeps out of git): what's
+ * too frequent or too personal to put in everyone's history, such as every call an MCP server's tools take.
+ */
+export type RunScope = "shared" | "local";
+
+/** Where `user`'s run envelopes go, from the repo root: shared runs in `runs/`, local ones in `local/runs/`. */
+export function runsPath(user: string, scope: RunScope = "shared"): string {
+	return `${SILO_DIR}/${scope === "local" ? "local/" : ""}runs/${slug(user) ?? "local"}.jsonl`;
 }
 
 /** An environment's key — its name and class — for partitioning what it observed: `laptop.tsval.chromium-140.macos`.
@@ -201,6 +213,52 @@ export function queryRuns(runs: RunEnvelope[], query: RunQuery = {}): RunAnswer 
 	}
 
 	return { "total": matched.length, "runs": matched.slice(0, query.limit ?? 20), "effects": [...effects.values()].toSorted((a, b) => b.runs - a.runs || a.capability.localeCompare(b.capability) || a.resource.localeCompare(b.resource)) };
+}
+
+/** How far to trust what an entry does, from its runs (`confidence`). */
+export interface Confidence {
+	/** `unproven` (score under 20), `provisional` (under 60), or `trusted`. */
+	"band": "unproven" | "provisional" | "trusted";
+	/** The lower bound, as a percentage. */
+	"score": number;
+	/** How many runs it has. */
+	"n": number;
+}
+
+/** A run of an earlier version of an entry counts this much of a run. */
+const EARLIER_VERSION = 0.4;
+
+/**
+ * How far to trust what `entry` does — a file, or a named unit (`tool:<name>`) — from its runs: a 95% Wilson lower bound
+ * on the share of them that ended cleanly (exit 0). A run of the version it is now (`files[entry]` is `version`) counts
+ * as a whole run, one of an earlier version as 0.4 of one, so trust rises with clean runs and fades when the code
+ * changes. A run its user stopped says nothing either way and doesn't count. Whose runs count is the caller's: everyone's
+ * shared runs make it the team's confidence, one user's runs make it theirs.
+ */
+export function confidence(runs: RunEnvelope[], entry: string, version: string): Confidence {
+	const own = runs.filter((run) => run.entry === entry && run.stopped !== true);
+	let n = 0;
+	let clean = 0;
+
+	for (const run of own) {
+		const weight = run.files[entry] === version ? 1 : EARLIER_VERSION;
+
+		n += weight;
+
+		if (run.exit === 0) {
+			clean += weight;
+		}
+	}
+
+	if (n === 0) {
+		return { "band": "unproven", "score": 0, "n": 0 };
+	}
+
+	const p = clean / n;
+	const z = 1.96;
+	const bound = (p + z * z / (2 * n) - z * Math.sqrt((p * (1 - p) + z * z / (4 * n)) / n)) / (1 + z * z / n);
+
+	return { "band": bound < 0.2 ? "unproven" : bound < 0.6 ? "provisional" : "trusted", "score": Math.round(bound * 100), "n": own.length };
 }
 
 /** What runs observed at one span of one file. Spans are BABLR `spanAnchors` ids — content-addressed, so a span keeps

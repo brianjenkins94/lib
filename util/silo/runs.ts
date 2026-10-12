@@ -1,60 +1,69 @@
 /**
- * silo — the local TRUST state (Node): the run ledger, the registry, and the confidence ratchet. Extracted
- * from the `silo` prototype's `commands/runner.ts` (its bundling / boxing / CLI stay behind — this is just the
- * persistence + scoring core).
+ * silo — the run ledger's Node side, and the registry. The ledger is `./evidence`'s: one envelope per run, in
+ * `.silo/runs/<user>.jsonl` when it's shared (committed — the same files the editor writes) or
+ * `.silo/local/runs/<user>.jsonl` when it stays on this machine (`RunScope`). This reads and appends them from a Node
+ * process (a command line, an MCP server) and says what such a process runs on and who runs it. How far to trust what
+ * an entry does is `./evidence`'s `confidence`, over the envelopes read here.
  *
- * Where `./audit`'s baseline + review are the COMMITTED contract, this is the LOCAL, per-clone trust that
- * accrues over time (gitignored — see `ensureSiloDir`):
- *   • `runs.jsonl`     — one RunRec per execution (the ledger).
- *   • `registry.json`  — per-unit approved scopes + the caps/imports seen when they were approved.
- *   • `confidence(…)`  — churn-decayed Wilson lower bound: trust RISES with clean runs, DECAYS on edit.
+ * The registry (`registry.json`) is local trust state, gitignored: per unit, the scopes approved for it and the caps
+ * and imports seen when they were.
  */
 
+import type { Environment, RunEnvelope, RunScope } from "./evidence.js";
+import type { SiloPaths } from "./paths.js";
+
+import * as os from "node:os";
+import * as path from "node:path";
+
+import { isEntry } from "@brianjenkins94/util/env";
 import * as fs from "@brianjenkins94/util/fs";
 
-import { type SiloPaths, ensureSiloDir } from "./paths.js";
+import { envelopeLine, parseRuns, runsPath, userSlug } from "./evidence.js";
+import { ensureSiloDir, siloPaths } from "./paths.js";
 
-/** One recorded execution. `mode` weights the run (a real "apply" run counts more than a dry-run); `sha` ties
- *  it to the exact code, so a later edit decays the run's weight. `exit` 0 = clean. */
-export interface RunRec { "script": string; "ts": string; "sha": string; "exit": number; "mode": string }
-
-/** Read the whole run ledger (JSONL). */
-export function loadLedger(paths: SiloPaths): RunRec[] {
-	return fs.existsSync(paths.ledger) ? fs.readFileSync(paths.ledger).trim().split("\n").filter(Boolean).map((line) => JSON.parse(line)) : [];
+/** Every run in the ledger this machine has: every user's shared runs, and the runs kept local here. */
+export function loadRuns(paths: SiloPaths): RunEnvelope[] {
+	return [paths.runs, paths.localRuns].filter((folder) => fs.existsSync(folder)).flatMap((folder) => fs.readdirSync(folder).filter((name) => name.endsWith(".jsonl")).flatMap((name) => parseRuns(fs.readFileSync(path.join(folder, name)))));
 }
 
-/** Append one run to the ledger (creating `.silo/` if needed). */
-export async function recordRun(paths: SiloPaths, rec: RunRec): Promise<void> {
+/** Append one run's envelope to its user's file, shared or kept local (creating `.silo/` if needed). */
+export async function appendRun(paths: SiloPaths, envelope: RunEnvelope, scope: RunScope = "shared"): Promise<void> {
 	await ensureSiloDir(paths);
-	await fs.appendFile(paths.ledger, JSON.stringify(rec) + "\n");
+	await fs.mkdir(scope === "local" ? paths.localRuns : paths.runs, { "recursive": true });
+	await fs.appendFile(path.join(paths.root, runsPath(envelope.user, scope)), envelopeLine(envelope));
 }
 
-export interface Confidence { "band": "unproven" | "provisional" | "trusted"; "score": number; "n": number }
+/** What this Node process runs on: Node's major version, the OS family, its cores and memory, and the machine's name
+ *  (`SILO_MACHINE`, else `default` — a name its user chose, never a fingerprint). */
+export function nodeEnvironment(): Environment {
+	const family: Record<string, string> = { "darwin": "macos", "win32": "windows", "linux": "linux", "android": "android" };
 
-/**
- * Churn-decayed Wilson lower bound over one script's runs — trust that RISES with clean runs and DECAYS when
- * the code changes. A real ("apply") run weighs 1.0, a dry-run 0.25; a run recorded against a now-stale sha
- * decays to 0.4 of its weight. `band`: unproven (<0.2) → provisional (<0.6) → trusted. `n` = raw run count.
- */
-export function confidence(paths: SiloPaths, script: string, currentSha: string): Confidence {
-	const runs = loadLedger(paths).filter((r) => r.script === script);
-	let n = 0;
-	let s = 0;
+	return {
+		"runtime": "node",
+		"engine": "node-" + process.versions.node.split(".")[0],
+		"os": family[process.platform] ?? "unknown",
+		"cores": os.availableParallelism(),
+		"memoryGb": Math.round(os.totalmem() / 2 ** 30),
+		"name": process.env["SILO_MACHINE"] ?? "default"
+	};
+}
 
-	for (const r of runs) {
-		const w = (r.mode === "apply" ? 1 : 0.25) * (r.sha === currentSha ? 1 : 0.4);
+/** Who runs things in `root`, as git knows them (`userSlug`): the repo's own config first, then the user's global one. */
+export function gitUser(root: string): string | undefined {
+	const repo = fs.closest(root, (directory) => fs.existsSync(path.join(directory, ".git")));
+	const configs = [repo === undefined ? undefined : path.join(repo, ".git", "config"), path.join(os.homedir(), ".gitconfig")];
 
-		n += w;
-		if (r.exit === 0) { s += w; }
+	for (const config of configs) {
+		try {
+			const user = config === undefined ? undefined : userSlug(fs.readFileSync(config));
+
+			if (user !== undefined) {
+				return user;
+			}
+		} catch { /* no such config */ }
 	}
 
-	if (n === 0) { return { "band": "unproven", "score": 0, "n": 0 }; }
-
-	const p = s / n;
-	const z = 1.96;
-	const lb = (p + z * z / (2 * n) - z * Math.sqrt((p * (1 - p) + z * z / (4 * n)) / n)) / (1 + z * z / n);
-
-	return { "band": lb < 0.2 ? "unproven" : lb < 0.6 ? "provisional" : "trusted", "score": Math.round(lb * 100), "n": runs.length };
+	return undefined;
 }
 
 /** A registry entry — the last-approved capability picture for a unit: its content `sha`, the `imports` and
@@ -75,4 +84,49 @@ export async function saveRegistry(paths: SiloPaths, registry: Registry): Promis
  *  ledger has been written); throws if not, which the caller swallows (the grant just isn't persisted). */
 export function saveRegistrySync(paths: SiloPaths, registry: Registry): void {
 	fs.writeFileSync(paths.registry, JSON.stringify(registry, null, 2) + "\n");
+}
+
+if (isEntry(import.meta)) {
+	void (async function() {
+		const assert: typeof import("node:assert").strict = (await import("node:assert")).strict;
+
+		const root = await fs.mkdtemp(path.join(fs.tmpdir(), "silo-runs-"));
+		const paths = siloPaths(root);
+		const run = (id: string, user: string): RunEnvelope => ({ "type": "run", "id": id, "title": "fetch_page", "entry": "tool:fetch_page", "cwd": "", "startedAt": "2026-10-12T00:00:00.000Z", "endedAt": "2026-10-12T00:00:01.000Z", "exit": 0, "user": user, "environment": nodeEnvironment(), "files": { "tool:fetch_page": "abc123" } });
+
+		try {
+			// Nothing yet: no ledger.
+			assert.deepEqual(loadRuns(paths), []);
+
+			// Each user's shared runs go to their own file (collaborators never write the same one); reading takes every user's.
+			await appendRun(paths, run("a", "ada"));
+			await appendRun(paths, run("b", "ada"));
+			await appendRun(paths, run("c", "grace"));
+			assert.deepEqual(fs.readdirSync(paths.runs).toSorted(), ["ada.jsonl", "grace.jsonl"]);
+
+			// A run kept local goes under local/ — out of git, so no collaborator sees it — and this machine still reads it.
+			await appendRun(paths, run("d", "ada"), "local");
+			assert.deepEqual(fs.readdirSync(paths.localRuns), ["ada.jsonl"]);
+			assert.deepEqual(loadRuns(paths).map((each) => each.id).toSorted(), ["a", "b", "c", "d"]);
+			assert.deepEqual(loadRuns({ ...paths, "localRuns": path.join(root, "elsewhere") }).map((each) => each.id).toSorted(), ["a", "b", "c"], "a collaborator's clone has only the shared runs");
+
+			// `.silo/` is seeded as the editor seeds it: `local/` ignored, JSONL merged by line.
+			assert.ok(fs.readFileSync(path.join(paths.siloDir, ".gitignore")).split("\n").includes("local/"));
+			assert.equal(fs.readFileSync(path.join(paths.siloDir, ".gitattributes")), "*.jsonl merge=union\n");
+
+			// A Node process's environment: its class, never a fingerprint.
+			const environment = nodeEnvironment();
+
+			assert.equal(environment.runtime, "node");
+			assert.match(environment.engine, /^node-\d+$/u);
+			assert.equal(environment.name, process.env["SILO_MACHINE"] ?? "default");
+
+			// Who runs things: the repo's own git config first.
+			await fs.mkdir(path.join(root, ".git"), { "recursive": true });
+			fs.writeFileSync(path.join(root, ".git", "config"), "[core]\n\tbare = false\n[user]\n\tname = Ada Lovelace\n\temail = ada.l@example.com\n");
+			assert.equal(gitUser(root), "ada.l");
+		} finally {
+			await fs.rm(root, { "recursive": true, "force": true });
+		}
+	})();
 }

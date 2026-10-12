@@ -76,7 +76,7 @@ async function runStdio(meta: EntryMeta, options: ServeOptions): Promise<void> {
 	const dir = options.toolsDir ?? path.join(path.dirname(url.fileURLToPath(meta.url)), "tools");
 	const server = new McpServer({ "name": options.name, "version": options.version }, { "capabilities": { "logging": {} } });
 
-	// Point the run ledger at the server's own dir (`.silo/runs.jsonl`) — every tool invocation is recorded there.
+	// Point the run ledger at the server's own dir (`.silo/runs/`) — every tool invocation is recorded there.
 	// The capability broker is DEV-ONLY (it rides the Vite bridge's builtin-rewrite), so stdio/production does
 	// not gate — it trusts tools already reviewed in dev, and keeps the registration gate + ledger.
 	configureServerRuns(server, path.dirname(url.fileURLToPath(meta.url)));

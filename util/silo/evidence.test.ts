@@ -1,5 +1,5 @@
 import { strict as assert } from "node:assert";
-import { parseRuns, queryRuns, type RunEnvelope } from "./evidence";
+import { confidence, parseRuns, queryRuns, type RunEnvelope } from "./evidence";
 
 const run = (id: string, endedAt: string, entry: string, effects?: RunEnvelope["effects"]): RunEnvelope => ({ "type": "run", "id": id, "title": `node ${entry}`, "entry": entry, "cwd": "", "startedAt": endedAt, "endedAt": endedAt, "exit": 0, "user": "ada", "environment": { "runtime": "tsval", "name": "default" }, "files": { [entry]: "0".repeat(40), "lib.js": "1".repeat(40) }, ...effects === undefined ? {} : { "effects": effects } });
 const runs = parseRuns([
@@ -33,5 +33,17 @@ assert.deepEqual(queryRuns(runs, { "since": "2026-10-02T00:00:00.000Z" }).runs.m
 const newest = queryRuns(runs, { "limit": 1 });
 
 assert.deepEqual([newest.total, newest.runs.length, newest.effects.find((each) => each.capability === "net")?.runs], [3, 1, 1]);
+
+// Confidence: clean runs of the version an entry is now raise it; runs of an earlier version count less; a stopped run
+// doesn't count; an entry nobody ran is unproven.
+const toolRun = (id: string, version: string, exit: number, stopped = false): RunEnvelope => ({ ...run(id, "2026-10-04T00:00:00.000Z", "tool:fetch_page"), "files": { "tool:fetch_page": version }, "exit": exit, ...stopped ? { "stopped": true } : {} });
+const clean = Array.from({ "length": 10 }, (_, index) => toolRun("now" + index, "v2", 0));
+
+assert.deepEqual(confidence(clean, "tool:fetch_page", "v2"), { "band": "trusted", "score": 72, "n": 10 });
+assert.ok(confidence(clean, "tool:fetch_page", "v3").score < confidence(clean, "tool:fetch_page", "v2").score, "an edit fades it");
+assert.equal(confidence(clean, "tool:fetch_page", "v3").band, "provisional");
+assert.deepEqual(confidence([...clean, toolRun("stop", "v2", 130, true)], "tool:fetch_page", "v2"), confidence(clean, "tool:fetch_page", "v2"));
+assert.ok(confidence([...clean, toolRun("bad", "v2", 1)], "tool:fetch_page", "v2").score < 72, "a failure lowers it");
+assert.deepEqual(confidence(clean, "tool:other", "v2"), { "band": "unproven", "score": 0, "n": 0 });
 
 console.log("evidence: ok");

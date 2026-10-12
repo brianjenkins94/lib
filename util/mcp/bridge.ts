@@ -121,7 +121,7 @@ export async function runBridge(meta: EntryMeta, options: ServeOptions): Promise
 		}
 
 		attachLogging(server);
-		configureServerRuns(server, root);   // `.silo/runs.jsonl` at the server root — records every invocation
+		configureServerRuns(server, root);   // `.silo/runs/` at the server root — records every invocation
 		if (options.broker !== false) { configureServerBroker(server); }   // runtime net gating for tool handlers
 
 		return server;
