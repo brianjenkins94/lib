@@ -12,9 +12,8 @@
 import type { ElicitResult } from "@modelcontextprotocol/sdk/types.js";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import { AsyncLocalStorage } from "node:async_hooks";
-import { createHash } from "node:crypto";
 import * as path from "node:path";
+import { shortHash } from "@brianjenkins94/util/hash";
 // The broker scope leaf (zero-dep ALS) — the Vite plugin's rewritten node:fs/child_process shim reads the same
 // store to gate fs/exec, and the fetch wrap reads it for net; the gate logic (closures) is built below.
 import { type BrokerScope, brokerStore } from "./broker";
@@ -26,16 +25,6 @@ import { type Confidence, confidence, loadRegistry, recordRun, saveRegistrySync 
 import { judicial, redline } from "@brianjenkins94/util/silo/enforce/decide.mjs";
 
 export interface ToolResult { "content": { "type": "text"; "text": string }[]; "isError"?: boolean }
-
-// Ambient tool context: makeToolCallback runs each handler inside this store, so ANY code the handler calls
-// (an app's request client, etc.) can read the live ToolContext — signal/progress/confirm — WITHOUT threading
-// it through every function. Makes cancellation/progress/the confirm-gate de-facto for a server, not opt-in.
-const toolContextStore = new AsyncLocalStorage<ToolContext>();
-
-/** The ToolContext of the currently-executing tool handler (undefined outside one). */
-export function currentToolContext(): ToolContext | undefined {
-	return toolContextStore.getStore();
-}
 
 // LogRecord level → MCP logging level; anything below `info` stays local-only (still hits the default sinks).
 const TO_MCP_LEVEL: Record<string, string> = { "trace": "debug", "debug": "debug", "info": "info", "warn": "warning", "error": "error", "fatal": "critical" };
@@ -202,24 +191,24 @@ export function configureServerRuns(server: McpServer, root: string): void {
 }
 
 /** A tool's content hash — config + handler source — so its confidence decays when the tool definition changes. */
-function shaOfTool(tool: McpTool): string {
-	return createHash("sha256").update(JSON.stringify(tool.config ?? {}) + String(tool.handler)).digest("hex").slice(0, 12);
+async function shaOfTool(tool: McpTool): Promise<string> {
+	return shortHash(JSON.stringify(tool.config ?? {}) + String(tool.handler));
 }
 
-/** Confidence for a tool from the server's ledger (undefined when the server keeps no `.silo/`). */
-function confidenceForTool(server: McpServer, name: string, tool: McpTool): Confidence | undefined {
+/** Confidence for a tool (by its content hash) from the server's ledger (undefined when the server keeps no `.silo/`). */
+function confidenceForTool(server: McpServer, name: string, sha: string): Confidence | undefined {
 	const paths = serverPaths.get(server);
 
-	return paths === undefined ? undefined : confidence(paths, name, shaOfTool(tool));
+	return paths === undefined ? undefined : confidence(paths, name, sha);
 }
 
 /** Append a run to the ledger — best-effort, so a ledger write never affects the tool's result. */
-function recordToolRun(server: McpServer, name: string, tool: McpTool, exit: number): void {
+function recordToolRun(server: McpServer, name: string, sha: string, exit: number): void {
 	const paths = serverPaths.get(server);
 
 	if (paths === undefined) { return; }
 
-	void recordRun(paths, { "script": name, "ts": new Date().toISOString(), "sha": shaOfTool(tool), "exit": exit, "mode": "apply" }).catch(() => {});
+	void recordRun(paths, { "script": name, "ts": new Date().toISOString(), "sha": sha, "exit": exit, "mode": "apply" }).catch(() => {});
 }
 
 // ── Runtime capability broker. During a brokered tool handler, node-side `fetch` (net) and every `util/fs`
@@ -347,7 +336,9 @@ export function makeToolCallback(server: McpServer, name: string, resolve: () =>
 			return fail(`${name} is no longer registered`);
 		}
 
-		const resolved = candidate;   // narrowed — used by the context confidence closure and the run ledger
+		const resolved = candidate;   // narrowed — used by the handler call below
+		// Its content hash, once for this call: what its confidence and its run in the ledger are keyed on.
+		const sha = await shaOfTool(resolved);
 
 		const context: ToolContext = {
 			"signal": extra.signal,
@@ -376,17 +367,17 @@ export function makeToolCallback(server: McpServer, name: string, resolve: () =>
 				void (extra as any).sendNotification?.({ "method": "notifications/progress", "params": { "progressToken": token, "progress": progress, ...(total !== undefined ? { "total": total } : {}) } });
 			},
 			// This tool's trust confidence from the server's run ledger (churn-decayed; undefined if none kept).
-			"confidence": () => confidenceForTool(server, name, resolved)
+			"confidence": () => confidenceForTool(server, name, sha)
 		};
 
 		try {
-			const runHandler = () => toolContextStore.run(context, () => resolved.handler(toolArgs, context));
+			const runHandler = () => resolved.handler(toolArgs, context);
 			// A brokered server gates the handler's node-side net + fs calls inside a broker scope; others run bare.
 			const result = brokeredServers.has(server)
 				? await brokerStore.run({ "name": name, ...makeGates(name, serverPaths.get(server), approved) }, runHandler)
 				: await runHandler();
 
-			recordToolRun(server, name, resolved, result.isError ? 1 : 0);
+			recordToolRun(server, name, sha, result.isError ? 1 : 0);
 
 			return result;
 		} catch (error) {
@@ -394,7 +385,7 @@ export function makeToolCallback(server: McpServer, name: string, resolve: () =>
 				return confirmationResult(error);   // an MRTR gate — nothing executed, not a run
 			}
 
-			recordToolRun(server, name, resolved, 1);
+			recordToolRun(server, name, sha, 1);
 
 			return fail(`${name} failed: ${error instanceof Error ? error.message : String(error)}`);
 		}
