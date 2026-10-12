@@ -64,8 +64,6 @@ export function externalOptionalDeps(): PluginOption {
  * optimizer bundles the shims itself.
  */
 function nodePolyfillShims(): PluginOption {
-	const require = createRequire(import.meta.url);
-
 	return {
 		"name": "node-polyfill-shims",
 		"apply": "build",
@@ -74,7 +72,9 @@ function nodePolyfillShims(): PluginOption {
 				"alias": Object.fromEntries(["buffer", "global", "process"].map(function(name) {
 					const id = `vite-plugin-node-polyfills/shims/${name}`;
 
-					return [id, require.resolve(id)];
+					// The ES module build: the CommonJS one sets `exports.default` without `__esModule`, so a default import of it
+					// is its exports object, not the shim (`process.argv` undefined).
+					return [id, url.fileURLToPath(import.meta.resolve(id))];
 				}))
 			}
 		})
