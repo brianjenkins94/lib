@@ -9,18 +9,26 @@
  *     menu entry is a facet of its command, not a feature of its own).
  *   • VS Code API calls — `registerCommand`, `register…Provider`, `create{TreeView,StatusBarItem,…}`.
  *   • hub — `serve(hub, "name", …)` requests and `hub.subscribe("subject", …)` subscriptions.
+ *   • workers — a module that listens for messages at its top level (`addEventListener("message", …)`, `onmessage = …`):
+ *     started by a URL rather than imported, so its listener is how the rest of the program reaches it.
  *   • MCP tools — an object literal with a `name`, a `description` and a handler or schema.
  *   • terminal commands (`defineCommand("name", …)`), URL parameters read from `location`, buttons (a JSX `<…button>` with
  *     a literal `aria-label` or `title`), and core modules (a call to an imported `install…` function).
  *
  * A feature is keyed by WHAT it is (`command|editor.debugFile`), never where it lives, so a moved file moves its
  * features rather than removing and re-adding them. Each way in carries a FINGERPRINT of its own code — the registration
- * call with its inline handler, as the AST without positions — so a change in comments or whitespace isn't a change.
+ * call with its inline handler, as the AST without positions — so a change in comments or whitespace isn't a change —
+ * and the names that code uses (`uses`): the roots of what the feature reaches in the program's declaration graph
+ * (`./graph`), so a change anywhere it reaches is a change to it.
  *
  * `oxc` + pure AST logic only, the same portability contract as `./detect`: no fs, git or network.
  */
 
+import type { Node } from "./graph";
 import { parseSync } from "oxc-parser";
+import { fingerprintOf, nodeId, topLevelNames, topLevelUses, walk } from "./graph";
+
+export { fingerprintOf } from "./graph";
 
 /** One way in, as one file states it. A command's declaration (manifest) and registration (code) are two of these. */
 export interface WayIn {
@@ -33,8 +41,9 @@ export interface WayIn {
 	"weak"?: boolean;
 	/** The fingerprint of its own code. */
 	"code"?: string;
-	/** For a core module: the relative module its `install…` function is imported from. */
-	"module"?: string;
+	/** The names its code uses that its file declares or imports at the top level (a local of the function it's
+	 *  registered in counts as what that local is made from). */
+	"uses"?: string[];
 }
 
 /** A feature: one way in, merged across the files that state it. */
@@ -47,49 +56,17 @@ export interface Feature {
 	"files": string[];
 	"sides": string[];
 	"code": string[];
-	"modules": string[];
+	/** Where it starts in the program's declaration graph: the names its ways in use, as node ids (`file#name`). */
+	"roots": string[];
 }
 
 /** Internal ways in: how a program's parts reach each other, not what a person or an agent reaches. */
-export const INTERNAL_FACETS = new Set(["hub request", "hub subscription"]);
+export const INTERNAL_FACETS = new Set(["hub request", "hub subscription", "worker"]);
 
 export const isManifest = (file: string): boolean => /(^|\/)package\.json$/u.test(file);
 export const isSource = (file: string): boolean => /\.[cm]?[jt]sx?$/u.test(file) && !/\.d\.[cm]?ts$/u.test(file);
 
 // ── the AST ──────────────────────────────────────────────────────────────────────────────────────────────────
-
-// oxc's ESTree, typed loosely: the handful of node shapes read below.
-interface Node { "type": string; "start": number; "end": number; [key: string]: any }
-
-const isNode = (value: unknown): value is Node => typeof value === "object" && value !== null && typeof (value as Node).type === "string";
-
-function walk(node: Node, visit: (node: Node) => void): void {
-	visit(node);
-
-	for (const key in node) {
-		if (key === "parent") {
-			continue;
-		}
-
-		const value = node[key];
-
-		if (Array.isArray(value)) {
-			for (const child of value) {
-				if (isNode(child)) {
-					walk(child, visit);
-				}
-			}
-		} else if (isNode(value)) {
-			walk(value, visit);
-		}
-	}
-}
-
-/** A node without its positions or its literals' spelling: two versions with equal fingerprints differ only in
- *  comments, whitespace or quotes. */
-export function fingerprintOf(node: unknown): string {
-	return JSON.stringify(node, (key, value: unknown) => (key === "start" || key === "end" || key === "range" || key === "loc" || key === "raw" ? undefined : typeof value === "bigint" ? value.toString() + "n" : value));
-}
 
 /** A whole file's fingerprint (see `fingerprintOf`); its text, if it doesn't parse. */
 export function fileFingerprint(file: string, text: string): string {
@@ -145,6 +122,11 @@ export function waysInSource(file: string, text: string): WayIn[] {
 	const ways: WayIn[] = [];
 	const source = (node: Node): string => text.slice(node.start, node.end);
 	const imports = new Map<string, string>();
+	const scope = topLevelNames(program);
+	// A name made at run time (`virtual.debug.${port}`, `controlSubject(SESSION)`): keyed by how it's written.
+	const isName = (node: Node | undefined): boolean => node !== undefined && ["TemplateLiteral", "Identifier", "CallExpression", "MemberExpression", "BinaryExpression"].includes(node.type);
+	const spelled = (node: Node): string => source(node).replace(/\s+/gu, " ");
+	let statement: Node = program;
 
 	for (const statement of program.body as Node[]) {
 		if (statement.type === "ImportDeclaration") {
@@ -154,7 +136,7 @@ export function waysInSource(file: string, text: string): WayIn[] {
 		}
 	}
 
-	walk(program, (node) => {
+	const visit = (node: Node): void => {
 		const before = ways.length;
 
 		if (node.type === "CallExpression") {
@@ -177,18 +159,22 @@ export function waysInSource(file: string, text: string): WayIn[] {
 				const id = literal(first);
 
 				ways.push({ "facet": facet, ...facet === "view" ? { "side": "registered" } : {}, "id": id ?? "", "label": literal(second) ?? "", ...id === undefined ? { "weak": true } : {} });
-			} else if (name === "serve" && literal(second) !== undefined && (node["arguments"] as Node[]).length >= 3) {
-				ways.push({ "facet": "hub request", "id": literal(second), "label": "" });
-			} else if (name === "subscribe" && literal(first) !== undefined && /hub/iu.test(receiver)) {
-				ways.push({ "facet": "hub subscription", "id": literal(first), "label": "" });
+			} else if (name === "serve" && (node["arguments"] as Node[]).length >= 3 && (literal(second) !== undefined || (first !== undefined && /hub/iu.test(source(first)) && isName(second)))) {
+				ways.push({ "facet": "hub request", "id": literal(second) ?? spelled(second), "label": "" });
+			} else if (name === "subscribe" && /hub/iu.test(receiver) && (literal(first) !== undefined || isName(first))) {
+				ways.push({ "facet": "hub subscription", "id": literal(first) ?? spelled(first), "label": "" });
 			} else if (name === "defineCommand" && literal(first) !== undefined) {
 				ways.push({ "facet": "terminal command", "id": literal(first), "label": "" });
 			} else if ((name === "get" || name === "has" || name === "getAll") && literal(first) !== undefined && receiver.includes("location") && /URLSearchParams|search/u.test(receiver)) {
 				ways.push({ "facet": "url parameter", "id": "?" + literal(first), "label": "" });
+			} else if (name === "addEventListener" && (literal(first) === "message" || literal(first) === "connect") && node === statement["expression"] && /^(?:|globalThis|self)$/u.test(receiver)) {
+				ways.push({ "facet": "worker", "id": "", "label": "", "weak": true });
 			} else if (name !== undefined && /^install[A-Z]/u.test(name) && callee.type === "Identifier" && imports.get(name)?.startsWith(".") === true) {
-				// A core module's code is the module it's installed from, not this call.
-				ways.push({ "facet": "core module", "id": name, "label": "", "module": imports.get(name) });
+				// What it is: the module's `install…` function, and what that reaches (its `uses`).
+				ways.push({ "facet": "core module", "id": name, "label": "" });
 			}
+		} else if (node.type === "AssignmentExpression" && node === statement["expression"] && /^(?:(?:globalThis|self)\.)?on(?:message|connect)$/u.test(source(node["left"]))) {
+			ways.push({ "facet": "worker", "id": "", "label": "", "weak": true });
 		} else if (node.type === "ObjectExpression") {
 			const name = literal(property(node, "name")); const
 				description = literal(property(node, "description"));
@@ -205,10 +191,20 @@ export function waysInSource(file: string, text: string): WayIn[] {
 			}
 		}
 
-		for (let index = before; index < ways.length; index++) {
-			ways[index].code = fingerprintOf(node);
+		if (ways.length > before) {
+			const code = fingerprintOf(node);
+			const uses = topLevelUses(node, statement, scope);
+
+			for (let index = before; index < ways.length; index++) {
+				ways[index].code = code;
+				ways[index].uses = uses;
+			}
 		}
-	});
+	};
+
+	for (statement of program.body as Node[]) {
+		walk(statement, visit);
+	}
 
 	return ways;
 }
@@ -288,20 +284,6 @@ export function keyOf(way: WayIn, file: string): string {
 	return way.facet + "|" + way.id + (weak ? "|" + file.slice(file.lastIndexOf("/") + 1) : "");
 }
 
-function resolveRelative(from: string, specifier: string): string {
-	const parts = from.split("/").slice(0, -1);
-
-	for (const part of specifier.split("/")) {
-		if (part === "..") {
-			parts.pop();
-		} else if (part !== ".") {
-			parts.push(part);
-		}
-	}
-
-	return parts.join("/");
-}
-
 /** Every file's ways in, merged into features. */
 export function featuresOf(files: Iterable<{ "file": string; "ways": WayIn[] }>): Map<string, Feature> {
 	const features = new Map<string, Feature>();
@@ -312,7 +294,7 @@ export function featuresOf(files: Iterable<{ "file": string; "ways": WayIn[] }>)
 			let feature = features.get(key);
 
 			if (feature === undefined) {
-				feature = { "key": key, "facet": way.facet, "id": way.id, "label": "", "files": [], "sides": [], "code": [], "modules": [] };
+				feature = { "key": key, "facet": way.facet, "id": way.id, "label": "", "files": [], "sides": [], "code": [], "roots": [] };
 				features.set(key, feature);
 			}
 
@@ -329,8 +311,10 @@ export function featuresOf(files: Iterable<{ "file": string; "ways": WayIn[] }>)
 				feature.code.push(way.code);
 			}
 
-			if (way.module !== undefined) {
-				feature.modules.push(resolveRelative(file, way.module));
+			for (const used of way.uses ?? []) {
+				if (!feature.roots.includes(nodeId(file, used))) {
+					feature.roots.push(nodeId(file, used));
+				}
 			}
 
 			// The files that implement it; a manifest only while nothing else does.
@@ -345,6 +329,7 @@ export function featuresOf(files: Iterable<{ "file": string; "ways": WayIn[] }>)
 	for (const feature of features.values()) {
 		feature.files.sort();
 		feature.code.sort();
+		feature.roots.sort();
 	}
 
 	return features;

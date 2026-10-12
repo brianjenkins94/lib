@@ -7,19 +7,23 @@
  * events since the one before it, over the program's features (`./features`):
  *
  *   added · removed · moved (its files changed, it didn't) · relabeled · sides (declared / implemented) ·
- *   changed (its own code changed: the registration and its inline handler, or for a core module the module it
- *   installs from — in the AST, so comments and whitespace never count)
+ *   changed (its own code changed — the registration and its inline handler — or a declaration it reaches did: what
+ *   its code uses, and theirs in turn, in the program's declaration graph (`./graph`); in the AST, so comments and
+ *   whitespace never count, and a declaration that only moved isn't a change)
  *
  * `narrate` turns a span of those into sentences grouped by area: what a person or an agent can reach first, a
  * program's internal plumbing folded into one line per area, a removal and an addition of the same kind with the same
- * label in one snapshot told as a rename, and a feature added and removed within the span told as tried.
+ * label in one snapshot told as a rename, a feature added and removed within the span told as tried, and a change to a
+ * declaration many features reach told once, as that declaration's, not as a change to each of them.
  *
  * Reading the snapshots (git, isomorphic-git, a working tree) is the caller's: `./git-snapshots` is the Node one.
  */
 
 import type { Feature, WayIn } from "./features";
+import type { FileGraph, Package } from "./graph";
 import { isEntry } from "@brianjenkins94/util/env";
-import { featuresOf, fileFingerprint, INTERNAL_FACETS, isManifest, waysIn } from "./features";
+import { featuresOf, fileFingerprint, INTERNAL_FACETS, isManifest, isSource, waysIn } from "./features";
+import { fileGraph, packageOf, ProgramGraph } from "./graph";
 
 /** One version of the program: its files, each by the id of its content (a git blob id, a hash). */
 export interface Snapshot {
@@ -35,7 +39,9 @@ export type HistoryEvent = { "key": string; "facet": string; "id": string } & (
 	| { "type": "moved"; "from": string[]; "to": string[] }
 	| { "type": "relabeled"; "from": string; "to": string; "file": string }
 	| { "type": "sides"; "from": string; "to": string; "file": string }
-	| { "type": "changed"; "file": string; "via": "registration" | "module" }
+	// Its registration (and inline handler) changed, or a declaration it reaches did (`file`, `declaration`).
+	| { "type": "changed"; "file": string; "via": "registration" }
+	| { "type": "changed"; "file": string; "via": "reach"; "declaration": string }
 );
 
 /** What happened between one snapshot and the one before it. */
@@ -58,21 +64,41 @@ export const includeByDefault = (path: string): boolean => !SKIP.test(path) && !
 /** Whether its declaration and its implementation exist: `declared`, `registered`, both, or neither (""). */
 const sidesOf = (feature: Feature): string => feature.sides.filter((side) => side === "declared" || side === "registered").sort().join("+");
 
+/** The declarations that changed from one program to the next: new, or with a different fingerprint — but not one
+ *  that only moved (its name and code were somewhere in the program before). */
+export function changedDeclarations(before: ProgramGraph, after: ProgramGraph): string[] {
+	const existed = new Set<string>();
+
+	for (const [id, fingerprint] of before.fingerprints) {
+		existed.add(id.slice(id.lastIndexOf("#") + 1) + "\u0000" + fingerprint);
+	}
+
+	return [...after.fingerprints].filter(([id, fingerprint]) => before.fingerprints.get(id) !== fingerprint && !existed.has(id.slice(id.lastIndexOf("#") + 1) + "\u0000" + fingerprint)).map(([id]) => id);
+}
+
 /** Replay snapshots, oldest first, yielding each one's events. Each file version is read and analyzed once. */
 export async function *replay(snapshots: AsyncIterable<Snapshot> | Iterable<Snapshot>, read: (oid: string) => Promise<string>, options: ReplayOptions = {}): AsyncGenerator<Step> {
 	const include = options.include ?? includeByDefault;
-	const analyzed = new Map<string, { "ways": WayIn[]; "fingerprint": string }>();
+	const analyzed = new Map<string, { "ways": WayIn[]; "graph"?: FileGraph; "package"?: Package }>();
 	let previous: Map<string, Feature> | undefined;
-	let previousFiles = new Map<string, string>();
+	let previousGraph: ProgramGraph | undefined;
 
-	const analyze = async (path: string, oid: string): Promise<{ "ways": WayIn[]; "fingerprint": string }> => {
-		const key = oid + (isManifest(path) ? ":manifest" : "");
+	const analyze = async (path: string, oid: string): Promise<{ "ways": WayIn[]; "graph"?: FileGraph; "package"?: Package }> => {
+		// A manifest's package names its folder, so the same text in two places is two packages.
+		const key = oid + (isManifest(path) ? ":" + path : "");
 		let result = analyzed.get(key);
 
 		if (result === undefined) {
 			const text = await read(oid);
+			let graph: FileGraph | undefined;
 
-			result = { "ways": waysIn(path, text), "fingerprint": fileFingerprint(path, text) };
+			try {
+				graph = isSource(path) ? fileGraph(path, text) : undefined;
+			} catch { /* doesn't parse: no declarations */ }
+
+			const found = isManifest(path) ? packageOf(path, text) : undefined;
+
+			result = { "ways": waysIn(path, text), ...graph === undefined ? {} : { "graph": graph }, ...found === undefined ? {} : { "package": found } };
 			analyzed.set(key, result);
 		}
 
@@ -82,15 +108,30 @@ export async function *replay(snapshots: AsyncIterable<Snapshot> | Iterable<Snap
 	for await (const snapshot of snapshots) {
 		const files = new Map(snapshot.files.filter((file) => include(file.path)).map((file) => [file.path, file.oid]));
 		const stated: { "file": string; "ways": WayIn[] }[] = [];
+		const graphs = new Map<string, FileGraph>();
+		const packages: Package[] = [];
 
 		for (const [path, oid] of files) {
-			stated.push({ "file": path, "ways": (await analyze(path, oid)).ways });
+			const analysis = await analyze(path, oid);
+
+			stated.push({ "file": path, "ways": analysis.ways });
+
+			if (analysis.graph !== undefined) {
+				graphs.set(path, analysis.graph);
+			}
+
+			if (analysis.package !== undefined) {
+				packages.push(analysis.package);
+			}
 		}
 
 		const features = featuresOf(stated);
+		const program = new ProgramGraph(graphs, packages);
 		const events: HistoryEvent[] = [];
 
-		if (previous !== undefined) {
+		if (previous !== undefined && previousGraph !== undefined) {
+			const reached = program.reachers(changedDeclarations(previousGraph, program));
+
 			for (const [key, feature] of features) {
 				const was = previous.get(key);
 				const base = { "key": key, "facet": feature.facet, "id": feature.id };
@@ -114,15 +155,14 @@ export async function *replay(snapshots: AsyncIterable<Snapshot> | Iterable<Snap
 
 				if (feature.code.length > 0 && feature.code.join("\u0001") !== was.code.join("\u0001")) {
 					events.push({ ...base, "type": "changed", "file": feature.files[0] ?? "", "via": "registration" });
-				}
+				} else {
+					// The first root that reaches a changed declaration, and which one.
+					const changed = feature.roots.map((root) => reached.get(root)).find((target) => target !== undefined);
 
-				for (const module of feature.modules) {
-					const resolve = (map: Map<string, string>): string | undefined => [".ts", ".tsx", ".js", ".mjs", "/index.ts", ""].map((extension) => module + extension).find((path) => map.has(path));
-					const now = resolve(files); const
-						then = resolve(previousFiles);
+					if (changed !== undefined) {
+						const hash = changed.lastIndexOf("#");
 
-					if (now !== undefined && then !== undefined && files.get(now) !== previousFiles.get(then) && (await analyze(now, files.get(now))).fingerprint !== (await analyze(then, previousFiles.get(then))).fingerprint) {
-						events.push({ ...base, "type": "changed", "file": now, "via": "module" });
+						events.push({ ...base, "type": "changed", "file": changed.slice(0, hash), "via": "reach", "declaration": changed.slice(hash + 1) });
 					}
 				}
 			}
@@ -136,7 +176,7 @@ export async function *replay(snapshots: AsyncIterable<Snapshot> | Iterable<Snap
 
 		yield { "snapshot": snapshot.id, "date": snapshot.date, "features": features.size, "events": events };
 		previous = features;
-		previousFiles = files;
+		previousGraph = program;
 	}
 }
 
@@ -165,6 +205,9 @@ export interface Section {
 	"area": string;
 	"lines": string[];
 }
+
+/** A declaration whose change reaches this many features in one snapshot is told as its own change (see `narrate`). */
+export const SHARED = 5;
 
 const NOUNS: Record<string, string> = { "hub request": "hub request", "hub subscription": "hub subscription", "core module": "core module", "agent tool": "agent tool", "url parameter": "URL parameter" };
 const noun = (facet: string): string => NOUNS[facet] ?? facet;
@@ -275,10 +318,30 @@ export function narrate(steps: Step[], options: NarrateOptions = {}): Section[] 
 	const added = new Map<string, { "event": HistoryEvent & { "type": "added" }; "when": string; "gone"?: string }>();
 	const removed = new Map<string, { "event": HistoryEvent & { "type": "removed" }; "when": string }>();
 	const changed = new Map<string, { "event": HistoryEvent; "times": number; "days": Set<string> }>();
+	const shared = new Map<string, { "file": string; "name": string; "features": number; "times": number; "days": Set<string> }>();
 	const moves = new Map<string, HistoryEvent[]>();
 
 	for (const step of steps) {
 		const renamed = new Set<HistoryEvent>();
+		// How many features each declaration's change reached in this snapshot.
+		const reach = new Map<string, number>();
+
+		for (const event of step.events) {
+			if (event.type === "changed" && event.via === "reach") {
+				reach.set(event.file + "#" + event.declaration, (reach.get(event.file + "#" + event.declaration) ?? 0) + 1);
+			}
+		}
+
+		for (const [id, features] of reach) {
+			if (features >= SHARED) {
+				const entry = shared.get(id) ?? { "file": id.slice(0, id.lastIndexOf("#")), "name": id.slice(id.lastIndexOf("#") + 1), "features": 0, "times": 0, "days": new Set<string>() };
+
+				entry.features = Math.max(entry.features, features);
+				entry.times += 1;
+				entry.days.add(day(step));
+				shared.set(id, entry);
+			}
+		}
 
 		for (const { from, to } of renamesIn(step)) {
 			renamed.add(from).add(to);
@@ -310,6 +373,10 @@ export function narrate(steps: Step[], options: NarrateOptions = {}): Section[] 
 				}
 
 				case "changed": {
+					if (event.via === "reach" && (reach.get(event.file + "#" + event.declaration) ?? 0) >= SHARED) {
+						break; // told once, as the declaration's
+					}
+
 					const entry = changed.get(event.key) ?? { "event": event, "times": 0, "days": new Set<string>() };
 
 					entry.times += 1;
@@ -373,6 +440,12 @@ export function narrate(steps: Step[], options: NarrateOptions = {}): Section[] 
 		} else {
 			say(fileOf(event), 2, `Changed ${named(event)}${times > 1 ? `: ${times} times over ${days.size} day${days.size > 1 ? "s" : ""}` : ""}.`, event.key);
 		}
+	}
+
+	for (const { file, name, features, times, days } of shared.values()) {
+		const what = name === "(top)" ? `\`${file.slice(file.lastIndexOf("/") + 1)}\`'s top level` : `\`${name}\``;
+
+		say(file, 2, `Changed ${what}, which ${features} features use${times > 1 ? `: ${times} times over ${days.size} day${days.size > 1 ? "s" : ""}` : ""}.`);
 	}
 
 	for (const [route, events] of moves) {
@@ -522,6 +595,14 @@ if (isEntry(import.meta)) {
 
 		assert.deepEqual(shell.map((way) => way.facet + " " + way.id + (way.label === "" ? "" : " · " + way.label)).sort(), ["agent tool files_read · Read a file", "button History · no handler", "button Run", "core module installPreview", "terminal command node", "url parameter ?pane"]);
 
+		// A hub name made at run time is keyed by how it's written.
+		const interpolated = ["`virtual.debug.$", "{port}`"].join("");
+
+		assert.deepEqual(waysIn("w.ts", `serve(hub, ${interpolated}, () => 1);\nhub.subscribe(controlSubject(SESSION), () => 0);\nserve(app, port, () => 1);\n`).map((way) => way.facet + " " + way.id), ["hub request " + interpolated, "hub subscription controlSubject(SESSION)"]);
+
+		// A worker's message listener, at its top level — not one inside a function.
+		assert.deepEqual(waysIn("worker.ts", "import { run } from \"./run\";\naddEventListener(\"message\", (event) => run(event.data));\nfunction later() { addEventListener(\"message\", () => 0); }\n").map((way) => way.facet + " " + way.uses.join(",")), ["worker run"]);
+
 		// Any literal fingerprints, a BigInt too; equal code, equal prints, whatever its spacing.
 		assert.equal(fileFingerprint("a.ts", "const n = 10n;"), fileFingerprint("a.ts", "const  n=10n ; // ten"));
 		assert.notEqual(fileFingerprint("a.ts", "const n = 10n;"), fileFingerprint("a.ts", "const n = 11n;"));
@@ -545,6 +626,31 @@ if (isEntry(import.meta)) {
 		assert.deepEqual(types(steps[4]), ["moved files.read", "moved files.write", "moved notes.add"], "a move, not a removal and an addition");
 		assert.deepEqual(types(steps[5]), ["added notes.visible", "removed notes.enabled"]);
 		assert.deepEqual(types(steps[6]), ["removed files.write"]);
+
+		// Reach: a change anywhere a feature's code leads is a change to it — through a local of the function it's
+		// registered in, an import, a re-export, a namespace — and a move, or a change to code it doesn't reach, isn't.
+		const commands = (body: string): string => `import * as vscode from "vscode";\nimport { makeRunner } from "./runner.js";\nexport function activate() {\n\tconst runner = makeRunner();\n\tvscode.commands.registerCommand("run.go", () => runner.go());\n\tvscode.commands.registerCommand("run.other", () => ${body});\n}\n`;
+		const runner = (go: string): string => `import * as text from "./text";\nexport function makeRunner() { return { "go": () => text.shout(${go}) }; }\nexport function unused() { return 1; }\n`;
+		const reached = await run([
+			snapshot("2026-10-08", { "x/extension.ts": commands("0"), "x/runner.ts": runner("\"a\""), "x/text.ts": "export { shout } from \"./shout\";\n", "x/shout.ts": "export const shout = (s: string) => s + \"!\";\n" }),
+			snapshot("2026-10-09", { "x/extension.ts": commands("0"), "x/runner.ts": runner("\"b\""), "x/text.ts": "export { shout } from \"./shout\";\n", "x/shout.ts": "export const shout = (s: string) => s + \"!\";\n" }),
+			snapshot("2026-10-10", { "x/extension.ts": commands("0"), "x/runner.ts": runner("\"b\""), "x/text.ts": "export { shout } from \"./shout\";\n", "x/shout.ts": "export const shout = (s: string) => s + \"?\";\n" }),
+			snapshot("2026-10-11", { "x/extension.ts": commands("0"), "x/runner.ts": runner("\"b\"").replace("return 1", "return 2"), "x/text.ts": "export { shout } from \"./say\";\n", "x/say.ts": "export const shout = (s: string) => s + \"?\";\n" })
+		]);
+		const changes = (step: Step): string[] => step.events.map((event) => event.type + " " + event.id + (event.type === "changed" && event.via === "reach" ? " via " + event.file + "#" + event.declaration : "")).sort();
+
+		assert.deepEqual(changes(reached[1]), ["changed run.go via x/runner.ts#makeRunner"], "through the local it's made from; run.other reaches none of it");
+		assert.deepEqual(changes(reached[2]), ["changed run.go via x/shout.ts#shout"], "through a namespace import and a re-export");
+		assert.deepEqual(changes(reached[3]), [], "a move isn't a change, nor is a change to code no feature reaches");
+
+		// A change many features reach is told once, as that declaration's.
+		const many = (body: string): string => `import { helper } from "./helper";\nexport function activate() {\n${[1, 2, 3, 4, 5].map((n) => `\tvscode.commands.registerCommand("c${n}", () => helper());`).join("\n")}\n}\n`;
+		const wide = await run([
+			snapshot("2026-10-12", { "y/extension.ts": many(""), "y/helper.ts": "export const helper = () => 1;\n" }),
+			snapshot("2026-10-13", { "y/extension.ts": many(""), "y/helper.ts": "export const helper = () => 2;\n" })
+		]);
+
+		assert.deepEqual(narrate(wide.slice(1)).flatMap((section) => section.lines), ["Changed `helper`, which 5 features use."]);
 
 		// Told: a rename by its label, plumbing folded, a feature added and removed within the span as tried.
 		const told = narrate(steps.slice(1)).flatMap((section) => section.lines);
