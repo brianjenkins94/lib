@@ -86,11 +86,18 @@ export class Replayer {
 	readonly #analyzer: Analyzer;
 	#previous: Map<string, Feature> | undefined;
 	#previousGraph: DeclarationGraph | undefined;
+	#changed: string[] = [];
 
 	constructor(read: (oid: string) => Promise<string>, options: ReplayOptions) {
 		this.#read = read;
 		this.#include = options.include ?? includeByDefault;
 		this.#analyzer = options.analyzer;
+	}
+
+	/** What the last step read: the program's declaration graph and features, and the declarations that changed since the
+	 *  step before it — for what joins history with something else (`./coverage`) without reading it twice. */
+	get last(): { "graph": DeclarationGraph; "features": ReadonlyMap<string, Feature>; "changed": readonly string[] } | undefined {
+		return this.#previousGraph === undefined || this.#previous === undefined ? undefined : { "graph": this.#previousGraph, "features": this.#previous, "changed": this.#changed };
 	}
 
 	/** The next snapshot's events since the last one (none for the first: it has nothing to compare with). */
@@ -106,8 +113,10 @@ export class Replayer {
 		const features = featuresOf([...files.keys()].map((path) => ({ "file": path, "ways": ways.get(path) ?? [] })));
 		const events: HistoryEvent[] = [];
 
+		this.#changed = previousGraph === undefined ? [] : changedDeclarations(previousGraph, program);
+
 		if (previous !== undefined && previousGraph !== undefined) {
-			const reached = reachers(program, changedDeclarations(previousGraph, program));
+			const reached = reachers(program, this.#changed);
 
 			for (const [key, feature] of features) {
 				const was = previous.get(key);
