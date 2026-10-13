@@ -648,8 +648,9 @@ export function historyMarkdown(steps: Step[], options: NarrateOptions & { "titl
 if (isEntry(import.meta)) {
 	void (async function() {
 		const assert: typeof import("node:assert").strict = (await import("node:assert")).strict;
-		// oxc's reading, for the tests: this module loads no analyzer itself.
-		const { fileFingerprint, oxcAnalyzer, waysIn } = await import("./oxc");
+		// oxc's reading, for the tests: this module loads no analyzer itself. (A specifier made at run time, so a bundler
+		// of this module doesn't follow it into oxc: the tests only run here.)
+		const { fileFingerprint, oxcAnalyzer, waysIn }: typeof import("./oxc") = await import(/* @vite-ignore */ ["./oxc"].join(""));
 
 		// Snapshots in memory: each file's content is its own id.
 		const blobs = new Map<string, string>();

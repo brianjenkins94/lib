@@ -701,8 +701,9 @@ export function classicHost(ts: any, program: any, relative: (fileName: string) 
 if (isEntry(import.meta)) {
 	void (async function() {
 		const assert: typeof import("node:assert").strict = (await import("node:assert")).strict;
-		// lib's own TypeScript: the in-process API a TypeScript server has.
-		const ts = (await import(/*! @external */ "typescript")).default;
+		// lib's own TypeScript: the in-process API a TypeScript server has. (A specifier made at run time, so a bundler of
+		// this module doesn't follow it into a copy of TypeScript: the tests only run here.)
+		const ts: typeof import("typescript") = (await import(/* @vite-ignore */ ["typescript"].join(""))).default;
 		const { featuresOf } = await import("./features");
 		const { reach } = await import("./graph");
 
