@@ -178,6 +178,10 @@ export const TARGETS: Record<string, Target> = {
 	"capability": { "label": "capability", "type_id": "string", "schema": { "type": "string", "examples": ["fs:read", "fs:write", "net", "net.ws", "exec", "eval", "env"] }, "description": "What a call can do" },
 	"resource": { "label": "resource", "type_id": "string", "schema": { "type": "string" }, "description": "What it reaches: a path, a URL, a command" },
 	"program": { "label": "program", "type_id": "string", "schema": { "type": "string" }, "description": "The file run, from the workspace root" },
+	// A package whose code runs: an org's contract trusts one (allow: its calls aren't asked about) or bans one (deny: it
+	// doesn't run at all) — packageDisposition — and a call's rows can name the package making it.
+	"package": { "label": "package", "type_id": "string", "schema": { "type": "string", "examples": ["lodash", "@scope/name"] }, "description": "The package whose code runs, by name" },
+	"version": { "label": "version", "type_id": "string", "schema": { "type": "string" }, "description": "That package's version" },
 	// `command-line`: written as you'd type them after `node file.js` (an annotation, for an editor's input).
 	"process.argv": { "label": "process.argv", "type_id": "array", "schema": { "type": "array", "items": { "type": "string" }, "format": "command-line" }, "description": "The program's arguments" },
 	// `span`: a span reference (annotations.ts SpanRef) — found again through edits, as an authored annotation is. At a
@@ -366,9 +370,10 @@ export function ruleFor(policy: Policy, subject: Subject, actions?: string[]): R
 const DECISIONS = ["allow", "deny", "skip", "ask"];
 
 /** The effective disposition for a call: the first rule deciding it wins (`ask` → review); otherwise dangerous →
- *  review, safe → allow. */
-export function effectiveDisposition(policy: Policy, capability: string, resource: string, dangerous: boolean): Effective {
-	const rule = ruleFor(policy, { "capability": capability, "resource": resource }, DECISIONS);
+ *  review, safe → allow. `about`: more of what the call is — the package making it (`package`, `version`), so a rule
+ *  can be about one package's calls. */
+export function effectiveDisposition(policy: Policy, capability: string, resource: string, dangerous: boolean, about: Subject = {}): Effective {
+	const rule = ruleFor(policy, { ...about, "capability": capability, "resource": resource }, DECISIONS);
 
 	if (rule !== undefined) {
 		const decision = rule.then.find(({ action_id }) => DECISIONS.includes(action_id)).action_id;
@@ -377,6 +382,22 @@ export function effectiveDisposition(policy: Policy, capability: string, resourc
 	}
 
 	return dangerous ? "review" : "allow";
+}
+
+/** What the policy says of a package as a whole — rules about it, not about a call of it: `deny` (it doesn't run at all —
+ *  a package an org knows is bad), `allow` (it's trusted: its calls aren't asked about), or undefined (its calls are
+ *  decided as they're made). A deny wins over an allow, wherever each is: one person's rule doesn't lift an org's ban. */
+export function packageDisposition(policy: Policy, pkg: { "name": string; "version"?: string }): "allow" | "deny" | undefined {
+	const subject = { "package": pkg.name, ...pkg.version === undefined ? {} : { "version": pkg.version } };
+	// (only rules that name a package: one whose rows are all `none of …` would match any subject that lacks them)
+	const names = (predicate: Predicate): boolean => ("predicates" in predicate ? predicate.predicates.some(names) : predicate.target_id === "package");
+	const deciding = policy.rules.filter((rule) => names(rule.when) && rule.then.some(({ action_id }) => action_id === "allow" || action_id === "deny") && ruleMatches(rule, subject));
+
+	if (deciding.some((rule) => rule.then.some(({ action_id }) => action_id === "deny"))) {
+		return "deny";
+	}
+
+	return deciding.length > 0 ? "allow" : undefined;
 }
 
 /** The rows a decision made at a call is about: this capability, this resource. */
@@ -532,6 +553,26 @@ if (isEntry(import.meta)) {
 		assert.equal(ruleMatches(writes, { "capability": "fs:write", "resource": "/workspace/.git/HEAD" }), false);
 		assert.equal(ruleMatches(writes, { "capability": "fs:read", "resource": "/workspace/src/a.ts" }), false);
 		assert.equal(ruleMatches(writes, { "capability": "fs:write" }), false); // a target that isn't there doesn't match
+
+		// A package as a whole: an org bans one (any version, or one), trusts another; a deny wins over an allow; a rule about
+		// calls, or one only of `none of …` rows, isn't about a package.
+		const packageRule = (rows: Predicate[], action: string): Rule => ({ "when": { "logicalType_id": "all", "predicates": rows }, "then": [{ "action_id": action }] });
+		const org: Policy = { "version": 1, "rules": [
+			packageRule([{ "target_id": "package", "operator_id": "is", "argument": "lodash" }], "allow"),
+			packageRule([{ "target_id": "package", "operator_id": "is", "argument": "evil" }], "deny"),
+			packageRule([{ "target_id": "package", "operator_id": "is", "argument": "ua-parser-js" }, { "target_id": "version", "operator_id": "is", "argument": "0.7.29" }], "deny"),
+			packageRule([{ "target_id": "package", "operator_id": "is", "argument": "evil" }], "allow"),
+			packageRule([{ "target_id": "capability", "operator_id": "is", "argument": "net" }], "allow"),
+			{ "when": { "logicalType_id": "none", "predicates": [{ "target_id": "resource", "operator_id": "contains", "argument": ".git/" }] }, "then": [{ "action_id": "allow" }] }
+		] };
+
+		assert.equal(packageDisposition(org, { "name": "lodash", "version": "4.17.21" }), "allow");
+		assert.equal(packageDisposition(org, { "name": "evil" }), "deny", "a deny wins, wherever the allow is");
+		assert.equal(packageDisposition(org, { "name": "ua-parser-js", "version": "0.7.29" }), "deny");
+		assert.equal(packageDisposition(org, { "name": "ua-parser-js", "version": "0.7.30" }), undefined);
+		assert.equal(packageDisposition(org, { "name": "other", "version": "1.0.0" }), undefined, "rules about calls aren't about a package");
+		assert.equal(effectiveDisposition({ "version": 1, "rules": [packageRule([{ "target_id": "package", "operator_id": "is", "argument": "axios" }, { "target_id": "capability", "operator_id": "is", "argument": "net" }], "allow")] }, "net", "https://x", true, { "package": "axios" }), "allow", "a rule about one package's calls");
+		assert.equal(effectiveDisposition({ "version": 1, "rules": [packageRule([{ "target_id": "package", "operator_id": "is", "argument": "axios" }, { "target_id": "capability", "operator_id": "is", "argument": "net" }], "allow")] }, "net", "https://x", true), "review", "and not anyone else's");
 		assert.equal(ruleMatches({ "when": { "logicalType_id": "any", "predicates": [] }, "then": [{ "action_id": "stop" }] }, {}), false);
 		assert.equal(ruleMatches({ "when": { "logicalType_id": "all", "predicates": [] }, "then": [{ "action_id": "stop" }] }, {}), true);
 		assert.equal((toSchema(writes) as Record<string, unknown>)["$schema"], "https://json-schema.org/draft/2020-12/schema");
