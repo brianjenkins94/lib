@@ -3,7 +3,7 @@
  * for all of it, so every writer (the editor, the command line, an MCP server) agrees.
  *
  *   .silo/
- *     .gitignore                          `local/` — what stays on this machine
+ *     .gitignore                          `/local/` — what stays on this machine
  *     .gitattributes                      `*.jsonl merge=union` — line files merge by keeping both sides
  *     policy.json                         SHARED · the contract: rules people wrote and review
  *     policy/<user>.json                  SHARED · one person's rules, layered over the contract
@@ -37,8 +37,12 @@ export const SILO_DIR = ".silo";
 /** What stays on this machine. */
 export const LOCAL_DIR = `${SILO_DIR}/local`;
 
-/** What `.silo/.gitignore` says: `local/` stays on this machine; everything else goes in git. */
-export const GITIGNORE = "local/\n";
+/** What `.silo/.gitignore` says: `/local/` stays on this machine; everything else goes in git. Anchored: a bare `local/`
+ *  would also ignore any folder named `local` deeper down — `evidence/local/`, the evidence of a user named `local`. */
+export const GITIGNORE = "/local/\n";
+
+/** Lines silo seeded once and no longer means, taken out when it seeds: the unanchored `local/`. */
+const RETIRED = new Set(["local/"]);
 
 /** What `.silo/.gitattributes` says: line files merge line by line, keeping both sides. */
 export const GITATTRIBUTES = "*.jsonl merge=union\n";
@@ -53,17 +57,21 @@ export function slug(value: string): string | undefined {
 /** A user as a file name: their slug, or `local` when there's none. */
 const userFile = (user: string): string => slug(user) ?? "local";
 
-/** `existing` with each of `wanted`'s lines it lacks added at the end, or undefined when it has them all. For seeding
- *  `.gitignore` and `.gitattributes` without dropping what a person added. */
+/** `existing` with each of `wanted`'s lines it lacks added at the end, and any line silo retired taken out, or undefined
+ *  when there's nothing to change. For seeding `.gitignore` and `.gitattributes` without dropping what a person added. */
 export function withLines(existing: string, wanted: string): string | undefined {
-	const have = new Set(existing.split(/\r?\n/u).map((line) => line.trim()));
+	const lines = existing.split(/\r?\n/u);
+	const kept = lines.filter((line) => !RETIRED.has(line.trim()));
+	const have = new Set(kept.map((line) => line.trim()));
 	const missing = wanted.split("\n").filter((line) => line !== "" && !have.has(line));
 
-	if (missing.length === 0) {
+	if (missing.length === 0 && kept.length === lines.length) {
 		return undefined;
 	}
 
-	return (existing === "" || existing.endsWith("\n") ? existing : existing + "\n") + missing.join("\n") + "\n";
+	const text = kept.join("\n");
+
+	return (text === "" || text.endsWith("\n") ? text : text + "\n") + missing.map((line) => line + "\n").join("");
 }
 
 /** The contract: the rules people wrote and review. */
@@ -125,11 +133,16 @@ if (isEntry(import.meta)) {
 		assert.equal(annotationsPath("Notes", "ada", "src/a.ts"), ".silo/notes/ada/src/a.ts.jsonl");
 		assert.equal(registryPath(), ".silo/local/registry.json");
 		assert.equal(POLICY_GLOB, "**/.silo/{policy.json,policy/*.json}");
-		assert.ok(GITIGNORE.split("\n").filter(Boolean).every((line) => line === "local/"), "local/ is all .gitignore names");
+		assert.ok(GITIGNORE.split("\n").filter(Boolean).every((line) => line === "/local/"), "/local/ is all .gitignore names");
 
 		// Seeding keeps a person's lines and adds only what's missing.
-		assert.equal(withLines("", GITIGNORE), "local/\n");
-		assert.equal(withLines("node_modules", GITIGNORE), "node_modules\nlocal/\n");
-		assert.equal(withLines("local/\n*.log\n", GITIGNORE), undefined, "nothing missing: nothing to write");
+		assert.equal(withLines("", GITIGNORE), "/local/\n");
+		assert.equal(withLines("node_modules", GITIGNORE), "node_modules\n/local/\n");
+		assert.equal(withLines("/local/\n*.log\n", GITIGNORE), undefined, "nothing missing: nothing to write");
+
+		// The unanchored `local/` silo once seeded is replaced, a person's lines kept.
+		assert.equal(withLines("local/\n", GITIGNORE), "/local/\n");
+		assert.equal(withLines("*.log\nlocal/\n", GITIGNORE), "*.log\n/local/\n");
+		assert.equal(withLines("*.jsonl merge=union\n", GITATTRIBUTES), undefined);
 	})();
 }

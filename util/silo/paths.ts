@@ -43,7 +43,7 @@ export function siloPaths(root: string = findRoot(process.cwd())): SiloPaths {
 	};
 }
 
-/** `.silo/`'s two files, as the layout says them, made sure of once per process: `.gitignore` (`local/` stays on this
+/** `.silo/`'s two files, as the layout says them, made sure of once per process: `.gitignore` (`/local/` stays on this
  *  machine) and `.gitattributes` (line files merge by line). A person's own lines are kept; only what's missing is
  *  added, the same way the editor does it. */
 const seeded = new Set<string>();

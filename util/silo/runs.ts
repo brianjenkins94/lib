@@ -113,8 +113,8 @@ if (isEntry(import.meta)) {
 			assert.deepEqual(loadRuns(paths).map((each) => each.id).toSorted(), ["a", "b", "c", "d"]);
 			assert.deepEqual(loadRuns({ ...paths, "localRuns": path.join(root, "elsewhere") }).map((each) => each.id).toSorted(), ["a", "b", "c"], "a collaborator's clone has only the shared runs");
 
-			// `.silo/` is seeded as the editor seeds it: `local/` ignored, JSONL merged by line.
-			assert.ok(fs.readFileSync(path.join(paths.siloDir, ".gitignore")).split("\n").includes("local/"));
+			// `.silo/` is seeded as the editor seeds it: `/local/` ignored, JSONL merged by line.
+			assert.ok(fs.readFileSync(path.join(paths.siloDir, ".gitignore")).split("\n").includes("/local/"));
 			assert.equal(fs.readFileSync(path.join(paths.siloDir, ".gitattributes")), "*.jsonl merge=union\n");
 
 			// A Node process's environment: its class, never a fingerprint.
