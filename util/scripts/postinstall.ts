@@ -12,7 +12,7 @@ const PNPM_MINIMUM_RELEASE_AGE = String(MINIMUM_RELEASE_AGE_DAYS * 24 * 60);
 const NPM_BEFORE = new Date(Date.now() - MINIMUM_RELEASE_AGE_DAYS * 86_400_000).toISOString().split("T")[0];
 
 /**
- * Install every git-tracked workspace (pnpm `--ignore-workspace`, falling back to npm), so each
+ * Install every git-tracked workspace (npm, falling back to pnpm `--ignore-workspace`), so each
  * sub-package's own dependencies and install lifecycle run. Used as the repo's `postinstall`. `private`
  * gates PUBLISHING only (util-publish honours it) — it never gates installing: a private, deployable app
  * (e.g. a Pages workbench) still needs its deps installed to build, so private workspaces are installed too.
@@ -29,14 +29,19 @@ export async function postinstall(workspaces?: string[]) {
 
 	workspaces ??= (await fs.findWorkspaces()).map((workspace) => workspace.dir);
 
-	// exec auto-shells pnpm/npm (.cmd shims) on Windows; the pnpm→npm fallback is just "try pnpm, else npm".
+	// npm first: it SYMLINKS a `file:` sibling (install-links=false, passed so no user config flips it), so an edit
+	// to a sibling reaches its dependents at once — pnpm, installing one package on its own, copies it into its
+	// store, where it goes stale until the next install. exec auto-shells npm/pnpm (.cmd shims) on Windows; the
+	// fallback is just "try npm, else pnpm".
 	return mapAsync(workspaces, async function(workspace: string) {
-		const pnpm = await exec("pnpm", ["--ignore-workspace", "install", "--config.minimumReleaseAge=" + PNPM_MINIMUM_RELEASE_AGE], { "cwd": workspace });
-
-		if (pnpm.ok) { return pnpm.exitCode; }
-
 		// FROM: https://github.com/vercel/turborepo/blob/1ae620cdf454d0258a162a96976e3064433391a2/packages/turbo/bin/turbo#L29
-		return (await exec("npm", ["install", "--before=" + NPM_BEFORE, "--loglevel=error", "--prefer-offline", "--no-audit", "--progress=false"], { "cwd": workspace })).exitCode;
+		const npm = await exec("npm", ["install", "--before=" + NPM_BEFORE, "--install-links=false", "--loglevel=error", "--prefer-offline", "--no-audit", "--progress=false"], { "cwd": workspace });
+
+		if (npm.ok) {
+			return npm.exitCode;
+		}
+
+		return (await exec("pnpm", ["--ignore-workspace", "install", "--config.minimumReleaseAge=" + PNPM_MINIMUM_RELEASE_AGE], { "cwd": workspace })).exitCode;
 	});
 }
 
