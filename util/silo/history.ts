@@ -17,13 +17,20 @@
  * declaration many features reach told once, as that declaration's, not as a change to each of them.
  *
  * Reading the snapshots (git, isomorphic-git, a working tree) is the caller's: `./git-snapshots` is the Node one.
+ *
+ * Live, too: `LiveHistory` takes the same steps as code is edited — each edit burst a one-file change to the program —
+ * and what a burst changed is kept as a FACT, a line in the person's `.silo/history/<user>.jsonl` (`../layout`). The
+ * bursts themselves aren't needed once their facts are; the facts are what git can't give: the work between commits,
+ * the tries that were undone before any commit. `withFacts` tells a git history and the facts as one.
  */
 
 import type { Feature, WayIn } from "./features";
 import type { Analyzer, DeclarationGraph } from "./graph";
 import { isEntry } from "@brianjenkins94/util/env";
+import { shortHash } from "@brianjenkins94/util/hash";
 import { featuresOf, fileFingerprint, INTERNAL_FACETS, isManifest, waysIn } from "./features";
-import { changedDeclarations, oxcAnalyzer, reachers } from "./graph";
+import { changedDeclarations, reachers } from "./graph";
+import { oxcAnalyzer } from "./oxc";
 
 /** One version of the program: its files, each by the id of its content (a git blob id, a hash). */
 export interface Snapshot {
@@ -55,7 +62,7 @@ export interface Step {
 export interface ReplayOptions {
 	/** Which files to read (default: sources and manifests outside build output, vendored code, tests and fixtures). */
 	"include"?: (path: string) => boolean;
-	/** What turns each snapshot into its declaration graph (default: oxc's, `oxcAnalyzer`). */
+	/** What reads each snapshot: its ways in and declaration graph (default: oxc's, `oxcAnalyzer`). */
 	"analyzer"?: Analyzer;
 }
 
@@ -66,36 +73,34 @@ export const includeByDefault = (path: string): boolean => !SKIP.test(path) && !
 /** Whether its declaration and its implementation exist: `declared`, `registered`, both, or neither (""). */
 const sidesOf = (feature: Feature): string => feature.sides.filter((side) => side === "declared" || side === "registered").sort().join("+");
 
-/** Replay snapshots, oldest first, yielding each one's events. Each file version is read and analyzed once. */
-export async function *replay(snapshots: AsyncIterable<Snapshot> | Iterable<Snapshot>, read: (oid: string) => Promise<string>, options: ReplayOptions = {}): AsyncGenerator<Step> {
-	const include = options.include ?? includeByDefault;
-	const analyzer = options.analyzer ?? oxcAnalyzer();
-	const ways = new Map<string, WayIn[]>();
-	let previous: Map<string, Feature> | undefined;
-	let previousGraph: DeclarationGraph | undefined;
+/**
+ * Replays snapshots one at a time, oldest first: each step's events since the one before it. Each file version is read
+ * and analyzed once. What `replay` (a series of snapshots, a git history) and `LiveHistory` (edits as they're made) run on.
+ */
+export class Replayer {
+	readonly #read: (oid: string) => Promise<string>;
+	readonly #include: (path: string) => boolean;
+	readonly #analyzer: Analyzer;
+	#previous: Map<string, Feature> | undefined;
+	#previousGraph: DeclarationGraph | undefined;
 
-	const waysOf = async (path: string, oid: string): Promise<WayIn[]> => {
-		const key = oid + (isManifest(path) ? ":manifest" : "");
-		let found = ways.get(key);
+	constructor(read: (oid: string) => Promise<string>, options: ReplayOptions = {}) {
+		this.#read = read;
+		this.#include = options.include ?? includeByDefault;
+		this.#analyzer = options.analyzer ?? oxcAnalyzer();
+	}
 
-		if (found === undefined) {
-			found = waysIn(path, await read(oid));
-			ways.set(key, found);
-		}
+	/** The next snapshot's events since the last one (none for the first: it has nothing to compare with). */
+	async step(snapshot: Snapshot): Promise<Step> {
+		const read = this.#read;
+		const include = this.#include;
+		const analyzer = this.#analyzer;
+		const previous = this.#previous;
+		const previousGraph = this.#previousGraph;
 
-		return found;
-	};
-
-	for await (const snapshot of snapshots) {
 		const files = new Map(snapshot.files.filter((file) => include(file.path)).map((file) => [file.path, file.oid]));
-		const stated: { "file": string; "ways": WayIn[] }[] = [];
-
-		for (const [path, oid] of files) {
-			stated.push({ "file": path, "ways": await waysOf(path, oid) });
-		}
-
-		const features = featuresOf(stated);
-		const program = await analyzer.graph(files, read);
+		const { "graph": program, ways } = await analyzer.analyze(files, read);
+		const features = featuresOf([...files.keys()].map((path) => ({ "file": path, "ways": ways.get(path) ?? [] })));
 		const events: HistoryEvent[] = [];
 
 		if (previous !== undefined && previousGraph !== undefined) {
@@ -143,10 +148,138 @@ export async function *replay(snapshots: AsyncIterable<Snapshot> | Iterable<Snap
 			}
 		}
 
-		yield { "snapshot": snapshot.id, "date": snapshot.date, "features": features.size, "events": events };
-		previous = features;
-		previousGraph = program;
+		this.#previous = features;
+		this.#previousGraph = program;
+
+		return { "snapshot": snapshot.id, "date": snapshot.date, "features": features.size, "events": events };
 	}
+}
+
+/** Replay snapshots, oldest first, yielding each one's events. Each file version is read and analyzed once. */
+export async function *replay(snapshots: AsyncIterable<Snapshot> | Iterable<Snapshot>, read: (oid: string) => Promise<string>, options: ReplayOptions = {}): AsyncGenerator<Step> {
+	const replayer = new Replayer(read, options);
+
+	for await (const snapshot of snapshots) {
+		yield await replayer.step(snapshot);
+	}
+}
+
+// ── live ─────────────────────────────────────────────────────────────────────────────────────────────────────
+
+/** What one edit burst changed: when, in which file, and the events it made (a line of `.silo/history/<user>.jsonl`). */
+export interface HistoryFact {
+	/** ISO 8601. */
+	"time": string;
+	"file": string;
+	/** How many features the program had after it. */
+	"features": number;
+	"events": HistoryEvent[];
+}
+
+/**
+ * History as the code is edited: starts from a snapshot (HEAD's files) and takes each edit — a file's new text, or its
+ * removal — as the next snapshot, one file different. Each `edit` answers its step, and the fact to keep when it made
+ * any events. Edits' texts are kept by content, so `read` is only asked for the starting snapshot's files.
+ */
+export class LiveHistory {
+	readonly #replayer: Replayer;
+	readonly #texts: Map<string, string>;
+	readonly #files: Map<string, string>;
+	#next = 0;
+
+	private constructor(replayer: Replayer, texts: Map<string, string>, files: Map<string, string>) {
+		this.#replayer = replayer;
+		this.#texts = texts;
+		this.#files = files;
+	}
+
+	/** Start from `base` (the program as committed): its step makes no events. */
+	static async start(base: Snapshot, read: (oid: string) => Promise<string>, options: ReplayOptions = {}): Promise<LiveHistory> {
+		const texts = new Map<string, string>();
+		const replayer = new Replayer(async (oid) => texts.get(oid) ?? read(oid), options);
+
+		await replayer.step(base);
+
+		return new LiveHistory(replayer, texts, new Map(base.files.map((file) => [file.path, file.oid])));
+	}
+
+	/** The program after `file` became `text` (undefined: removed), at `time`: its step, and the fact if it made events. */
+	async edit(file: string, text: string | undefined, time: Date | string = new Date()): Promise<{ "step": Step; "fact"?: HistoryFact }> {
+		if (text === undefined) {
+			this.#files.delete(file);
+		} else {
+			const oid = "text:" + await shortHash(text);
+
+			this.#texts.set(oid, text);
+			this.#files.set(file, oid);
+		}
+
+		const date = typeof time === "string" ? time : time.toISOString();
+		const step = await this.#replayer.step({ "id": "edit:" + String(this.#next += 1), "date": date, "files": [...this.#files].map(([path, oid]) => ({ "path": path, "oid": oid })) });
+
+		return step.events.length === 0 ? { "step": step } : { "step": step, "fact": { "time": date, "file": file, "features": step.features, "events": step.events } };
+	}
+}
+
+/** A fact as its line of a `.jsonl` file. */
+export const factLine = (fact: HistoryFact): string => JSON.stringify(fact) + "\n";
+
+/** The facts in a `.jsonl` file's text (a line that isn't one is skipped: a merge may have left half of one). */
+export function parseFacts(text: string): HistoryFact[] {
+	return text.split("\n").flatMap((line) => {
+		try {
+			const fact = JSON.parse(line) as HistoryFact;
+
+			return typeof fact?.time === "string" && Array.isArray(fact.events) ? [fact] : [];
+		} catch {
+			return [];
+		}
+	});
+}
+
+/**
+ * A git history's steps and the facts edits left, as one history, by time. A commit whose span (since the commit before
+ * it) has facts is told by them — the work as it was done, tries included — and adds only what none of them explains (an
+ * edit made outside the editor). Facts after the last commit are the work not committed yet. Facts before the first step
+ * belong to the history before the span.
+ */
+export function withFacts(steps: Step[], facts: HistoryFact[]): Step[] {
+	const sorted = [...facts].sort((left, right) => left.time.localeCompare(right.time));
+	const asStep = (fact: HistoryFact): Step => ({ "snapshot": "edit:" + fact.time, "date": fact.time, "features": fact.features, "events": fact.events });
+	const told: Step[] = [];
+	let index = 0;
+
+	// Before the first step: the span's baseline, and facts that came before it.
+	while (index < sorted.length && steps[0] !== undefined && sorted[index]!.time <= steps[0].date) {
+		index += 1;
+	}
+
+	for (const [position, step] of steps.entries()) {
+		if (position === 0) {
+			told.push(step);
+			continue;
+		}
+
+		const span: HistoryFact[] = [];
+
+		while (index < sorted.length && sorted[index]!.time <= step.date) {
+			span.push(sorted[index]!);
+			index += 1;
+		}
+
+		if (span.length === 0) {
+			told.push(step);
+			continue;
+		}
+
+		const explained = new Set(span.flatMap((fact) => fact.events.map((event) => event.key)));
+
+		told.push(...span.map(asStep), { ...step, "events": step.events.filter((event) => !explained.has(event.key)) });
+	}
+
+	told.push(...sorted.slice(index).map(asStep));
+
+	return told;
 }
 
 // ── telling it ───────────────────────────────────────────────────────────────────────────────────────────────
@@ -570,7 +703,7 @@ if (isEntry(import.meta)) {
 		assert.deepEqual(waysIn("w.ts", `serve(hub, ${interpolated}, () => 1);\nhub.subscribe(controlSubject(SESSION), () => 0);\nserve(app, port, () => 1);\n`).map((way) => way.facet + " " + way.id), ["hub request " + interpolated, "hub subscription controlSubject(SESSION)"]);
 
 		// A worker's message listener, at its top level — not one inside a function.
-		assert.deepEqual(waysIn("worker.ts", "import { run } from \"./run\";\naddEventListener(\"message\", (event) => run(event.data));\nfunction later() { addEventListener(\"message\", () => 0); }\n").map((way) => way.facet + " " + way.uses.join(",")), ["worker run"]);
+		assert.deepEqual(waysIn("worker.ts", "import { run } from \"./run\";\naddEventListener(\"message\", (event) => run(event.data));\nfunction later() { addEventListener(\"message\", () => 0); }\n").map((way) => way.facet + " " + way.roots.join(",")), ["worker worker.ts#run"]);
 
 		// Any literal fingerprints, a BigInt too; equal code, equal prints, whatever its spacing.
 		assert.equal(fileFingerprint("a.ts", "const n = 10n;"), fileFingerprint("a.ts", "const  n=10n ; // ten"));
@@ -632,6 +765,38 @@ if (isEntry(import.meta)) {
 		assert.deepEqual(tried(steps).map((group) => group.features.map((feature) => feature.id)), [["files.write"]]);
 		assert.equal(foldIds(["files.read", "files.write", "shell.run"]), "`files.{read,write}`, `shell.run`");
 		assert.match(historyMarkdown(steps.slice(1), { "title": "Notes" }), /^# Notes\n\n6 snapshots, 2026-10-02 to 2026-10-07/u);
+
+		// Live: edits as they're made. A command added and taken out again before any commit is a try git never saw; a
+		// burst that changes nothing about the features leaves no fact.
+		const base = snapshot("2026-10-20", { "z/extension.ts": "export function activate() {}\n" });
+		const live = await LiveHistory.start(base, read);
+		const added = await live.edit("z/extension.ts", "export function activate() {\n\tvscode.commands.registerCommand(\"z.try\", () => 1);\n}\n", "2026-10-20T10:00:00Z");
+		const quiet = await live.edit("z/extension.ts", "export function activate() {\n\tvscode.commands.registerCommand(\"z.try\", () => 1); // a comment\n}\n", "2026-10-20T10:01:00Z");
+		const undone = await live.edit("z/extension.ts", "export function activate() {}\n", "2026-10-20T10:02:00Z");
+
+		assert.deepEqual(added.fact?.events.map((event) => event.type + " " + event.id), ["added z.try"]);
+		assert.equal(quiet.fact, undefined, "a comment changes nothing: no fact");
+		assert.deepEqual(parseFacts(factLine(undone.fact!) + "half a li"), [undone.fact], "a fact's line reads back; a broken line is skipped");
+
+		// Told with the commits: a commit with facts in its span is told by them; facts after the last commit are the work
+		// not committed yet.
+		const commits: Step[] = [
+			{ "snapshot": "c1", "date": "2026-10-19T00:00:00Z", "features": 0, "events": [] },
+			{ "snapshot": "c2", "date": "2026-10-20T12:00:00Z", "features": 1, "events": [{ "key": "command|z.kept", "facet": "command", "id": "z.kept", "type": "added", "label": "", "files": ["z/extension.ts"] }, { "key": "command|z.outside", "facet": "command", "id": "z.outside", "type": "added", "label": "", "files": ["z/other.ts"] }] }
+		];
+		const keptFact: HistoryFact = { "time": "2026-10-20T11:00:00Z", "file": "z/extension.ts", "features": 1, "events": [{ "key": "command|z.kept", "facet": "command", "id": "z.kept", "type": "added", "label": "", "files": ["z/extension.ts"] }] };
+		const later: HistoryFact = { ...keptFact, "time": "2026-10-21T09:00:00Z", "events": [{ "key": "command|z.kept", "facet": "command", "id": "z.kept", "type": "changed", "file": "z/extension.ts", "via": "registration" }] };
+		const merged = withFacts(commits, [later, added.fact!, undone.fact!, keptFact]);
+
+		assert.deepEqual(merged.map((step) => step.snapshot + ": " + step.events.map((event) => event.type + " " + event.id).join(", ")), [
+			"c1: ",
+			"edit:2026-10-20T10:00:00Z: added z.try",
+			"edit:2026-10-20T10:02:00Z: removed z.try",
+			"edit:2026-10-20T11:00:00Z: added z.kept",
+			"c2: added z.outside",
+			"edit:2026-10-21T09:00:00Z: changed z.kept"
+		], "the facts tell the commit's span; the commit adds what they don't explain");
+		assert.deepEqual(tried(merged).map((group) => group.features.map((feature) => feature.id)), [["z.try"]], "a try no commit saw");
 
 		// The features as a document: by area, plumbing folded.
 		const document = featuresMarkdown(features.values(), { "title": "Notes" });

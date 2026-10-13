@@ -20,6 +20,7 @@
  * `oxc` + pure AST logic only, the same portability contract as `./features`: no fs, git or network.
  */
 
+import type { WayIn } from "./features";
 import { isEntry } from "@brianjenkins94/util/env";
 import { parseSync } from "oxc-parser";
 
@@ -429,13 +430,21 @@ export interface DeclarationGraph {
 	edges(id: string): string[];
 }
 
+/** What an analyzer makes of a snapshot: its declaration graph, and each file's ways in (`./features`). */
+export interface Analysis {
+	"graph": DeclarationGraph;
+	/** Each file's ways in, by path (a file with none may be missing). */
+	"ways": ReadonlyMap<string, WayIn[]>;
+}
+
 /**
- * Turns a snapshot of the program into its declaration graph. Called once per snapshot, oldest first, so one may build
- * each graph from the last. `files`: the program's files by path, each by the id of its content; `read` gets a content.
- * oxc's (`oxcAnalyzer`, pure, here) is the default; `./typescript` is TypeScript 7's, in Node.
+ * Reads a snapshot of the program: its ways in and its declaration graph, from one reading of each file. Called once per
+ * snapshot, oldest first, so one may build each from the last. `files`: the program's files by path, each by the id of
+ * its content; `read` gets a content. oxc's (`./oxc`) is the default; TypeScript's read the same over its own tree
+ * (`./ts-analysis`): TypeScript 7's in Node (`./typescript`), and a TypeScript server's (the editor's history plugin).
  */
 export interface Analyzer {
-	graph(files: ReadonlyMap<string, string>, read: (oid: string) => Promise<string>): Promise<DeclarationGraph>;
+	analyze(files: ReadonlyMap<string, string>, read: (oid: string) => Promise<string>): Promise<Analysis>;
 	/** Let go of what it holds (a compiler process). */
 	close?(): void;
 }
@@ -514,51 +523,7 @@ export function changedDeclarations(before: DeclarationGraph, after: Declaration
 	return [...after.fingerprints].filter(([id, fingerprint]) => before.fingerprints.get(id) !== fingerprint && !existed.has(id.slice(id.lastIndexOf("#") + 1) + "\u0000" + fingerprint)).map(([id]) => id);
 }
 
-// ── oxc's ────────────────────────────────────────────────────────────────────────────────────────────────────
-
-/** oxc's analyzer: each file version parsed once (`fileGraph`, cached by content id), names resolved by `ProgramGraph`. */
-export function oxcAnalyzer(): Analyzer {
-	const cache = new Map<string, FileGraph | Package | null>();
-
-	return {
-		"graph": async (files, read) => {
-			const graphs = new Map<string, FileGraph>();
-			const packages: Package[] = [];
-
-			for (const [path, oid] of files) {
-				const manifest = /(^|\/)package\.json$/u.test(path);
-
-				if (!manifest && !/\.[cm]?[jt]sx?$/u.test(path)) {
-					continue;
-				}
-
-				// A manifest's package names its folder, so the same text in two places is two packages.
-				const key = manifest ? oid + ":" + path : oid;
-				let found = cache.get(key);
-
-				if (found === undefined) {
-					const text = await read(oid);
-
-					try {
-						found = (manifest ? packageOf(path, text) : fileGraph(path, text)) ?? null;
-					} catch {
-						found = null; // doesn't parse: no declarations
-					}
-
-					cache.set(key, found);
-				}
-
-				if (found !== null && manifest) {
-					packages.push(found as Package);
-				} else if (found !== null) {
-					graphs.set(path, found as FileGraph);
-				}
-			}
-
-			return new ProgramGraph(graphs, packages);
-		}
-	};
-}
+// ── oxc's graph ──────────────────────────────────────────────────────────────────────────────────────────────
 
 /**
  * oxc's declaration graph: every file's declarations and imports, resolved across files by name. Built per snapshot

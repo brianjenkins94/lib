@@ -18,8 +18,8 @@
  * A feature is keyed by WHAT it is (`command|editor.debugFile`), never where it lives, so a moved file moves its
  * features rather than removing and re-adding them. Each way in carries a FINGERPRINT of its own code — the registration
  * call with its inline handler, as the AST without positions — so a change in comments or whitespace isn't a change —
- * and the names that code uses (`uses`): the roots of what the feature reaches in the program's declaration graph
- * (`./graph`), so a change anywhere it reaches is a change to it.
+ * and where that code leads (`roots`, node ids in the program's declaration graph, `./graph`), so a change anywhere it
+ * reaches is a change to it. oxc's recognizers are here; `./ts-analysis` has the same over TypeScript's tree.
  *
  * `oxc` + pure AST logic only, the same portability contract as `./detect`: no fs, git or network.
  */
@@ -41,9 +41,9 @@ export interface WayIn {
 	"weak"?: boolean;
 	/** The fingerprint of its own code. */
 	"code"?: string;
-	/** The names its code uses that its file declares or imports at the top level (a local of the function it's
-	 *  registered in counts as what that local is made from). */
-	"uses"?: string[];
+	/** Where its code leads, as node ids (`file#name`): the names it uses that its file declares or imports (a local of the
+	 *  function it's registered in counts as what that local is made from). */
+	"roots"?: string[];
 }
 
 /** A feature: one way in, merged across the files that state it. */
@@ -109,10 +109,21 @@ function literals(node: Node | undefined): string[] {
 
 const property = (object: Node, name: string): Node | undefined => object["properties"].find((each: Node) => each.type === "Property" && (each["key"].name ?? each["key"].value) === name)?.value;
 
-const REGISTER = /^register(?:\w*(?:Provider|Factory)|UriHandler|NotebookSerializer)$/u;
-const CREATE = /^(?:createTreeView|createWebviewPanel|createStatusBarItem|createOutputChannel|createSourceControl|createTestController|createDiagnosticCollection|createTerminal|createTextEditorDecorationType|createCommentController)$/u;
-const words = (name: string): string => name.replace(/([a-z])([A-Z])/gu, "$1 $2").toLowerCase();
-const firstSentence = (text: string): string => text.split(/\.\s|\n/u)[0].slice(0, 120);
+// What the recognizers look for — shared with TypeScript's (`./ts-analysis`), so both name a way in the same.
+/** A VS Code API `register…` call that is a way in (a provider, a factory, a URI handler, a notebook serializer). */
+export const REGISTER = /^register(?:\w*(?:Provider|Factory)|UriHandler|NotebookSerializer)$/u;
+/** A VS Code API `create…` call that is a way in (a view, a status bar item, a terminal, …). */
+export const CREATE = /^(?:createTreeView|createWebviewPanel|createStatusBarItem|createOutputChannel|createSourceControl|createTestController|createDiagnosticCollection|createTerminal|createTextEditorDecorationType|createCommentController)$/u;
+/** The receivers a `create…` call has to be on. */
+export const CREATE_RECEIVER = /window|languages|scm|tests|comments|vscode|api/u;
+/** The keys that make an object with a `name` and a `description` an agent tool. */
+export const TOOL_KEYS = ["handler", "inputSchema", "input", "run", "call", "schema"];
+/** An agent tool's name. */
+export const TOOL_NAME = /^[a-z][a-z0-9_.]*$/u;
+/** `registerHoverProvider` → `hover provider`, `createTreeView` → `tree view`. */
+export const words = (name: string): string => name.replace(/([a-z])([A-Z])/gu, "$1 $2").toLowerCase();
+/** A description's first sentence: a way in's label. */
+export const firstSentence = (text: string): string => text.split(/\.\s|\n/u)[0].slice(0, 120);
 
 // ── ways in ──────────────────────────────────────────────────────────────────────────────────────────────────
 
@@ -154,7 +165,7 @@ export function waysInSource(file: string, text: string): WayIn[] {
 				const id = literal(first);
 
 				ways.push({ "facet": facet, ...facet === "view" ? { "side": "registered" } : {}, "id": id ?? "", "label": "", ...id === undefined ? { "weak": true } : {} });
-			} else if (name !== undefined && CREATE.test(name) && /window|languages|scm|tests|comments|vscode|api/u.test(receiver)) {
+			} else if (name !== undefined && CREATE.test(name) && CREATE_RECEIVER.test(receiver)) {
 				const facet = name === "createTreeView" ? "view" : words(name.replace(/^create/u, ""));
 				const id = literal(first);
 
@@ -170,7 +181,7 @@ export function waysInSource(file: string, text: string): WayIn[] {
 			} else if (name === "addEventListener" && (literal(first) === "message" || literal(first) === "connect") && node === statement["expression"] && /^(?:|globalThis|self)$/u.test(receiver)) {
 				ways.push({ "facet": "worker", "id": "", "label": "", "weak": true });
 			} else if (name !== undefined && /^install[A-Z]/u.test(name) && callee.type === "Identifier" && imports.get(name)?.startsWith(".") === true) {
-				// What it is: the module's `install…` function, and what that reaches (its `uses`).
+				// What it is: the module's `install…` function, and what that reaches (its `roots`).
 				ways.push({ "facet": "core module", "id": name, "label": "" });
 			}
 		} else if (node.type === "AssignmentExpression" && node === statement["expression"] && /^(?:(?:globalThis|self)\.)?on(?:message|connect)$/u.test(source(node["left"]))) {
@@ -179,7 +190,7 @@ export function waysInSource(file: string, text: string): WayIn[] {
 			const name = literal(property(node, "name")); const
 				description = literal(property(node, "description"));
 
-			if (name !== undefined && description !== undefined && /^[a-z][a-z0-9_.]*$/u.test(name) && ["handler", "inputSchema", "input", "run", "call", "schema"].some((key) => property(node, key) !== undefined)) {
+			if (name !== undefined && description !== undefined && TOOL_NAME.test(name) && TOOL_KEYS.some((key) => property(node, key) !== undefined)) {
 				ways.push({ "facet": "agent tool", "id": name, "label": firstSentence(description) });
 			}
 		} else if (node.type === "JSXOpeningElement" && /button/iu.test(source(node["name"]))) {
@@ -197,7 +208,7 @@ export function waysInSource(file: string, text: string): WayIn[] {
 
 			for (let index = before; index < ways.length; index++) {
 				ways[index].code = code;
-				ways[index].uses = uses;
+				ways[index].roots = uses.map((used) => nodeId(file, used));
 			}
 		}
 	};
@@ -311,9 +322,9 @@ export function featuresOf(files: Iterable<{ "file": string; "ways": WayIn[] }>)
 				feature.code.push(way.code);
 			}
 
-			for (const used of way.uses ?? []) {
-				if (!feature.roots.includes(nodeId(file, used))) {
-					feature.roots.push(nodeId(file, used));
+			for (const root of way.roots ?? []) {
+				if (!feature.roots.includes(root)) {
+					feature.roots.push(root);
 				}
 			}
 
