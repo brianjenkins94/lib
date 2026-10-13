@@ -11,7 +11,6 @@
  *     capabilities/<user>.json            SHARED · what one person's runs saw it do (a rollup)
  *     runs/<user>.jsonl                   SHARED · one person's runs, an envelope a line (./evidence)
  *     evidence/<user>/<env>/<file>.jsonl  SHARED · what one person's runs observed of a file (./evidence)
- *     history/<user>.jsonl                SHARED · what one person's edits changed, a burst a line (./history)
  *     <collection>/<user>/<file>.jsonl    SHARED · one person's annotations of a file: notes, … (./annotations)
  *     baseline.json                       SHARED · the dependency-capability baseline (derived, regenerated: ./audit)
  *     review.json                         SHARED · which code units were reviewed (./review, ./audit)
@@ -89,12 +88,6 @@ export const observedCapabilitiesPath = (user: string): string => `${SILO_DIR}/c
  * everyone's history, such as every call an MCP server's tools take.
  */
 export type RunScope = "shared" | "local";
-
-/** Where `user`'s history facts go: what each of their edit bursts changed (./history's `LiveHistory`). */
-export const historyPath = (user: string): string => `${SILO_DIR}/history/${userFile(user)}.jsonl`;
-
-/** Every person's history facts, as a workspace glob. */
-export const HISTORY_GLOB = `${SILO_DIR}/history/*.jsonl`;
 
 /** Where `user`'s run envelopes go: shared runs in `runs/`, local ones in `local/runs/`. */
 export function runsPath(user: string, scope: RunScope = "shared"): string {
