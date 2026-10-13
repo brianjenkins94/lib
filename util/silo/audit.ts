@@ -17,6 +17,7 @@
 
 import * as path from "node:path";
 
+import { isEntry } from "@brianjenkins94/util/env";
 import { find } from "@brianjenkins94/util/find";
 import * as fs from "@brianjenkins94/util/fs";
 
@@ -248,15 +249,80 @@ export async function capabilityDrift(paths: SiloPaths, target: string): Promise
 	return { "fresh": false, "drift": drift, "changes": changes };
 }
 
-/** First-run onboarding: accept the CURRENT consumer surface as the baseline starting line and write it
- *  (the TOFU bare `silo` does on a fresh project). Every later expansion still drifts against this. */
+/** Every package installed in `root`'s node_modules — nested installs too (npm's layout), each by name with the version
+ *  its package.json gives (the first found, root before nested, keeps the name) — and the capabilities ITS OWN files can
+ *  reach: `./detect`'s scan of each code file, never what it depends on (each dependency is its own entry). What a run
+ *  sees a package do is told apart the same way (an effect's `package`), so the two compare. */
+export async function installedPackages(root: string): Promise<Record<string, PkgEntry>> {
+	const packages: Record<string, PkgEntry> = {};
+	const queue = [path.join(root, "node_modules")];
+	const manifestOf = (dir: string): { "name"?: string; "version"?: string } | undefined => {
+		try {
+			return JSON.parse(fs.readFileSync(path.join(dir, "package.json")));
+		} catch {
+			return undefined;
+		}
+	};
+
+	const ownCaps = async (dir: string): Promise<string[]> => {
+		const code = await find(dir).type("f").prune((container) => container !== dir && path.basename(container) === "node_modules").exec();
+		const caps = new Set<string>();
+
+		for (const file of code.filter((each) => /\.[cm]?js$/u.test(each))) {
+			for (const cap of detect(fs.readFileSync(file))) {
+				caps.add(cap);
+			}
+		}
+
+		return [...caps].sort();
+	};
+
+	while (queue.length > 0) {
+		const modules = queue.shift() ?? "";
+		const names = fs.existsSync(modules) ? (await fs.readdir(modules)).filter((name) => !name.startsWith(".")) : [];
+		const dirs = (await Promise.all(names.map(async (name) => (name.startsWith("@") ? (await fs.readdir(path.join(modules, name))).map((scoped) => path.join(modules, name, scoped)) : [path.join(modules, name)])))).flat();
+
+		for (const dir of dirs.sort()) {
+			const pj = manifestOf(dir);
+
+			if (pj !== undefined) {
+				const name = pj.name ?? path.relative(modules, dir);
+
+				if (fs.existsSync(path.join(dir, "node_modules"))) {
+					queue.push(path.join(dir, "node_modules"));
+				}
+
+				if (!(name in packages)) {
+					packages[name] = { ...pj.version === undefined ? {} : { "version": pj.version }, "caps": await ownCaps(dir) };
+				}
+			}
+		}
+	}
+
+	return Object.fromEntries(Object.entries(packages).sort(([one], [other]) => one.localeCompare(other)));
+}
+
+/** First-run onboarding: accept the CURRENT surface as the baseline starting line and write it — what the code imports
+ *  (`consumer`) and what each installed package can do (`packages`) — the TOFU bare `silo` does on a fresh project.
+ *  Every later expansion still drifts against this. */
 export async function establishBaseline(paths: SiloPaths, target: string): Promise<Baseline> {
 	const b = loadBaseline(paths);
 
 	b.consumer = await consumerSurface(target, paths.root);
+	b.packages = await installedPackages(paths.root);
 	await saveBaseline(paths, b);
 
 	return b;
+}
+
+/** The baseline, made if there isn't one (establishBaseline) — never remade: what's in it is what was accepted, and a
+ *  change to it is an approval, not something a command does on the way. */
+export async function ensureBaseline(paths: SiloPaths, target: string = paths.root): Promise<{ "created": boolean; "baseline": Baseline }> {
+	if (fs.existsSync(paths.baseline)) {
+		return { "created": false, "baseline": loadBaseline(paths) };
+	}
+
+	return { "created": true, "baseline": await establishBaseline(paths, target) };
 }
 
 // ───────────────────────────────────────────────────────────────────────────────────────────────────
@@ -272,4 +338,44 @@ export function loadReviewStore(paths: SiloPaths): ReviewStore {
 export async function saveReviewStore(paths: SiloPaths, store: ReviewStore): Promise<void> {
 	await ensureSiloDir(paths);
 	fs.writeFileSync(paths.review, serializeStore(store));
+}
+
+if (isEntry(import.meta)) {
+	void (async function() {
+		const assert: typeof import("node:assert").strict = (await import("node:assert")).strict;
+		const root = await fs.mkdtemp(path.join(fs.tmpdir(), "silo-audit-"));
+		const write = async (relative: string, text: string): Promise<void> => {
+			await fs.mkdir(path.dirname(path.join(root, relative)), { "recursive": true });
+			fs.writeFileSync(path.join(root, relative), text);
+		};
+
+		await write("package.json", JSON.stringify({ "name": "app", "private": true }));
+		await write("app.js", "import { spawn } from \"tool\";\nspawn();\n");
+		await write("node_modules/tool/package.json", JSON.stringify({ "name": "tool", "version": "1.0.0" }));
+		await write("node_modules/tool/index.js", "const cp = require(\"child_process\"); exports.spawn = () => cp.execSync(\"ls\");");
+		await write("node_modules/tool/node_modules/fetcher/package.json", JSON.stringify({ "name": "fetcher", "version": "2.0.0" }));
+		await write("node_modules/tool/node_modules/fetcher/index.js", "module.exports = () => fetch(\"https://example.com\");");
+		await write("node_modules/@scope/quiet/package.json", JSON.stringify({ "name": "@scope/quiet", "version": "0.1.0" }));
+		await write("node_modules/@scope/quiet/index.js", "module.exports = 1;");
+
+		// Each package by its own files: tool's exec isn't fetcher's, nor fetcher's net tool's.
+		const packages = await installedPackages(root);
+
+		assert.deepEqual(Object.keys(packages), ["@scope/quiet", "fetcher", "tool"]);
+		assert.deepEqual(packages["tool"], { "version": "1.0.0", "caps": ["exec"] });
+		assert.deepEqual(packages["fetcher"]?.caps, ["net"]);
+		assert.deepEqual(packages["@scope/quiet"]?.caps, []);
+
+		// Made once, never remade: a second ensure leaves what was accepted.
+		const paths = siloPaths(root);
+		const first = await ensureBaseline(paths);
+
+		assert.equal(first.created, true);
+		assert.ok("tool" in first.baseline.packages);
+		fs.writeFileSync(paths.baseline, JSON.stringify({ ...first.baseline, "packages": {} }));
+		assert.equal((await ensureBaseline(paths)).created, false);
+		assert.deepEqual(loadBaseline(paths).packages, {});
+
+		await fs.rm(root, { "recursive": true, "force": true });
+	})();
 }
