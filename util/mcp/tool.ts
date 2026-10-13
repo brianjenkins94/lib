@@ -13,6 +13,7 @@ import type { ElicitResult } from "@modelcontextprotocol/sdk/types.js";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import * as path from "node:path";
+import * as fs from "@brianjenkins94/util/fs";
 import { shortHash } from "@brianjenkins94/util/hash";
 // The broker scope leaf (zero-dep ALS) — the Vite plugin's rewritten node:fs/child_process shim reads the same
 // store to gate fs/exec, and the fetch wrap reads it for net; the gate logic (closures) is built below. Loaded only
@@ -20,11 +21,13 @@ import { shortHash } from "@brianjenkins94/util/hash";
 // node:async_hooks.
 import type { BrokerScope } from "./broker";
 import { sinks } from "@brianjenkins94/util/logger";
-// The run ledger + registry (util/silo) — oxc-free (util/fs only), so recording/gating never pulls the kernels.
+// The run ledger and the policy (util/silo) — oxc-free (util/fs only), so recording/gating never pulls the kernels.
 import { type SiloPaths, siloPaths } from "@brianjenkins94/util/silo/paths";
 import { type Confidence, confidence } from "@brianjenkins94/util/silo/evidence";
 import type { RunScope } from "@brianjenkins94/util/silo/layout";
-import { appendRun, gitUser, loadRegistry, loadRuns, nodeEnvironment, saveRegistrySync } from "@brianjenkins94/util/silo/runs";
+import { policyPath, userPolicyPath } from "@brianjenkins94/util/silo/layout";
+import { type Policy, parsePolicy, ruleFor, withRule } from "@brianjenkins94/util/silo/policy";
+import { appendRun, gitUser, loadRuns, nodeEnvironment } from "@brianjenkins94/util/silo/runs";
 // The broker's shared decision core (BERNARD redline + JUDICIAL) — reused for runtime net + fs gating.
 import { judicial, redline } from "@brianjenkins94/util/silo/enforce/decide.mjs";
 
@@ -240,7 +243,8 @@ function recordToolRun(server: McpServer, name: string, sha: string, startedAt: 
 
 // ── Runtime capability broker. During a brokered tool handler, node-side `fetch` (net) and every `util/fs`
 //    read/write (fs) are gated with the FINE scope (`net:<host>`, `fs:read:/path`) via the broker's decision
-//    core (BERNARD redline + JUDICIAL), the MRTR confirm, and per-tool grants persisted to the registry (TOFU).
+//    core (BERNARD redline + JUDICIAL), the policy (a grant is a rule in the person's policy, about the tool), and
+//    the MRTR confirm.
 //    Enforcement is ALS-scoped (util/mcp/broker): a call made OUTSIDE a brokered handler — or by the server's own
 //    infrastructure under its tree — passes straight through. fs is intercepted at the util/fs chokepoint (the
 //    lint rule forbids direct node:fs), so no boxed `--import` launch is needed.
@@ -260,37 +264,57 @@ export function configureServerBroker(server: McpServer): void {
 /**
  * Build the net + fs gate closures for ONE invocation of a tool — captures that invocation's `_approved` set,
  * so an MRTR re-invocation carries the grant. Both gates share one decision path: an in-tree fs path passes; a
- * registry grant passes; a BERNARD redline scope needs an explicit break-glass approval (never persisted);
- * JUDICIAL denies (throw) or allows; otherwise the human MRTR-confirms. A granted scope is persisted (TOFU).
- * `requireApproval` throws ConfirmationRequired synchronously, so it works for the sync fs gate too.
+ * BERNARD redline scope needs an explicit break-glass approval (never persisted); the policy — the person's
+ * `.silo/policy/<user>.json` over the shared contract, a rule about this tool's calls (`program is tool:<name>`) or
+ * any — allows or denies; JUDICIAL denies (throw) or allows; otherwise the human MRTR-confirms, and a confirmed scope
+ * is an "Allow always": a rule about this tool in their policy. `requireApproval` throws ConfirmationRequired
+ * synchronously, so it works for the sync fs gate too.
  */
 function makeGates(name: string, paths: SiloPaths | undefined, approved: string[]): Pick<BrokerScope, "gateFs" | "gateNet"> {
 	const requireApproval = (message: string, key: string): void => {
 		if (!approved.includes(key)) { throw new ConfirmationRequired(message, key, approved); }
 	};
-	const granted = (capScope: string): boolean => {
-		if (paths === undefined) { return false; }
+	// What a fine scope (`net:<host>`, `fs:read:/path`, `exec:<command>`) is, as a rule names it, and the tool making it.
+	const callOf = (capScope: string): { "capability": string; "resource": string } => {
+		const [kind = "", ...rest] = capScope.split(":");
 
-		try { return (loadRegistry(paths)[name]?.approved ?? []).includes(capScope); } catch { return false; }
+		return kind === "fs" ? { "capability": `fs:${rest[0] ?? "read"}`, "resource": rest.slice(1).join(":") } : { "capability": kind, "resource": rest.join(":") };
+	};
+	const about = { "program": `tool:${name}` };
+	const user = (): string => (paths === undefined ? "local" : gitUser(paths.root) ?? "local");
+	const read = (file: string): Policy => parsePolicy(fs.existsSync(file) ? fs.readFileSync(file) : "");
+	// The person's rules first, then the contract's: the first deciding one decides.
+	const policyDecides = (capScope: string): string | undefined => {
+		if (paths === undefined) { return undefined; }
+
+		const { capability, resource } = callOf(capScope);
+		const rules = [userPolicyPath(user()), policyPath()].flatMap((layout) => read(path.join(paths.root, layout)).rules);
+
+		return ruleFor({ "version": 1, rules }, { ...about, "capability": capability, "resource": resource }, ["allow", "deny", "skip"])?.then.find(({ action_id }) => ["allow", "deny", "skip"].includes(action_id))?.action_id;
 	};
 	const persist = (capScope: string): void => {
 		if (paths === undefined) { return; }
 
 		try {
-			const registry = loadRegistry(paths);
-			const entry = registry[name] ?? { "sha": "", "imports": [], "staticCaps": [], "approved": [] };
+			const { capability, resource } = callOf(capScope);
+			const file = path.join(paths.root, userPolicyPath(user()));
 
-			if (!entry.approved.includes(capScope)) { entry.approved.push(capScope); registry[name] = entry; saveRegistrySync(paths, registry); }
+			fs.mkdirSync(path.dirname(file), { "recursive": true });
+			fs.writeFileSync(file, JSON.stringify(withRule(read(file), capability, resource, "allow", new Date().toISOString(), about), null, "\t") + "\n");
 		} catch {}
 	};
 	const decide = (capScope: string, message: string, request: object): void => {
-		if (granted(capScope)) { return; }
-
+		// (the redline first: nothing granted outranks it)
 		if (redline(capScope)) {
 			requireApproval(`⛔ BERNARD REDLINE — ${capScope}\n\nTool "${name}" is reaching a capability on the catastrophic list, which is never a routine grant. Approve ONLY as a deliberate, one-time break-glass.`, `bernard:${name}:${capScope}`);
 
 			return;   // break-glass approved for THIS invocation; deliberately NOT persisted
 		}
+
+		const ruled = policyDecides(capScope);
+
+		if (ruled === "allow") { return; }
+		if (ruled === "deny" || ruled === "skip") { throw new Error(`[broker] DENIED ${capScope} — by the policy`); }
 
 		const verdict = judicial(request);
 

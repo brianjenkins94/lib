@@ -400,22 +400,24 @@ export function packageDisposition(policy: Policy, pkg: { "name": string; "versi
 	return deciding.length > 0 ? "allow" : undefined;
 }
 
-/** The rows a decision made at a call is about: this capability, this resource. */
-const callWhen = (capability: string, resource: string): Compound => ({ "logicalType_id": "all", "predicates": [
+/** The rows a decision made at a call is about: this capability, this resource — and, `about`, more of it (the program
+ *  making it, say: an MCP tool's grant is that tool's). */
+const callWhen = (capability: string, resource: string, about: Record<string, string> = {}): Compound => ({ "logicalType_id": "all", "predicates": [
 	{ "target_id": "capability", "operator_id": "is", "argument": capability },
-	{ "target_id": "resource", "operator_id": "is", "argument": resource }
+	{ "target_id": "resource", "operator_id": "is", "argument": resource },
+	...Object.entries(about).map(([target_id, argument]) => ({ "target_id": target_id, "operator_id": "is", "argument": argument }))
 ] });
 
-const isCall = (capability: string, resource: string) => (rule: Rule): boolean => JSON.stringify(rule.when) === JSON.stringify(callWhen(capability, resource));
+const isCall = (capability: string, resource: string, about: Record<string, string> = {}) => (rule: Rule): boolean => JSON.stringify(rule.when) === JSON.stringify(callWhen(capability, resource, about));
 
-/** Return a copy of `policy` with the decision for (capability, resource) set to `disposition` (replacing any made
- *  there before). `added` (an ISO stamp, passed by the caller that owns the clock) records first-authorization: it's
+/** Return a copy of `policy` with the decision for (capability, resource — `about`, more of the call) set to
+ *  `disposition` (replacing any made there before). `added` (an ISO stamp, passed by the caller that owns the clock) records first-authorization: it's
  *  set on a brand-new rule and PRESERVED from the existing rule across a later disposition flip, so it always means
  *  "when I first decided this", not "when I last touched it". A new decision comes first, ahead of broader rules. */
-export function withRule(policy: Policy, capability: string, resource: string, disposition: Disposition, added?: string): Policy {
-	const index = policy.rules.findIndex(isCall(capability, resource));
+export function withRule(policy: Policy, capability: string, resource: string, disposition: Disposition, added?: string, about: Record<string, string> = {}): Policy {
+	const index = policy.rules.findIndex(isCall(capability, resource, about));
 	const stamp = policy.rules[index]?.added ?? added;
-	const rule: Rule = { "when": callWhen(capability, resource), "then": [{ "action_id": disposition }], ...stamp === undefined ? {} : { "added": stamp } };
+	const rule: Rule = { "when": callWhen(capability, resource, about), "then": [{ "action_id": disposition }], ...stamp === undefined ? {} : { "added": stamp } };
 	const rules = [...policy.rules];
 
 	if (index === -1) {

@@ -1,12 +1,10 @@
 /**
- * silo — the run ledger's Node side, and the registry. The ledger is `./evidence`'s: one envelope per run, in
+ * silo — the run ledger's Node side. The ledger is `./evidence`'s: one envelope per run, in
  * `.silo/runs/<user>.jsonl` when it's shared (committed — the same files the editor writes) or
  * `.silo/local/runs/<user>.jsonl` when it stays on this machine (`RunScope`). This reads and appends them from a Node
  * process (a command line, an MCP server) and says what such a process runs on and who runs it. How far to trust what
- * an entry does is `./evidence`'s `confidence`, over the envelopes read here.
- *
- * The registry (`.silo/local/registry.json`) is local trust state, never committed — one person's grant isn't another's:
- * per unit, the scopes approved for it and the caps and imports seen when they were.
+ * an entry does is `./evidence`'s `confidence`, over the envelopes read here. (What a person allows always is a rule in
+ * their policy — `.silo/policy/<user>.json`, ./policy — and what they answer at a call is recorded in the run.)
  */
 
 import type { Environment, RunEnvelope } from "./evidence.js";
@@ -66,27 +64,6 @@ export function gitUser(root: string): string | undefined {
 	}
 
 	return undefined;
-}
-
-/** A registry entry — the last-approved capability picture for a unit: its content `sha`, the `imports` and
- *  `staticCaps` seen then, and the scopes explicitly `approved`. Lets a gate prompt only on what's NEW. */
-export interface RegistryEntry { "sha": string; "imports": string[]; "staticCaps": string[]; "approved": string[] }
-export type Registry = Record<string, RegistryEntry>;
-
-export function loadRegistry(paths: SiloPaths): Registry {
-	return fs.existsSync(paths.registry) ? JSON.parse(fs.readFileSync(paths.registry)) : {};
-}
-
-export async function saveRegistry(paths: SiloPaths, registry: Registry): Promise<void> {
-	await ensureSiloDir(paths);
-	fs.writeFileSync(paths.registry, JSON.stringify(registry, null, 2) + "\n");
-}
-
-/** Sync variant — for the sync fs gate, which can't await. A failure throws, which the caller swallows (the grant just
- *  isn't persisted). */
-export function saveRegistrySync(paths: SiloPaths, registry: Registry): void {
-	fs.mkdirSync(path.dirname(paths.registry), { "recursive": true });
-	fs.writeFileSync(paths.registry, JSON.stringify(registry, null, 2) + "\n");
 }
 
 if (isEntry(import.meta)) {

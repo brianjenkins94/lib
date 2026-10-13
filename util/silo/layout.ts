@@ -15,7 +15,6 @@
  *     baseline.json                       SHARED · the dependency-capability baseline (derived, regenerated: ./audit)
  *     review.json                         SHARED · which code units were reviewed (./review, ./audit)
  *     local/                              LOCAL  · this machine's alone, never committed:
- *       registry.json                       approved scopes per unit (one person's grant isn't another's)
  *       runs/<user>.jsonl                   runs too frequent or personal to share (an MCP server's tool calls)
  *       samples/<file>.jsonl                value samples (a real value can hold secrets)
  *       …                                   caches and raw detail (CPU profiles, recorded results, parse caches)
@@ -118,7 +117,6 @@ export const reviewPath = (): string => `${SILO_DIR}/review.json`;
 export const samplesPath = (file: string): string => `${LOCAL_DIR}/samples/${file}.jsonl`;
 
 /** Approved scopes per unit: this machine's. */
-export const registryPath = (): string => `${LOCAL_DIR}/registry.json`;
 
 if (isEntry(import.meta)) {
 	void (async function() {
@@ -131,7 +129,6 @@ if (isEntry(import.meta)) {
 		assert.equal(runsPath("ada", "local"), ".silo/local/runs/ada.jsonl");
 		assert.equal(evidencePathFor("ada", "laptop.tsval.chromium-140.macos", "src/a.ts"), ".silo/evidence/ada/laptop.tsval.chromium-140.macos/src/a.ts.jsonl");
 		assert.equal(annotationsPath("Notes", "ada", "src/a.ts"), ".silo/notes/ada/src/a.ts.jsonl");
-		assert.equal(registryPath(), ".silo/local/registry.json");
 		assert.equal(POLICY_GLOB, "**/.silo/{policy.json,policy/*.json}");
 		assert.ok(GITIGNORE.split("\n").filter(Boolean).every((line) => line === "/local/"), "/local/ is all .gitignore names");
 
