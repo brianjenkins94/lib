@@ -17,7 +17,7 @@
 
 import type { WayIn } from "./features";
 import type { Analysis, DeclarationGraph } from "./graph";
-import { agentTool, CLI_CALL, cliCommand, CREATE, CREATE_RECEIVER, type ObjectReader, REGISTER, words } from "./features";
+import { agentTool, codeArgumentsFrom, CLI_CALL, cliCommand, CREATE, CREATE_RECEIVER, type ObjectReader, REGISTER, words } from "./features";
 import { isEntry } from "@brianjenkins94/util/env";
 import { candidates, nodeId, TOP } from "./graph";
 
@@ -289,10 +289,10 @@ export function analyzeFile(host: TsHost, path: string, file: TsNode, text: stri
 	 * (`const runner = createRunner(); registerCommand("x", () => runner.go())`), what that local is made from, followed
 	 * until the names are the file's own or another file's.
 	 */
-	function rootsOf(node: TsNode, statement: TsNode): string[] {
+	function rootsOf(nodes: readonly TsNode[], statement: TsNode): string[] {
 		const roots = new Set<string>();
 		const seen = new Set<TsNode>();
-		let pending = identifiers(node);
+		let pending = nodes.flatMap((node) => identifiers(node));
 
 		while (pending.length > 0) {
 			const symbols = host.symbols(pending);
@@ -303,7 +303,7 @@ export function analyzeFile(host: TsHost, path: string, file: TsNode, text: stri
 
 				// A local of the statement it's registered in: what it's made from.
 				if (declaration !== undefined && declaration.file === path && statement.pos <= declaration.node.pos && declaration.node.end <= statement.end && statementOf(declaration.node) === statement && declaration.node !== statement) {
-					if (!seen.has(declaration.node) && !(node.pos <= declaration.node.pos && declaration.node.end <= node.end)) {
+					if (!seen.has(declaration.node) && !nodes.some((node) => node.pos <= declaration.node.pos && declaration.node.end <= node.end)) {
 						seen.add(declaration.node);
 						next.push(...identifiers(declaration.node, declaration.node["name"]));
 					}
@@ -434,7 +434,9 @@ export function analyzeFile(host: TsHost, path: string, file: TsNode, text: stri
 
 		if (ways.length > 0) {
 			const code = fingerprint(node);
-			const roots = rootsOf(node, statement);
+			// A registering call's own code is what follows its name (codeArgumentsFrom): not the API that registers it.
+			const from = is(node, "CallExpression") ? codeArgumentsFrom(ways[0]!.facet) : undefined;
+			const roots = rootsOf(from === undefined ? [node] : [...node["arguments"]].slice(from), statement);
 
 			for (const way of ways) {
 				way.code = code;

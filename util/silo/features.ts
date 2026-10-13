@@ -82,6 +82,24 @@ export const TOOL_NAME = /^[a-z][a-z0-9_.]*$/u;
 export const CLI_NAME = /^[a-z][\w.:-]*$/u;
 /** The call that makes an object literal a CLI command (juvy's, cmd-ts's `command({ name, description, … })`). */
 export const CLI_CALL = "command";
+/**
+ * Where a registering call's own code starts among its arguments: what follows the name — a handler, a provider. The
+ * callee (registerCommand, serve, defineCommand) and what comes before the name (a hub) are the mechanism, shared by every
+ * registration, not the feature; a core module's `install…()` call is the feature itself (undefined: all of it).
+ */
+export function codeArgumentsFrom(facet: string): number | undefined {
+	switch (facet) {
+		case "core module":
+			return undefined;
+		case "hub request":
+			return 2; // serve(hub, name, handler)
+		case "url parameter":
+			return Number.POSITIVE_INFINITY; // the read is all there is
+		default:
+			return 1; // (name, handler) — a command, a provider, a subscription, a terminal command, a worker's listener
+	}
+}
+
 /** `registerHoverProvider` → `hover provider`, `createTreeView` → `tree view`. */
 export const words = (name: string): string => name.replace(/([a-z])([A-Z])/gu, "$1 $2").toLowerCase();
 /** A description's first sentence: a way in's label. */

@@ -15,7 +15,7 @@ import type { WayIn } from "./features";
 import type { Analyzer, DeclarationGraph, Package } from "./graph";
 import { isEntry } from "@brianjenkins94/util/env";
 import { parseSync } from "oxc-parser";
-import { agentTool, CLI_CALL, cliCommand, CREATE, CREATE_RECEIVER, isManifest, isSource, type ObjectReader, REGISTER, waysInManifest, words } from "./features";
+import { agentTool, codeArgumentsFrom, CLI_CALL, cliCommand, CREATE, CREATE_RECEIVER, isManifest, isSource, type ObjectReader, REGISTER, waysInManifest, words } from "./features";
 import { candidates, nodeId, packageOf, reach, reachers, TOP } from "./graph";
 
 /** One top-level declaration: what it is, as a fingerprint, and the names (declared or imported here) its code uses. */
@@ -471,7 +471,9 @@ export function waysInSource(file: string, text: string): WayIn[] {
 
 		if (ways.length > before) {
 			const code = fingerprintOf(node);
-			const uses = topLevelUses(node, statement, scope);
+			// A registering call's own code is what follows its name (codeArgumentsFrom): not the API that registers it.
+			const from = node.type === "CallExpression" ? codeArgumentsFrom(ways[before]!.facet) : undefined;
+			const uses = [...new Set((from === undefined ? [node] : (node["arguments"] as Node[]).slice(from)).flatMap((each) => topLevelUses(each, statement, scope)))].sort();
 
 			for (let index = before; index < ways.length; index++) {
 				ways[index].code = code;
