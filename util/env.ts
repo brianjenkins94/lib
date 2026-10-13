@@ -1,10 +1,12 @@
 import * as path from "node:path";
 import * as url from "node:url";
 
-/** This module's own file: from `import.meta.url` as an ES module, from `__filename` as CommonJS (a CommonJS bundle leaves
- *  `import.meta` empty). A bundle served over http has neither — its URL is no file — and nothing here touches `path`. */
-const meta = (import.meta as Partial<ImportMeta> | undefined)?.url;
-const ownFile = meta === undefined ? (typeof __filename === "string" ? __filename : undefined) : meta.startsWith("file:") ? url.fileURLToPath(meta) : undefined;
+/** This module's URL: `import.meta.url` as an ES module, its `__filename`'s as CommonJS (a CommonJS bundle leaves
+ *  `import.meta` empty). */
+const ownUrl = (import.meta as Partial<ImportMeta> | undefined)?.url ?? (typeof __filename === "string" ? url.pathToFileURL(__filename).href : undefined);
+
+/** Its file, when its URL is one — a bundle served over http has none, and then nothing here touches `path`. */
+const ownFile = ownUrl?.startsWith("file:") ? url.fileURLToPath(ownUrl) : undefined;
 
 export const __root = ownFile === undefined ? "/" : path.join(path.dirname(ownFile), "..");
 
@@ -38,7 +40,7 @@ export function getRuntime() {
  */
 export function isEntry(meta?: { "url"?: string }): boolean {
 	const entry = process.argv[1];
-	const file = meta?.url ?? (ownFile === undefined ? undefined : url.pathToFileURL(ownFile).href);
+	const file = meta?.url ?? ownUrl;
 
 	if (isBrowser || entry === undefined || file === undefined) {
 		return false;
