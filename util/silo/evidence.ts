@@ -67,6 +67,40 @@ export interface RunEnvelope {
 	/** What it did to the world — and what it didn't: each gated call (a capability, the resource it reached) once per
 	 *  way it went, with how many calls went that way. Absent when it made no gated call. */
 	"effects"?: Effect[];
+	/** The packages whose code it ran, by `name@version` (a package with no version: its name), each with its integrity
+	 *  when the lockfile names the install — so whether anyone ran a version later found compromised is a question these
+	 *  records answer. Absent when it ran no package's code. */
+	"packages"?: Record<string, RanPackage>;
+}
+
+/** A package a run ran: its lockfile integrity (`sha512-…`), when the lockfile has the install. */
+export interface RanPackage { "integrity"?: string }
+
+/** A package whose code a run ran, as a runtime tells it: its name, its version, and its folder relative to the
+ *  repository (`node_modules/a/node_modules/b`: how package-lock.json names an install). */
+export interface LoadedPackage { "name": string; "version"?: string; "dir": string }
+
+/** The packages a run ran, as its envelope keeps them: each by `name@version`, with the integrity a package-lock.json
+ *  (lockfileVersion 2 or 3, its text) gives its install. Pure. */
+export function ranPackages(loaded: LoadedPackage[], packageLock?: string): Record<string, RanPackage> {
+	let installs: Record<string, { "version"?: string; "integrity"?: string }> = {};
+
+	try {
+		installs = (JSON.parse(packageLock ?? "{}") as { "packages"?: typeof installs }).packages ?? {};
+	} catch {
+		// an unreadable lockfile: the versions alone
+	}
+
+	const ran: Record<string, RanPackage> = {};
+
+	for (const { name, version, dir } of loaded.toSorted((left, right) => left.dir.localeCompare(right.dir))) {
+		const install = installs[dir];
+		const integrity = install?.version === version ? install?.integrity : undefined;
+
+		ran[version === undefined ? name : `${name}@${version}`] = integrity === undefined ? {} : { "integrity": integrity };
+	}
+
+	return ran;
 }
 
 /** One kind of gated call a run made, and how it went: `made` for real; `denied` (it failed, as a refused call does);
@@ -153,6 +187,8 @@ export interface RunQuery {
 	"capability"?: string;
 	"resource"?: string;
 	"how"?: Effect["how"];
+	/** Runs that ran a package: `name` (any version) or `name@version`. */
+	"package"?: string;
 	/** Runs answered, newest first, at most (default 20); the effects rollup is over every run that matched. */
 	"limit"?: number;
 }
@@ -174,6 +210,7 @@ export function queryRuns(runs: RunEnvelope[], query: RunQuery = {}): RunAnswer 
 	const matched = runs.filter((run) => (query.file === undefined || run.entry === query.file || query.file in run.files)
 		&& (query.user === undefined || run.user === query.user)
 		&& (query.since === undefined || run.endedAt >= query.since)
+		&& (query.package === undefined || Object.keys(run.packages ?? {}).some((ran) => ran === query.package || ran.slice(0, ran.lastIndexOf("@") > 0 ? ran.lastIndexOf("@") : undefined) === query.package))
 		&& (!byEffect || (run.effects ?? []).some(wanted))).toSorted((a, b) => b.endedAt.localeCompare(a.endedAt));
 	const effects = new Map<string, RunAnswer["effects"][number]>();
 
@@ -482,6 +519,20 @@ if (isEntry(import.meta)) {
 		assert.deepEqual(all.runs.map((each) => each.id), ["b", "c", "a"]);
 		assert.equal(all.total, 3);
 		assert.deepEqual(all.effects[0], { "capability": "fs:read", "resource": "/workspace/rates.json", "how": "made", "calls": 3, "runs": 2, "first": "2026-10-01T00:00:00.000Z", "last": "2026-10-03T00:00:00.000Z" });
+
+		// The packages a run ran: by name@version, the lockfile's integrity where it names the same install.
+		const lock = JSON.stringify({ "packages": { "node_modules/greet": { "version": "1.2.3", "integrity": "sha512-a" }, "node_modules/greet/node_modules/@scope/inner": { "version": "0.0.9", "integrity": "sha512-b" } } });
+
+		assert.deepEqual(ranPackages([{ "name": "@scope/inner", "version": "0.1.0", "dir": "node_modules/greet/node_modules/@scope/inner" }, { "name": "greet", "version": "1.2.3", "dir": "node_modules/greet" }, { "name": "bare", "dir": "node_modules/bare" }], lock), { "bare": {}, "greet@1.2.3": { "integrity": "sha512-a" }, "@scope/inner@0.1.0": {} }, "a lockfile naming another version gives no integrity");
+		assert.deepEqual(ranPackages([{ "name": "greet", "version": "1.2.3", "dir": "node_modules/greet" }], "not json"), { "greet@1.2.3": {} });
+
+		// By package: a name (any version, a scope's too) or a name@version.
+		const withPackages = parseRuns([{ ...run("d", "2026-10-04T00:00:00.000Z", "app.js"), "packages": { "greet@1.2.3": {}, "@scope/inner@0.1.0": {} } }].map((each) => JSON.stringify(each)).join("\n"));
+
+		assert.equal(queryRuns(withPackages, { "package": "greet" }).total, 1);
+		assert.equal(queryRuns(withPackages, { "package": "@scope/inner" }).total, 1);
+		assert.equal(queryRuns(withPackages, { "package": "greet@1.2.3" }).total, 1);
+		assert.equal(queryRuns(withPackages, { "package": "greet@1.2.4" }).total, 0);
 
 		// By file: an entry, or any file a run ran.
 		assert.deepEqual(queryRuns(runs, { "file": "tool.js" }).runs.map((each) => each.id), ["c"]);
