@@ -24,11 +24,6 @@
  * `oxc` + pure AST logic only, the same portability contract as `./detect`: no fs, git or network.
  */
 
-import type { Node } from "./graph";
-import { parseSync } from "oxc-parser";
-import { fingerprintOf, nodeId, topLevelNames, topLevelUses, walk } from "./graph";
-
-export { fingerprintOf } from "./graph";
 
 /** One way in, as one file states it. A command's declaration (manifest) and registration (code) are two of these. */
 export interface WayIn {
@@ -66,49 +61,6 @@ export const INTERNAL_FACETS = new Set(["hub request", "hub subscription", "work
 export const isManifest = (file: string): boolean => /(^|\/)package\.json$/u.test(file);
 export const isSource = (file: string): boolean => /\.[cm]?[jt]sx?$/u.test(file) && !/\.d\.[cm]?ts$/u.test(file);
 
-// ── the AST ──────────────────────────────────────────────────────────────────────────────────────────────────
-
-/** A whole file's fingerprint (see `fingerprintOf`); its text, if it doesn't parse. */
-export function fileFingerprint(file: string, text: string): string {
-	if (!isSource(file)) {
-		return text;
-	}
-
-	const { program, errors } = parseSync(file, text);
-
-	return errors.length > 0 ? text : fingerprintOf(program);
-}
-
-/** A string literal's value, or a template literal's with nothing interpolated. */
-function literal(node: Node | undefined): string | undefined {
-	if (node?.type === "Literal" && typeof node["value"] === "string") {
-		return node["value"];
-	}
-
-	if (node?.type === "TemplateLiteral" && node["expressions"].length === 0) {
-		return node["quasis"][0]?.value.cooked ?? undefined;
-	}
-
-	return undefined;
-}
-
-/** Every literal an argument can be: `pace === "fast" ? "a" : "b"` registers both. */
-function literals(node: Node | undefined): string[] {
-	if (node?.type === "ConditionalExpression") {
-		return [...literals(node["consequent"]), ...literals(node["alternate"])];
-	}
-
-	if (node?.type === "ParenthesizedExpression") {
-		return literals(node["expression"]);
-	}
-
-	const value = literal(node);
-
-	return value === undefined ? [] : [value];
-}
-
-const property = (object: Node, name: string): Node | undefined => object["properties"].find((each: Node) => each.type === "Property" && (each["key"].name ?? each["key"].value) === name)?.value;
-
 // What the recognizers look for — shared with TypeScript's (`./ts-analysis`), so both name a way in the same.
 /** A VS Code API `register…` call that is a way in (a provider, a factory, a URI handler, a notebook serializer). */
 export const REGISTER = /^register(?:\w*(?:Provider|Factory)|UriHandler|NotebookSerializer)$/u;
@@ -126,99 +78,6 @@ export const words = (name: string): string => name.replace(/([a-z])([A-Z])/gu, 
 export const firstSentence = (text: string): string => text.split(/\.\s|\n/u)[0].slice(0, 120);
 
 // ── ways in ──────────────────────────────────────────────────────────────────────────────────────────────────
-
-/** The ways in a source file states. */
-export function waysInSource(file: string, text: string): WayIn[] {
-	const { program } = parseSync(file, text);
-	const ways: WayIn[] = [];
-	const source = (node: Node): string => text.slice(node.start, node.end);
-	const imports = new Map<string, string>();
-	const scope = topLevelNames(program);
-	// A name made at run time (`virtual.debug.${port}`, `controlSubject(SESSION)`): keyed by how it's written.
-	const isName = (node: Node | undefined): boolean => node !== undefined && ["TemplateLiteral", "Identifier", "CallExpression", "MemberExpression", "BinaryExpression"].includes(node.type);
-	const spelled = (node: Node): string => source(node).replace(/\s+/gu, " ");
-	let statement: Node = program;
-
-	for (const statement of program.body as Node[]) {
-		if (statement.type === "ImportDeclaration") {
-			for (const specifier of statement["specifiers"] as Node[]) {
-				imports.set(specifier["local"].name, statement["source"].value);
-			}
-		}
-	}
-
-	const visit = (node: Node): void => {
-		const before = ways.length;
-
-		if (node.type === "CallExpression") {
-			const callee = node["callee"] as Node;
-			const name: string | undefined = callee.type === "MemberExpression" && !callee["computed"] ? callee["property"].name : callee.type === "Identifier" ? callee["name"] : undefined;
-			const receiver = callee.type === "MemberExpression" ? source(callee["object"]) : "";
-			const [first, second] = node["arguments"] as Node[];
-
-			if (name === "registerCommand" || name === "registerTextEditorCommand") {
-				for (const id of literals(first)) {
-					ways.push({ "facet": "command", "side": "registered", "id": id, "label": "" });
-				}
-			} else if (name !== undefined && REGISTER.test(name)) {
-				const facet = name === "registerWebviewViewProvider" || name === "registerTreeDataProvider" ? "view" : words(name.replace(/^register/u, "").replace(/(?:Provider|Factory)$/u, "")) + " provider";
-				const id = literal(first);
-
-				ways.push({ "facet": facet, ...facet === "view" ? { "side": "registered" } : {}, "id": id ?? "", "label": "", ...id === undefined ? { "weak": true } : {} });
-			} else if (name !== undefined && CREATE.test(name) && CREATE_RECEIVER.test(receiver)) {
-				const facet = name === "createTreeView" ? "view" : words(name.replace(/^create/u, ""));
-				const id = literal(first);
-
-				ways.push({ "facet": facet, ...facet === "view" ? { "side": "registered" } : {}, "id": id ?? "", "label": literal(second) ?? "", ...id === undefined ? { "weak": true } : {} });
-			} else if (name === "serve" && (node["arguments"] as Node[]).length >= 3 && (literal(second) !== undefined || (first !== undefined && /hub/iu.test(source(first)) && isName(second)))) {
-				ways.push({ "facet": "hub request", "id": literal(second) ?? spelled(second), "label": "" });
-			} else if (name === "subscribe" && /hub/iu.test(receiver) && (literal(first) !== undefined || isName(first))) {
-				ways.push({ "facet": "hub subscription", "id": literal(first) ?? spelled(first), "label": "" });
-			} else if (name === "defineCommand" && literal(first) !== undefined) {
-				ways.push({ "facet": "terminal command", "id": literal(first), "label": "" });
-			} else if ((name === "get" || name === "has" || name === "getAll") && literal(first) !== undefined && receiver.includes("location") && /URLSearchParams|search/u.test(receiver)) {
-				ways.push({ "facet": "url parameter", "id": "?" + literal(first), "label": "" });
-			} else if (name === "addEventListener" && (literal(first) === "message" || literal(first) === "connect") && node === statement["expression"] && /^(?:|globalThis|self)$/u.test(receiver)) {
-				ways.push({ "facet": "worker", "id": "", "label": "", "weak": true });
-			} else if (name !== undefined && /^install[A-Z]/u.test(name) && callee.type === "Identifier" && imports.get(name)?.startsWith(".") === true) {
-				// What it is: the module's `install…` function, and what that reaches (its `roots`).
-				ways.push({ "facet": "core module", "id": name, "label": "" });
-			}
-		} else if (node.type === "AssignmentExpression" && node === statement["expression"] && /^(?:(?:globalThis|self)\.)?on(?:message|connect)$/u.test(source(node["left"]))) {
-			ways.push({ "facet": "worker", "id": "", "label": "", "weak": true });
-		} else if (node.type === "ObjectExpression") {
-			const name = literal(property(node, "name")); const
-				description = literal(property(node, "description"));
-
-			if (name !== undefined && description !== undefined && TOOL_NAME.test(name) && TOOL_KEYS.some((key) => property(node, key) !== undefined)) {
-				ways.push({ "facet": "agent tool", "id": name, "label": firstSentence(description) });
-			}
-		} else if (node.type === "JSXOpeningElement" && /button/iu.test(source(node["name"]))) {
-			const attribute = (name: string): Node | undefined => (node["attributes"] as Node[]).find((each) => each.type === "JSXAttribute" && source(each["name"]) === name);
-			const label = literal(attribute("aria-label")?.["value"]) ?? literal(attribute("title")?.["value"]);
-
-			if (label !== undefined) {
-				ways.push({ "facet": "button", "id": label, "label": attribute("onClick") !== undefined || attribute("ref") !== undefined ? "" : "no handler" });
-			}
-		}
-
-		if (ways.length > before) {
-			const code = fingerprintOf(node);
-			const uses = topLevelUses(node, statement, scope);
-
-			for (let index = before; index < ways.length; index++) {
-				ways[index].code = code;
-				ways[index].roots = uses.map((used) => nodeId(file, used));
-			}
-		}
-	};
-
-	for (statement of program.body as Node[]) {
-		walk(statement, visit);
-	}
-
-	return ways;
-}
 
 /** The ways in a VS Code extension manifest (`package.json` `contributes`) declares. */
 export function waysInManifest(text: string): WayIn[] {
@@ -269,23 +128,6 @@ export function waysInManifest(text: string): WayIn[] {
 	}
 
 	return ways;
-}
-
-/** The ways in a file states: a manifest's, a source file's, or none. A file that doesn't parse states none. */
-export function waysIn(file: string, text: string): WayIn[] {
-	if (isManifest(file)) {
-		return waysInManifest(text);
-	}
-
-	if (!isSource(file)) {
-		return [];
-	}
-
-	try {
-		return waysInSource(file, text);
-	} catch {
-		return [];
-	}
 }
 
 /** A way in's key: what it is, never where it lives (but a way in with no name is keyed by its file's name). */

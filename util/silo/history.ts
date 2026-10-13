@@ -28,9 +28,8 @@ import type { Feature, WayIn } from "./features";
 import type { Analyzer, DeclarationGraph } from "./graph";
 import { isEntry } from "@brianjenkins94/util/env";
 import { shortHash } from "@brianjenkins94/util/hash";
-import { featuresOf, fileFingerprint, INTERNAL_FACETS, isManifest, waysIn } from "./features";
+import { featuresOf, INTERNAL_FACETS, isManifest } from "./features";
 import { changedDeclarations, reachers } from "./graph";
-import { oxcAnalyzer } from "./oxc";
 
 /** One version of the program: its files, each by the id of its content (a git blob id, a hash). */
 export interface Snapshot {
@@ -62,8 +61,9 @@ export interface Step {
 export interface ReplayOptions {
 	/** Which files to read (default: sources and manifests outside build output, vendored code, tests and fixtures). */
 	"include"?: (path: string) => boolean;
-	/** What reads each snapshot: its ways in and declaration graph (default: oxc's, `oxcAnalyzer`). */
-	"analyzer"?: Analyzer;
+	/** What reads each snapshot: its ways in and declaration graph — oxc's (`./oxc`) or TypeScript's (`./ts-analysis`).
+	 *  The caller's choice, so this module loads neither. */
+	"analyzer": Analyzer;
 }
 
 const SKIP = /(?:^|\/)(?:dist|vendor|demo|test|tests|fixtures|node_modules|docs|bench|scripts|patches)\/|^\.[^/]+\//u;
@@ -84,10 +84,10 @@ export class Replayer {
 	#previous: Map<string, Feature> | undefined;
 	#previousGraph: DeclarationGraph | undefined;
 
-	constructor(read: (oid: string) => Promise<string>, options: ReplayOptions = {}) {
+	constructor(read: (oid: string) => Promise<string>, options: ReplayOptions) {
 		this.#read = read;
 		this.#include = options.include ?? includeByDefault;
-		this.#analyzer = options.analyzer ?? oxcAnalyzer();
+		this.#analyzer = options.analyzer;
 	}
 
 	/** The next snapshot's events since the last one (none for the first: it has nothing to compare with). */
@@ -156,7 +156,7 @@ export class Replayer {
 }
 
 /** Replay snapshots, oldest first, yielding each one's events. Each file version is read and analyzed once. */
-export async function *replay(snapshots: AsyncIterable<Snapshot> | Iterable<Snapshot>, read: (oid: string) => Promise<string>, options: ReplayOptions = {}): AsyncGenerator<Step> {
+export async function *replay(snapshots: AsyncIterable<Snapshot> | Iterable<Snapshot>, read: (oid: string) => Promise<string>, options: ReplayOptions): AsyncGenerator<Step> {
 	const replayer = new Replayer(read, options);
 
 	for await (const snapshot of snapshots) {
@@ -194,7 +194,7 @@ export class LiveHistory {
 	}
 
 	/** Start from `base` (the program as committed): its step makes no events. */
-	static async start(base: Snapshot, read: (oid: string) => Promise<string>, options: ReplayOptions = {}): Promise<LiveHistory> {
+	static async start(base: Snapshot, read: (oid: string) => Promise<string>, options: ReplayOptions): Promise<LiveHistory> {
 		const texts = new Map<string, string>();
 		const replayer = new Replayer(async (oid) => texts.get(oid) ?? read(oid), options);
 
@@ -648,6 +648,8 @@ export function historyMarkdown(steps: Step[], options: NarrateOptions & { "titl
 if (isEntry(import.meta)) {
 	void (async function() {
 		const assert: typeof import("node:assert").strict = (await import("node:assert")).strict;
+		// oxc's reading, for the tests: this module loads no analyzer itself.
+		const { fileFingerprint, oxcAnalyzer, waysIn } = await import("./oxc");
 
 		// Snapshots in memory: each file's content is its own id.
 		const blobs = new Map<string, string>();
@@ -672,7 +674,7 @@ if (isEntry(import.meta)) {
 		async function run(snapshots: Snapshot[]): Promise<Step[]> {
 			const steps: Step[] = [];
 
-			for await (const step of replay(snapshots, read)) {
+			for await (const step of replay(snapshots, read, { "analyzer": oxcAnalyzer() })) {
 				steps.push(step);
 			}
 
@@ -769,7 +771,7 @@ if (isEntry(import.meta)) {
 		// Live: edits as they're made. A command added and taken out again before any commit is a try git never saw; a
 		// burst that changes nothing about the features leaves no fact.
 		const base = snapshot("2026-10-20", { "z/extension.ts": "export function activate() {}\n" });
-		const live = await LiveHistory.start(base, read);
+		const live = await LiveHistory.start(base, read, { "analyzer": oxcAnalyzer() });
 		const added = await live.edit("z/extension.ts", "export function activate() {\n\tvscode.commands.registerCommand(\"z.try\", () => 1);\n}\n", "2026-10-20T10:00:00Z");
 		const quiet = await live.edit("z/extension.ts", "export function activate() {\n\tvscode.commands.registerCommand(\"z.try\", () => 1); // a comment\n}\n", "2026-10-20T10:01:00Z");
 		const undone = await live.edit("z/extension.ts", "export function activate() {}\n", "2026-10-20T10:02:00Z");
