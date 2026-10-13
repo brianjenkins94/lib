@@ -61,7 +61,7 @@ if (isEntry(import.meta)) {
 	await run(command({
 		"name": "util-lint",
 		"description": "Lint the cwd (or the given patterns) with util's shared eslint preset.",
-		config,
+		"config": config,
 		"handler": async (cfg) => {
 			process.exitCode = (await lint({ "fix": cfg.get("fix"), "patterns": cfg.get("patterns") })) > 0 ? 1 : 0;
 		}
