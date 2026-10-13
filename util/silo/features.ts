@@ -11,7 +11,8 @@
  *   • hub — `serve(hub, "name", …)` requests and `hub.subscribe("subject", …)` subscriptions.
  *   • workers — a module that listens for messages at its top level (`addEventListener("message", …)`, `onmessage = …`):
  *     started by a URL rather than imported, so its listener is how the rest of the program reaches it.
- *   • MCP tools — an object literal with a `name`, a `description` and a handler or schema.
+ *   • MCP tools — an object literal with a `name`, a `description` and a handler or schema (`defineTool`'s keeps its
+ *     description and schema in a `config`); CLI commands — the same shape passed to `command(…)`.
  *   • terminal commands (`defineCommand("name", …)`), URL parameters read from `location`, buttons (a JSX `<…button>` with
  *     a literal `aria-label` or `title`), and core modules (a call to an imported `install…` function).
  *
@@ -24,6 +25,7 @@
  * `oxc` + pure AST logic only, the same portability contract as `./detect`: no fs, git or network.
  */
 
+import { isEntry } from "@brianjenkins94/util/env";
 
 /** One way in, as one file states it. A command's declaration (manifest) and registration (code) are two of these. */
 export interface WayIn {
@@ -34,6 +36,8 @@ export interface WayIn {
 	"label": string;
 	/** Keyed by its file too: it has no name of its own (a provider registered for a selector). */
 	"weak"?: boolean;
+	/** Where its registration is in its file: offsets of the code that states it (with its inline handler). */
+	"range"?: [number, number];
 	/** The fingerprint of its own code. */
 	"code"?: string;
 	/** Where its code leads, as node ids (`file#name`): the names it uses that its file declares or imports (a local of the
@@ -53,6 +57,8 @@ export interface Feature {
 	"code": string[];
 	/** Where it starts in the program's declaration graph: the names its ways in use, as node ids (`file#name`). */
 	"roots": string[];
+	/** Where its registrations are: each file's offsets of the code that states it — its own code, beside its roots. */
+	"ranges": { "file": string; "start": number; "end": number }[];
 }
 
 /** Internal ways in: how a program's parts reach each other, not what a person or an agent reaches. */
@@ -72,10 +78,52 @@ export const CREATE_RECEIVER = /window|languages|scm|tests|comments|vscode|api/u
 export const TOOL_KEYS = ["handler", "inputSchema", "input", "run", "call", "schema"];
 /** An agent tool's name. */
 export const TOOL_NAME = /^[a-z][a-z0-9_.]*$/u;
+/** A CLI command's name. */
+export const CLI_NAME = /^[a-z][\w.:-]*$/u;
+/** The call that makes an object literal a CLI command (juvy's, cmd-ts's `command({ name, description, … })`). */
+export const CLI_CALL = "command";
 /** `registerHoverProvider` → `hover provider`, `createTreeView` → `tree view`. */
 export const words = (name: string): string => name.replace(/([a-z])([A-Z])/gu, "$1 $2").toLowerCase();
 /** A description's first sentence: a way in's label. */
 export const firstSentence = (text: string): string => text.split(/\.\s|\n/u)[0].slice(0, 120);
+
+/** How a recognizer reads an object literal in its own tree (oxc's, TypeScript's). */
+export interface ObjectReader<N> {
+	/** A property's value, by its key. */
+	"property": (object: N, key: string) => N | undefined;
+	/** A string literal's value. */
+	"literal": (node: N | undefined) => string | undefined;
+	"isObject": (node: N | undefined) => boolean;
+}
+
+/**
+ * An object literal that's an agent tool: a `name` and a `description` with a handler or a schema — beside them, or in
+ * its `config`, as util/mcp's `defineTool({ name, config: { description, inputSchema }, handler })` writes one. Keyed by
+ * its name alone, so a tool moved to another file, or into `config`, is the same tool.
+ */
+export function agentTool<N>(object: N, read: ObjectReader<N>): WayIn | undefined {
+	const name = read.literal(read.property(object, "name"));
+	const config = read.property(object, "config");
+	const sides = read.isObject(config) ? [object, config] : [object];
+	const description = sides.map((side) => read.literal(read.property(side, "description"))).find((each) => each !== undefined);
+
+	if (name === undefined || description === undefined || !TOOL_NAME.test(name) || !TOOL_KEYS.some((key) => sides.some((side) => read.property(side, key) !== undefined))) {
+		return undefined;
+	}
+
+	return { "facet": "agent tool", "id": name, "label": firstSentence(description) };
+}
+
+/** `command({ name, description, … })`'s object: a CLI command — shaped like an agent tool, but a person's way in. */
+export function cliCommand<N>(object: N, read: ObjectReader<N>): WayIn | undefined {
+	const name = read.literal(read.property(object, "name"));
+
+	if (name === undefined || !CLI_NAME.test(name)) {
+		return undefined;
+	}
+
+	return { "facet": "cli command", "id": name, "label": firstSentence(read.literal(read.property(object, "description")) ?? "") };
+}
 
 // ── ways in ──────────────────────────────────────────────────────────────────────────────────────────────────
 
@@ -147,7 +195,7 @@ export function featuresOf(files: Iterable<{ "file": string; "ways": WayIn[] }>)
 			let feature = features.get(key);
 
 			if (feature === undefined) {
-				feature = { "key": key, "facet": way.facet, "id": way.id, "label": "", "files": [], "sides": [], "code": [], "roots": [] };
+				feature = { "key": key, "facet": way.facet, "id": way.id, "label": "", "files": [], "sides": [], "code": [], "roots": [], "ranges": [] };
 				features.set(key, feature);
 			}
 
@@ -162,6 +210,10 @@ export function featuresOf(files: Iterable<{ "file": string; "ways": WayIn[] }>)
 
 			if (way.code !== undefined) {
 				feature.code.push(way.code);
+			}
+
+			if (way.range !== undefined) {
+				feature.ranges.push({ "file": file, "start": way.range[0], "end": way.range[1] });
 			}
 
 			for (const root of way.roots ?? []) {
@@ -186,4 +238,48 @@ export function featuresOf(files: Iterable<{ "file": string; "ways": WayIn[] }>)
 	}
 
 	return features;
+}
+
+if (isEntry(import.meta)) {
+	void (async function() {
+		const assert: typeof import("node:assert").strict = (await import("node:assert")).strict;
+		// Both readings, oxc's and TypeScript's. (Specifiers made at run time, so a bundler of this module doesn't follow
+		// them into either: the tests only run here.)
+		const { waysIn }: typeof import("./oxc") = await import(/* @vite-ignore */ ["./oxc"].join(""));
+		const { analyzeFile, classicHost }: typeof import("./ts-analysis") = await import(/* @vite-ignore */ ["./ts-analysis"].join(""));
+		const ts: typeof import("typescript") = (await import(/* @vite-ignore */ ["typescript"].join(""))).default;
+
+		function tsWaysIn(file: string, text: string): WayIn[] {
+			const options = { "allowJs": true, "noLib": true, "noResolve": true };
+			const host = { ...ts.createCompilerHost(options), "fileExists": (name: string) => name === "/r/" + file, "readFile": () => text, "getSourceFile": (name: string, target: any) => ts.createSourceFile(name, text, target, true) };
+			const program = ts.createProgram(["/r/" + file], options, host);
+
+			return analyzeFile(classicHost(ts, program, (name) => name.slice(3)), file, program.getSourceFile("/r/" + file) as any, text, "v1").ways;
+		}
+
+		/** What a file states, the same in both readings: `facet id · label`. */
+		function stated(file: string, text: string): string[] {
+			const [oxc, typescript] = [waysIn(file, text), tsWaysIn(file, text)].map((ways) => ways.map((way) => way.facet + " " + way.id + (way.label === "" ? "" : " · " + way.label)).sort());
+
+			assert.deepEqual(typescript, oxc, "both readings agree");
+
+			return oxc;
+		}
+
+		// An agent tool: its description and schema beside its name, or in util/mcp's `defineTool` `config`.
+		assert.deepEqual(stated("tools.ts", `const eval = { "name": "page_eval", "description": "Evaluate it. Awaited.", "inputSchema": { "type": "object" } };\nexport const tools = [defineTool({ "name": "runs_ledger", "config": { "description": "The run ledger. Newest first.", "inputSchema": {} }, "handler": async () => ok(1) })];\n`), ["agent tool page_eval · Evaluate it", "agent tool runs_ledger · The run ledger"]);
+
+		// Not agent tools: no handler or schema (in either place), or not a tool's name.
+		assert.deepEqual(stated("other.ts", `const a = { "name": "x", "description": "Only words." };\nconst b = { "name": "pkg", "config": { "description": "A package." } };\nconst c = { "name": "Some Name", "description": "A person.", "handler": f };\n`), []);
+
+		// A CLI command (juvy's, cmd-ts's `command({…})`) is shaped like a tool, but it's a CLI command.
+		assert.deepEqual(stated("cli.ts", `run(command({ "name": "history", "description": "What changed. Told from the code.", "config": juvy({}), "handler": (config) => 0 }));\nconst build = command({ name: "build-all", args: {}, handler: () => 0 });\n`), ["cli command build-all", "cli command history · What changed"]);
+
+		// A tool moved to another file and into `defineTool`'s shape is the same feature, not one removed and one added.
+		const before = { "file": "tools/files.ts", "ways": waysIn("tools/files.ts", `export const read = { "name": "files_read", "description": "Read a file.", "handler": read };\n`) };
+		const after = { "file": "tools/files/tools.ts", "ways": waysIn("tools/files/tools.ts", `export default [defineTool({ "name": "files_read", "config": { "description": "Read a file.", "inputSchema": {} }, "handler": read })];\n`) };
+
+		assert.deepEqual([...featuresOf([before]).keys()], [...featuresOf([after]).keys()]);
+		assert.deepEqual([...featuresOf([after]).keys()], ["agent tool|files_read"]);
+	})();
 }

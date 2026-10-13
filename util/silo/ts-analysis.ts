@@ -17,7 +17,7 @@
 
 import type { WayIn } from "./features";
 import type { Analysis, DeclarationGraph } from "./graph";
-import { CREATE, CREATE_RECEIVER, firstSentence, REGISTER, TOOL_KEYS, TOOL_NAME, words } from "./features";
+import { agentTool, CLI_CALL, cliCommand, CREATE, CREATE_RECEIVER, type ObjectReader, REGISTER, words } from "./features";
 import { isEntry } from "@brianjenkins94/util/env";
 import { candidates, nodeId, TOP } from "./graph";
 
@@ -51,7 +51,7 @@ export interface FileAnalysis {
 	"version": string;
 	"ways": WayIn[];
 	/** Each declaration (and the body, `(top)`): its fingerprint, and the node ids its code uses. */
-	"declarations": Record<string, { "fingerprint": string; "uses": string[] }>;
+	"declarations": Record<string, { "fingerprint": string; "uses": string[]; "range"?: [number, number] }>;
 	/** Each import, by its local name: what it names, and the body of the module it's from. */
 	"imports": Record<string, string[]>;
 	/** A namespace import's local name → the file it names (for `ns.member`). */
@@ -364,6 +364,9 @@ export function analyzeFile(host: TsHost, path: string, file: TsNode, text: stri
 
 		return undefined;
 	};
+	const objects: ObjectReader<TsNode> = { "property": property, "literal": literal, "isObject": (node) => is(node, "ObjectLiteralExpression") };
+	// The objects `command(…)` was given: CLI commands, not agent tools.
+	const commands = new Set<TsNode>();
 
 	function waysAt(node: TsNode, statement: TsNode): WayIn[] {
 		const ways: WayIn[] = [];
@@ -401,15 +404,23 @@ export function analyzeFile(host: TsHost, path: string, file: TsNode, text: stri
 				ways.push({ "facet": "worker", "id": "", "label": "", "weak": true });
 			} else if (name !== undefined && /^install[A-Z]/u.test(name) && is(callee, "Identifier") && imports.get(name)?.startsWith(".") === true) {
 				ways.push({ "facet": "core module", "id": name, "label": "" });
+			} else if (name === CLI_CALL && is(first, "ObjectLiteralExpression")) {
+				// Shaped like an agent tool, but it isn't one.
+				const command = cliCommand(first, objects);
+
+				commands.add(first);
+
+				if (command !== undefined) {
+					ways.push(command);
+				}
 			}
 		} else if (is(node, "BinaryExpression") && is(node["operatorToken"], "EqualsToken") && is(statement, "ExpressionStatement") && statement["expression"] === node && /^(?:(?:globalThis|self)\.)?on(?:message|connect)$/u.test(source(node["left"]))) {
 			ways.push({ "facet": "worker", "id": "", "label": "", "weak": true });
-		} else if (is(node, "ObjectLiteralExpression")) {
-			const name = literal(property(node, "name"));
-			const description = literal(property(node, "description"));
+		} else if (is(node, "ObjectLiteralExpression") && !commands.has(node)) {
+			const tool = agentTool(node, objects);
 
-			if (name !== undefined && description !== undefined && TOOL_NAME.test(name) && TOOL_KEYS.some((key) => property(node, key) !== undefined)) {
-				ways.push({ "facet": "agent tool", "id": name, "label": firstSentence(description) });
+			if (tool !== undefined) {
+				ways.push(tool);
 			}
 		} else if ((is(node, "JsxOpeningElement") || is(node, "JsxSelfClosingElement")) && /button/iu.test(source(node["tagName"]))) {
 			const attribute = (attributeName: string): TsNode | undefined => [...node["attributes"]["properties"]].find((each: TsNode) => is(each, "JsxAttribute") && source(each["name"]) === attributeName);
@@ -426,6 +437,7 @@ export function analyzeFile(host: TsHost, path: string, file: TsNode, text: stri
 
 			for (const way of ways) {
 				way.code = code;
+				way.range = [startOf(node), node.end];
 				way.roots = roots;
 			}
 		}
@@ -509,7 +521,7 @@ export function analyzeFile(host: TsHost, path: string, file: TsNode, text: stri
 	for (const [name, node] of code) {
 		const existing = analysis.declarations[name];
 
-		analysis.declarations[name] = { "fingerprint": (existing === undefined ? "" : existing.fingerprint + "|") + fingerprint(node), "uses": [...uses.get(name) ?? []].sort() };
+		analysis.declarations[name] = { "fingerprint": (existing === undefined ? "" : existing.fingerprint + "|") + fingerprint(node), "uses": [...uses.get(name) ?? []].sort(), "range": existing?.range ?? [startOf(node), node.end] };
 	}
 
 	const moduleFiles: (string | undefined)[] = moduleNodes.map((node, index) => {
@@ -592,6 +604,12 @@ export function graphOf(files: ReadonlyMap<string, FileAnalysis>): DeclarationGr
 
 	return {
 		"fingerprints": fingerprints,
+		"range": (id) => {
+			const hash = id.lastIndexOf("#");
+			const range = files.get(id.slice(0, hash))?.declarations[id.slice(hash + 1)]?.range;
+
+			return range === undefined ? undefined : { "file": id.slice(0, hash), "start": range[0], "end": range[1] };
+		},
 		"nodes": () => [...files].flatMap(([path, analysis]) => [...Object.keys(analysis.declarations), ...Object.keys(analysis.imports)].map((name) => nodeId(path, name))),
 		"edges": (id) => {
 			const hash = id.lastIndexOf("#");

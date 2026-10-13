@@ -15,7 +15,7 @@ import type { WayIn } from "./features";
 import type { Analyzer, DeclarationGraph, Package } from "./graph";
 import { isEntry } from "@brianjenkins94/util/env";
 import { parseSync } from "oxc-parser";
-import { CREATE, CREATE_RECEIVER, firstSentence, isManifest, isSource, REGISTER, TOOL_KEYS, TOOL_NAME, waysInManifest, words } from "./features";
+import { agentTool, CLI_CALL, cliCommand, CREATE, CREATE_RECEIVER, isManifest, isSource, type ObjectReader, REGISTER, waysInManifest, words } from "./features";
 import { candidates, nodeId, packageOf, reach, reachers, TOP } from "./graph";
 
 /** One top-level declaration: what it is, as a fingerprint, and the names (declared or imported here) its code uses. */
@@ -23,6 +23,9 @@ export interface Declaration {
 	"name": string;
 	"fingerprint": string;
 	"uses": string[];
+	/** Where its code is in the file. */
+	"start": number;
+	"end": number;
 }
 
 /** What a file contributes to the graph — computed once per version of the file (by its content). */
@@ -329,7 +332,7 @@ export function fileGraph(file: string, text: string): FileGraph {
 	for (const [name, node] of code) {
 		const uses = [...namesIn(node, namespaces)].filter((used) => used !== name && (known.has(used) || known.has(used.split(".")[0])));
 
-		graph.declarations.push({ "name": name, "fingerprint": fingerprintOf(node), "uses": uses.sort() });
+		graph.declarations.push({ "name": name, "fingerprint": fingerprintOf(node), "uses": uses.sort(), "start": node.start, "end": node.end });
 	}
 
 	return graph;
@@ -377,6 +380,7 @@ function literals(node: Node | undefined): string[] {
 }
 
 const property = (object: Node, name: string): Node | undefined => object["properties"].find((each: Node) => each.type === "Property" && (each["key"].name ?? each["key"].value) === name)?.value;
+const objects: ObjectReader<Node> = { "property": property, "literal": literal, "isObject": (node) => node?.type === "ObjectExpression" };
 
 // ── ways in ──────────────────────────────────────────────────────────────────────────────────────────────────
 
@@ -391,6 +395,8 @@ export function waysInSource(file: string, text: string): WayIn[] {
 	const isName = (node: Node | undefined): boolean => node !== undefined && ["TemplateLiteral", "Identifier", "CallExpression", "MemberExpression", "BinaryExpression"].includes(node.type);
 	const spelled = (node: Node): string => source(node).replace(/\s+/gu, " ");
 	let statement: Node = program;
+	// The objects `command(…)` was given: CLI commands, not agent tools.
+	const commands = new Set<Node>();
 
 	for (const statement of program.body as Node[]) {
 		if (statement.type === "ImportDeclaration") {
@@ -436,15 +442,23 @@ export function waysInSource(file: string, text: string): WayIn[] {
 			} else if (name !== undefined && /^install[A-Z]/u.test(name) && callee.type === "Identifier" && imports.get(name)?.startsWith(".") === true) {
 				// What it is: the module's `install…` function, and what that reaches (its `roots`).
 				ways.push({ "facet": "core module", "id": name, "label": "" });
+			} else if (name === CLI_CALL && first?.type === "ObjectExpression") {
+				// Shaped like an agent tool, but it isn't one.
+				const command = cliCommand(first, objects);
+
+				commands.add(first);
+
+				if (command !== undefined) {
+					ways.push(command);
+				}
 			}
 		} else if (node.type === "AssignmentExpression" && node === statement["expression"] && /^(?:(?:globalThis|self)\.)?on(?:message|connect)$/u.test(source(node["left"]))) {
 			ways.push({ "facet": "worker", "id": "", "label": "", "weak": true });
-		} else if (node.type === "ObjectExpression") {
-			const name = literal(property(node, "name")); const
-				description = literal(property(node, "description"));
+		} else if (node.type === "ObjectExpression" && !commands.has(node)) {
+			const tool = agentTool(node, objects);
 
-			if (name !== undefined && description !== undefined && TOOL_NAME.test(name) && TOOL_KEYS.some((key) => property(node, key) !== undefined)) {
-				ways.push({ "facet": "agent tool", "id": name, "label": firstSentence(description) });
+			if (tool !== undefined) {
+				ways.push(tool);
 			}
 		} else if (node.type === "JSXOpeningElement" && /button/iu.test(source(node["name"]))) {
 			const attribute = (name: string): Node | undefined => (node["attributes"] as Node[]).find((each) => each.type === "JSXAttribute" && source(each["name"]) === name);
@@ -462,6 +476,7 @@ export function waysInSource(file: string, text: string): WayIn[] {
 			for (let index = before; index < ways.length; index++) {
 				ways[index].code = code;
 				ways[index].roots = uses.map((used) => nodeId(file, used));
+				ways[index].range = [node.start, node.end];
 			}
 		}
 	};
@@ -615,6 +630,14 @@ export class ProgramGraph implements DeclarationGraph {
 		this.#edges.set(id, resolved);
 
 		return resolved;
+	}
+
+	range(id: string): { "file": string; "start": number; "end": number } | undefined {
+		const hash = id.lastIndexOf("#");
+		const file = id.slice(0, hash);
+		const found = this.files.get(file)?.declarations.find((declaration) => declaration.name === id.slice(hash + 1));
+
+		return found === undefined ? undefined : { "file": file, "start": found.start, "end": found.end };
 	}
 
 	nodes(): Iterable<string> {
