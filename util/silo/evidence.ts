@@ -71,6 +71,9 @@ export interface RunEnvelope {
 	 *  when the lockfile names the install — so whether anyone ran a version later found compromised is a question these
 	 *  records answer. Absent when it ran no package's code. */
 	"packages"?: Record<string, RanPackage>;
+	/** Files it ran whose code couldn't be parsed where it ran, so what ran there isn't kept (no evidence): repo-relative
+	 *  path → why. Absent when everything it ran was kept. */
+	"unparsed"?: Record<string, string>;
 }
 
 /** A package a run ran: its lockfile integrity (`sha512-…`), when the lockfile has the install. */

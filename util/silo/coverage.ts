@@ -29,8 +29,9 @@ import { areaOf, Replayer, SHARED } from "./history.js";
 /** A span of a text, as BABLR names it. */
 export interface PlacedSpan { "id": string; "start": number; "end": number }
 
-/** Where each span of `source` (the file `file`) is, or undefined when it can't be told (BABLR's grammar doesn't take it). */
-export type PlaceSpans = (source: string, file: string) => Promise<PlacedSpan[] | undefined>;
+/** Where each span of `source` (the file `file`) is. Throws when it can't be told (BABLR's grammar doesn't take it): the
+ *  error's message is why. */
+export type PlaceSpans = (source: string, file: string) => Promise<PlacedSpan[]>;
 
 /** A declaration's status changing between two commits. */
 export interface CoverageChange {
@@ -55,8 +56,11 @@ export interface CoverageStep {
 	"date": string;
 	"runs": Pick<RunEnvelope, "id" | "user" | "title" | "entry" | "endedAt">[];
 	"changes": CoverageChange[];
-	/** Spans of what ran that couldn't be placed in the commit's code (its text unparsable, or the span's code gone). */
+	/** Spans of what ran that couldn't be placed in the commit's code (the span's code gone). */
 	"unplaced": number;
+	/** Files what ran there isn't counted for: path → why. Their code couldn't be parsed where it ran (the run kept
+	 *  nothing — its envelope says), or this commit's text of them can't be parsed to place what was kept. */
+	"unparsed": Record<string, string>;
 	/** The features of the commit, by key, for the story's labels. */
 	"features": ReadonlyMap<string, Pick<Feature, "facet" | "id" | "label">>;
 }
@@ -73,7 +77,7 @@ export class CoverageReplayer {
 	readonly #place: PlaceSpans;
 	readonly #history: Replayer;
 	readonly #status = new Map<string, boolean>();
-	readonly #placed = new Map<string, Promise<PlacedSpan[] | undefined>>();
+	readonly #placed = new Map<string, Promise<PlacedSpan[] | { "unparsed": string }>>();
 	#evidence = new Map<string, string>();
 	#runs = new Set<string>();
 
@@ -94,6 +98,7 @@ export class CoverageReplayer {
 		// The runs this interval brought.
 		const runs: CoverageStep["runs"] = [];
 		const seen = new Set<string>();
+		const unparsed: Record<string, string> = {};
 
 		for (const file of snapshot.files.filter((each) => RUNS.test(each.path))) {
 			for (const run of parseRuns(await this.#read(file.oid))) {
@@ -101,6 +106,7 @@ export class CoverageReplayer {
 
 				if (!this.#runs.has(run.id)) {
 					runs.push({ "id": run.id, "user": run.user, "title": run.title, "entry": run.entry, "endedAt": run.endedAt });
+					Object.assign(unparsed, run.unparsed);
 				}
 			}
 		}
@@ -117,6 +123,12 @@ export class CoverageReplayer {
 				const before = new Map((was === undefined ? [] : parseEvidence(await this.#read(was))).filter((each) => each.kind === "reached").map((each) => [each.span, each]));
 				const code = files.get(file);
 				const spans = code === undefined ? undefined : await this.#spans(code, file);
+
+				if (spans !== undefined && "unparsed" in spans) {
+					unparsed[file] = spans.unparsed;
+					continue;
+				}
+
 				const where = new Map((spans ?? []).map((span) => [span.id, span]));
 
 				for (const observation of parseEvidence(await this.#read(oid)).filter((each) => each.kind === "reached")) {
@@ -188,13 +200,13 @@ export class CoverageReplayer {
 		this.#evidence = evidence;
 		this.#runs = seen;
 
-		return { "snapshot": snapshot.id, "date": snapshot.date, "runs": runs, "changes": changes, "unplaced": unplaced, "features": new Map([...features].map(([key, feature]) => [key, { "facet": feature.facet, "id": feature.id, "label": feature.label }])) };
+		return { "snapshot": snapshot.id, "date": snapshot.date, "runs": runs, "changes": changes, "unplaced": unplaced, "unparsed": unparsed, "features": new Map([...features].map(([key, feature]) => [key, { "facet": feature.facet, "id": feature.id, "label": feature.label }])) };
 	}
 
-	/** A text's spans, placed once per version. */
-	async #spans(oid: string, file: string): Promise<PlacedSpan[] | undefined> {
+	/** A text's spans, placed once per version — or why they can't be. */
+	async #spans(oid: string, file: string): Promise<PlacedSpan[] | { "unparsed": string }> {
 		if (!this.#placed.has(oid)) {
-			this.#placed.set(oid, this.#read(oid).then((source) => this.#place(source, file)));
+			this.#placed.set(oid, this.#read(oid).then((source) => this.#place(source, file)).catch((error: unknown) => ({ "unparsed": error instanceof Error ? error.message : "it can't be parsed" })));
 		}
 
 		return this.#placed.get(oid);
@@ -271,6 +283,10 @@ export function coverageMarkdown(steps: CoverageStep[], options: { "title"?: str
 			lines.push(`- ${step.unplaced} span${step.unplaced === 1 ? "" : "s"} couldn't be placed in this commit's code.`);
 		}
 
+		for (const [file, why] of Object.entries(step.unparsed).toSorted(([one], [other]) => one.localeCompare(other))) {
+			lines.push(`- **couldn't parse \`${file}\`** — what ran there isn't counted: ${why}`);
+		}
+
 		lines.push("");
 	}
 
@@ -294,7 +310,7 @@ if (isEntry(import.meta)) {
 		const place: PlaceSpans = async (source) => [...source.matchAll(/\/\*s:(\w+)\*\//gu)].map((match) => ({ "id": match[1]!, "start": match.index!, "end": match.index! + match[0].length }));
 		const app = "import { registerCommand } from \"vscode\";\nregisterCommand(\"app.go\", () => go());\nfunction go() { /*s:g*/ helper(); }\nfunction helper() { /*s:h*/ return 1; }\nfunction unused() { /*s:u*/ }\n";
 		const observed = (spans: Record<string, { "ever": number; "lastRun": string }>): string => Object.entries(spans).map(([span, { ever, lastRun }]) => JSON.stringify({ "span": span, "key": "bablr1", "kind": "reached", "w": ever, "runs": 1, "ever": ever, "lastRun": lastRun, "lastAt": "2026-10-01T00:00:00.000Z" })).join("\n") + "\n";
-		const envelope = (id: string): string => JSON.stringify({ "type": "run", "id": id, "title": "node app.js", "entry": "app.js", "cwd": ".", "startedAt": "2026-10-01T00:00:00.000Z", "endedAt": "2026-10-01T00:00:00.000Z", "exit": 0, "user": "ada", "environment": { "runtime": "tsval", "engine": "node-24", "os": "macos", "cores": 8, "name": "default" }, "files": {} });
+		const envelope = (id: string, unparsed?: Record<string, string>): string => JSON.stringify({ "type": "run", "id": id, "title": "node app.js", "entry": "app.js", "cwd": ".", "startedAt": "2026-10-01T00:00:00.000Z", "endedAt": "2026-10-01T00:00:00.000Z", "exit": 0, "user": "ada", "environment": { "runtime": "tsval", "engine": "node-24", "os": "macos", "cores": 8, "name": "default" }, "files": {}, ...unparsed === undefined ? {} : { "unparsed": unparsed } });
 		const snapshot = (id: string, evidence?: string, runs: string[] = []): Snapshot => ({ "id": id, "date": "2026-10-0" + id + "T00:00:00Z", "files": [{ "path": "app.js", "oid": put(app) }, ...evidence === undefined ? [] : [{ "path": ".silo/evidence/ada/env/app.js.jsonl", "oid": put(evidence) }], ...runs.length === 0 ? [] : [{ "path": ".silo/runs/ada.jsonl", "oid": put(runs.join("\n") + "\n") }]] });
 
 		const steps: CoverageStep[] = [];
@@ -318,5 +334,29 @@ if (isEntry(import.meta)) {
 		assert.deepEqual(told[3], []);
 		assert.deepEqual(steps.map((step) => step.runs.map((run) => run.id)), [[], ["r1"], ["r2"], []]);
 		assert.match(coverageMarkdown(steps), /stopped running: `app\.js#helper`/u);
+		assert.ok(steps.every((step) => Object.keys(step.unparsed).length === 0));
+
+		// What can't be parsed is said, never dropped: a run whose file the editor couldn't parse (its envelope), and a
+		// commit whose text can't be parsed to place what was kept.
+		const unplaceable: PlaceSpans = async (source, file) => {
+			if (source.includes("@@")) {
+				throw new Error("Parser failed to consume input");
+			}
+
+			return place(source, file);
+		};
+		const broken: CoverageStep[] = [];
+
+		for await (const step of coverageReplay([
+			snapshot("1"),
+			snapshot("2", undefined, [envelope("r1", { "app.tsx": "rejected root state" })]),
+			{ ...snapshot("3", observed({ "g": { "ever": 1, "lastRun": "r2" } }), [envelope("r1", { "app.tsx": "rejected root state" }), envelope("r2")]), "files": [{ "path": "app.js", "oid": put(app + "@@\n") }, { "path": ".silo/evidence/ada/env/app.js.jsonl", "oid": put(observed({ "g": { "ever": 1, "lastRun": "r2" } })) }, { "path": ".silo/runs/ada.jsonl", "oid": put([envelope("r1", { "app.tsx": "rejected root state" }), envelope("r2")].join("\n") + "\n") }] }
+		], read, { "analyzer": oxcAnalyzer(), "place": unplaceable })) {
+			broken.push(step);
+		}
+
+		assert.deepEqual(broken.map((step) => step.unparsed), [{}, { "app.tsx": "rejected root state" }, { "app.js": "Parser failed to consume input" }], "each said once: the envelope's in the interval its run came");
+		assert.equal(broken[2]!.unplaced, 0, "an unparsable text isn't counted as unplaced spans");
+		assert.match(coverageMarkdown(broken), /couldn't parse `app\.tsx`\*\* — what ran there isn't counted: rejected root state/u);
 	})();
 }
