@@ -110,6 +110,8 @@ export interface Effect {
 	"resource": string;
 	"how": "made" | "denied" | "skipped" | "given";
 	"calls": number;
+	/** The package whose code made the call, by `name@version` (one of the run's `packages`); absent for the program's own. */
+	"package"?: string;
 }
 
 /** The user a git config names, as a slug: its `[user]` section's email local part, else its name. */
@@ -217,7 +219,7 @@ export function queryRuns(runs: RunEnvelope[], query: RunQuery = {}): RunAnswer 
 	// (newest first, so the first a kind is seen in is its last)
 	for (const run of matched) {
 		for (const effect of (run.effects ?? []).filter(wanted)) {
-			const key = `${effect.how}\0${effect.capability}\0${effect.resource}`;
+			const key = `${effect.how}\0${effect.capability}\0${effect.resource}\0${effect.package ?? ""}`;
 			const known = effects.get(key);
 
 			if (known === undefined) {
@@ -525,6 +527,11 @@ if (isEntry(import.meta)) {
 
 		assert.deepEqual(ranPackages([{ "name": "@scope/inner", "version": "0.1.0", "dir": "node_modules/greet/node_modules/@scope/inner" }, { "name": "greet", "version": "1.2.3", "dir": "node_modules/greet" }, { "name": "bare", "dir": "node_modules/bare" }], lock), { "bare": {}, "greet@1.2.3": { "integrity": "sha512-a" }, "@scope/inner@0.1.0": {} }, "a lockfile naming another version gives no integrity");
 		assert.deepEqual(ranPackages([{ "name": "greet", "version": "1.2.3", "dir": "node_modules/greet" }], "not json"), { "greet@1.2.3": {} });
+
+		// A package's calls are its own, apart from the program's same calls.
+		const byWhom = queryRuns(parseRuns([run("e", "2026-10-05T00:00:00.000Z", "app.js", [{ "capability": "fs:read", "resource": "/workspace/a.txt", "how": "made", "calls": 1 }, { "capability": "fs:read", "resource": "/workspace/a.txt", "how": "made", "calls": 2, "package": "greet@1.2.3" }])].map((each) => JSON.stringify(each)).join("\n")));
+
+		assert.deepEqual(byWhom.effects.map((each) => [each.package, each.calls]), [[undefined, 1], ["greet@1.2.3", 2]]);
 
 		// By package: a name (any version, a scope's too) or a name@version.
 		const withPackages = parseRuns([{ ...run("d", "2026-10-04T00:00:00.000Z", "app.js"), "packages": { "greet@1.2.3": {}, "@scope/inner@0.1.0": {} } }].map((each) => JSON.stringify(each)).join("\n"));
