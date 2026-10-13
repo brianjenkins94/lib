@@ -413,17 +413,163 @@ export function candidates(from: string, specifier: string): string[] {
 	return [base, ...[".ts", ".tsx", ".mts", ".js", ".mjs", ".jsx"].map((extension) => stem + extension), ...["/index.ts", "/index.tsx", "/index.js"].map((index) => base + index)];
 }
 
+// ── the seam ─────────────────────────────────────────────────────────────────────────────────────────────────
+
 /**
- * The program's graph: every file's declarations and imports, resolved across files. Built per snapshot from the
- * files' `FileGraph`s (each computed once per version), so building one is a walk over what's already parsed.
+ * What reach and history need of a program, whoever analyzed it: its declarations (by node id, `file#name`, each with
+ * the fingerprint of its code), and where each node leads. Node ids are a file's own names — its declarations, its body
+ * (`TOP`) and its imports by local name — so a feature's roots (`./features`) name nodes in any analyzer's graph.
  */
-export class ProgramGraph {
+export interface DeclarationGraph {
+	/** Each declaration's fingerprint, by node id. */
+	readonly "fingerprints": ReadonlyMap<string, string>;
+	/** Every node with edges: the declarations and the imports. */
+	nodes(): Iterable<string>;
+	/** Where a node leads: the declarations (or imports) its code uses, or what an import resolves to. */
+	edges(id: string): string[];
+}
+
+/**
+ * Turns a snapshot of the program into its declaration graph. Called once per snapshot, oldest first, so one may build
+ * each graph from the last. `files`: the program's files by path, each by the id of its content; `read` gets a content.
+ * oxc's (`oxcAnalyzer`, pure, here) is the default; `./typescript` is TypeScript 7's, in Node.
+ */
+export interface Analyzer {
+	graph(files: ReadonlyMap<string, string>, read: (oid: string) => Promise<string>): Promise<DeclarationGraph>;
+	/** Let go of what it holds (a compiler process). */
+	close?(): void;
+}
+
+/** Every declaration reachable from `roots` (node ids: declarations or imports), the roots' own included. */
+export function reach(graph: DeclarationGraph, roots: Iterable<string>): Set<string> {
+	const seen = new Set<string>();
+	const queue = [...roots];
+
+	while (queue.length > 0) {
+		const id = queue.pop()!;
+
+		if (seen.has(id)) {
+			continue;
+		}
+
+		seen.add(id);
+		queue.push(...graph.edges(id));
+	}
+
+	return new Set([...seen].filter((id) => graph.fingerprints.has(id)));
+}
+
+const reverses = new WeakMap<DeclarationGraph, Map<string, string[]>>();
+
+/**
+ * Every node that reaches one of `targets`, each with the target it reaches (the nearest, by the walk back). The other
+ * direction of `reach`: from a few changed declarations to everything that uses them.
+ */
+export function reachers(graph: DeclarationGraph, targets: Iterable<string>): Map<string, string> {
+	let reverse = reverses.get(graph);
+
+	if (reverse === undefined) {
+		const built = new Map<string, string[]>();
+
+		for (const from of graph.nodes()) {
+			for (const to of graph.edges(from)) {
+				built.set(to, [...built.get(to) ?? [], from]);
+			}
+		}
+
+		reverse = built;
+		reverses.set(graph, built);
+	}
+
+	const origin = new Map<string, string>();
+	const queue: string[] = [];
+
+	for (const target of targets) {
+		origin.set(target, target);
+		queue.push(target);
+	}
+
+	// (The queue grows as it's walked: a for-of sees what's pushed.)
+	for (const id of queue) {
+		for (const from of reverse.get(id) ?? []) {
+			if (!origin.has(from)) {
+				origin.set(from, origin.get(id)!);
+				queue.push(from);
+			}
+		}
+	}
+
+	return origin;
+}
+
+/** The declarations that changed from one program to the next: new, or with a different fingerprint — but not one
+ *  that only moved (its name and code were somewhere in the program before). */
+export function changedDeclarations(before: DeclarationGraph, after: DeclarationGraph): string[] {
+	const existed = new Set<string>();
+
+	for (const [id, fingerprint] of before.fingerprints) {
+		existed.add(id.slice(id.lastIndexOf("#") + 1) + "\u0000" + fingerprint);
+	}
+
+	return [...after.fingerprints].filter(([id, fingerprint]) => before.fingerprints.get(id) !== fingerprint && !existed.has(id.slice(id.lastIndexOf("#") + 1) + "\u0000" + fingerprint)).map(([id]) => id);
+}
+
+// ── oxc's ────────────────────────────────────────────────────────────────────────────────────────────────────
+
+/** oxc's analyzer: each file version parsed once (`fileGraph`, cached by content id), names resolved by `ProgramGraph`. */
+export function oxcAnalyzer(): Analyzer {
+	const cache = new Map<string, FileGraph | Package | null>();
+
+	return {
+		"graph": async (files, read) => {
+			const graphs = new Map<string, FileGraph>();
+			const packages: Package[] = [];
+
+			for (const [path, oid] of files) {
+				const manifest = /(^|\/)package\.json$/u.test(path);
+
+				if (!manifest && !/\.[cm]?[jt]sx?$/u.test(path)) {
+					continue;
+				}
+
+				// A manifest's package names its folder, so the same text in two places is two packages.
+				const key = manifest ? oid + ":" + path : oid;
+				let found = cache.get(key);
+
+				if (found === undefined) {
+					const text = await read(oid);
+
+					try {
+						found = (manifest ? packageOf(path, text) : fileGraph(path, text)) ?? null;
+					} catch {
+						found = null; // doesn't parse: no declarations
+					}
+
+					cache.set(key, found);
+				}
+
+				if (found !== null && manifest) {
+					packages.push(found as Package);
+				} else if (found !== null) {
+					graphs.set(path, found as FileGraph);
+				}
+			}
+
+			return new ProgramGraph(graphs, packages);
+		}
+	};
+}
+
+/**
+ * oxc's declaration graph: every file's declarations and imports, resolved across files by name. Built per snapshot
+ * from the files' `FileGraph`s (each computed once per version), so building one is a walk over what's already parsed.
+ */
+export class ProgramGraph implements DeclarationGraph {
 	readonly "files": ReadonlyMap<string, FileGraph>;
 	/** Each declaration's fingerprint, by node id. */
 	readonly "fingerprints" = new Map<string, string>();
 	readonly #edges = new Map<string, string[]>();
 	readonly #bodied = new Set<string>();
-	#reverse: Map<string, string[]> | undefined;
 
 	readonly #packages: Package[];
 
@@ -539,78 +685,35 @@ export class ProgramGraph {
 		return resolved;
 	}
 
-	/** Every declaration reachable from `roots` (node ids: declarations or imports), the roots' own included. */
-	reach(roots: Iterable<string>): Set<string> {
-		const seen = new Set<string>();
-		const queue = [...roots];
+	nodes(): Iterable<string> {
+		const ids: string[] = [];
 
-		while (queue.length > 0) {
-			const id = queue.pop()!;
+		for (const [file, graph] of this.files) {
+			for (const declaration of graph.declarations) {
+				ids.push(nodeId(file, declaration.name));
 
-			if (seen.has(id)) {
-				continue;
-			}
-
-			seen.add(id);
-			queue.push(...this.edges(id));
-		}
-
-		return new Set([...seen].filter((id) => this.fingerprints.has(id)));
-	}
-
-	/**
-	 * Every node that reaches one of `targets`, each with the target it reaches (the nearest, by the walk back). The
-	 * other direction of `reach`: from a few changed declarations to everything that uses them.
-	 */
-	reachers(targets: Iterable<string>): Map<string, string> {
-		if (this.#reverse === undefined) {
-			this.#reverse = new Map();
-
-			const add = (from: string): void => {
-				for (const to of this.edges(from)) {
-					this.#reverse!.set(to, [...this.#reverse!.get(to) ?? [], from]);
-				}
-			};
-
-			for (const [file, graph] of this.files) {
-				for (const declaration of graph.declarations) {
-					add(nodeId(file, declaration.name));
-				}
-
-				for (const local of Object.keys(graph.imports)) {
-					add(nodeId(file, local));
-				}
-
-				// A namespace's members are nodes of their own (`ns.name`): add the ones its declarations use.
-				for (const declaration of graph.declarations) {
-					for (const used of declaration.uses) {
-						if (used.includes(".")) {
-							add(nodeId(file, used));
-						}
+				// A namespace's members are nodes of their own (`ns.name`).
+				for (const used of declaration.uses) {
+					if (used.includes(".")) {
+						ids.push(nodeId(file, used));
 					}
 				}
 			}
-		}
 
-		const origin = new Map<string, string>();
-		const queue: string[] = [];
-
-		for (const target of targets) {
-			origin.set(target, target);
-			queue.push(target);
-		}
-
-		// (The queue grows as it's walked: a for-of sees what's pushed.)
-		for (const id of queue) {
-			for (const from of this.#reverse.get(id) ?? []) {
-				if (!origin.has(from)) {
-					origin.set(from, origin.get(id)!);
-					queue.push(from);
-				}
+			for (const local of Object.keys(graph.imports)) {
+				ids.push(nodeId(file, local));
 			}
 		}
 
-		return origin;
+		return ids;
+	}
+
+	reach(roots: Iterable<string>): Set<string> {
+		return reach(this, roots);
+	}
+
+	reachers(targets: Iterable<string>): Map<string, string> {
+		return reachers(this, targets);
 	}
 }
 

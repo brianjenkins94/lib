@@ -20,10 +20,10 @@
  */
 
 import type { Feature, WayIn } from "./features";
-import type { FileGraph, Package } from "./graph";
+import type { Analyzer, DeclarationGraph } from "./graph";
 import { isEntry } from "@brianjenkins94/util/env";
-import { featuresOf, fileFingerprint, INTERNAL_FACETS, isManifest, isSource, waysIn } from "./features";
-import { fileGraph, packageOf, ProgramGraph } from "./graph";
+import { featuresOf, fileFingerprint, INTERNAL_FACETS, isManifest, waysIn } from "./features";
+import { changedDeclarations, oxcAnalyzer, reachers } from "./graph";
 
 /** One version of the program: its files, each by the id of its content (a git blob id, a hash). */
 export interface Snapshot {
@@ -55,6 +55,8 @@ export interface Step {
 export interface ReplayOptions {
 	/** Which files to read (default: sources and manifests outside build output, vendored code, tests and fixtures). */
 	"include"?: (path: string) => boolean;
+	/** What turns each snapshot into its declaration graph (default: oxc's, `oxcAnalyzer`). */
+	"analyzer"?: Analyzer;
 }
 
 const SKIP = /(?:^|\/)(?:dist|vendor|demo|test|tests|fixtures|node_modules|docs|bench|scripts|patches)\/|^\.[^/]+\//u;
@@ -64,73 +66,40 @@ export const includeByDefault = (path: string): boolean => !SKIP.test(path) && !
 /** Whether its declaration and its implementation exist: `declared`, `registered`, both, or neither (""). */
 const sidesOf = (feature: Feature): string => feature.sides.filter((side) => side === "declared" || side === "registered").sort().join("+");
 
-/** The declarations that changed from one program to the next: new, or with a different fingerprint — but not one
- *  that only moved (its name and code were somewhere in the program before). */
-export function changedDeclarations(before: ProgramGraph, after: ProgramGraph): string[] {
-	const existed = new Set<string>();
-
-	for (const [id, fingerprint] of before.fingerprints) {
-		existed.add(id.slice(id.lastIndexOf("#") + 1) + "\u0000" + fingerprint);
-	}
-
-	return [...after.fingerprints].filter(([id, fingerprint]) => before.fingerprints.get(id) !== fingerprint && !existed.has(id.slice(id.lastIndexOf("#") + 1) + "\u0000" + fingerprint)).map(([id]) => id);
-}
-
 /** Replay snapshots, oldest first, yielding each one's events. Each file version is read and analyzed once. */
 export async function *replay(snapshots: AsyncIterable<Snapshot> | Iterable<Snapshot>, read: (oid: string) => Promise<string>, options: ReplayOptions = {}): AsyncGenerator<Step> {
 	const include = options.include ?? includeByDefault;
-	const analyzed = new Map<string, { "ways": WayIn[]; "graph"?: FileGraph; "package"?: Package }>();
+	const analyzer = options.analyzer ?? oxcAnalyzer();
+	const ways = new Map<string, WayIn[]>();
 	let previous: Map<string, Feature> | undefined;
-	let previousGraph: ProgramGraph | undefined;
+	let previousGraph: DeclarationGraph | undefined;
 
-	const analyze = async (path: string, oid: string): Promise<{ "ways": WayIn[]; "graph"?: FileGraph; "package"?: Package }> => {
-		// A manifest's package names its folder, so the same text in two places is two packages.
-		const key = oid + (isManifest(path) ? ":" + path : "");
-		let result = analyzed.get(key);
+	const waysOf = async (path: string, oid: string): Promise<WayIn[]> => {
+		const key = oid + (isManifest(path) ? ":manifest" : "");
+		let found = ways.get(key);
 
-		if (result === undefined) {
-			const text = await read(oid);
-			let graph: FileGraph | undefined;
-
-			try {
-				graph = isSource(path) ? fileGraph(path, text) : undefined;
-			} catch { /* doesn't parse: no declarations */ }
-
-			const found = isManifest(path) ? packageOf(path, text) : undefined;
-
-			result = { "ways": waysIn(path, text), ...graph === undefined ? {} : { "graph": graph }, ...found === undefined ? {} : { "package": found } };
-			analyzed.set(key, result);
+		if (found === undefined) {
+			found = waysIn(path, await read(oid));
+			ways.set(key, found);
 		}
 
-		return result;
+		return found;
 	};
 
 	for await (const snapshot of snapshots) {
 		const files = new Map(snapshot.files.filter((file) => include(file.path)).map((file) => [file.path, file.oid]));
 		const stated: { "file": string; "ways": WayIn[] }[] = [];
-		const graphs = new Map<string, FileGraph>();
-		const packages: Package[] = [];
 
 		for (const [path, oid] of files) {
-			const analysis = await analyze(path, oid);
-
-			stated.push({ "file": path, "ways": analysis.ways });
-
-			if (analysis.graph !== undefined) {
-				graphs.set(path, analysis.graph);
-			}
-
-			if (analysis.package !== undefined) {
-				packages.push(analysis.package);
-			}
+			stated.push({ "file": path, "ways": await waysOf(path, oid) });
 		}
 
 		const features = featuresOf(stated);
-		const program = new ProgramGraph(graphs, packages);
+		const program = await analyzer.graph(files, read);
 		const events: HistoryEvent[] = [];
 
 		if (previous !== undefined && previousGraph !== undefined) {
-			const reached = program.reachers(changedDeclarations(previousGraph, program));
+			const reached = reachers(program, changedDeclarations(previousGraph, program));
 
 			for (const [key, feature] of features) {
 				const was = previous.get(key);
