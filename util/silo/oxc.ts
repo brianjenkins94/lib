@@ -380,7 +380,7 @@ function literals(node: Node | undefined): string[] {
 }
 
 const property = (object: Node, name: string): Node | undefined => object["properties"].find((each: Node) => each.type === "Property" && (each["key"].name ?? each["key"].value) === name)?.value;
-const objects: ObjectReader<Node> = { "property": property, "literal": literal, "isObject": (node) => node?.type === "ObjectExpression" };
+const objects: ObjectReader<Node> = { "property": property, "literal": literal, "isObject": (node) => node?.type === "ObjectExpression", "left": (node) => (node?.type === "BinaryExpression" && node["operator"] === "+" ? node["left"] : undefined) };
 
 // ── ways in ──────────────────────────────────────────────────────────────────────────────────────────────────
 

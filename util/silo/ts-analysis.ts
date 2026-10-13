@@ -364,7 +364,8 @@ export function analyzeFile(host: TsHost, path: string, file: TsNode, text: stri
 
 		return undefined;
 	};
-	const objects: ObjectReader<TsNode> = { "property": property, "literal": literal, "isObject": (node) => is(node, "ObjectLiteralExpression") };
+
+	const objects: ObjectReader<TsNode> = { "property": property, "literal": literal, "isObject": (node) => is(node, "ObjectLiteralExpression"), "left": (node) => (is(node, "BinaryExpression") && is(node["operatorToken"], "PlusToken") ? node["left"] : undefined) };
 	// The objects `command(…)` was given: CLI commands, not agent tools.
 	const commands = new Set<TsNode>();
 

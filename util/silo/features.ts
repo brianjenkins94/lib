@@ -94,6 +94,13 @@ export interface ObjectReader<N> {
 	/** A string literal's value. */
 	"literal": (node: N | undefined) => string | undefined;
 	"isObject": (node: N | undefined) => boolean;
+	/** A `+` concatenation's left operand. */
+	"left": (node: N | undefined) => N | undefined;
+}
+
+/** A description's text, enough for its label: a string, or the one a concatenation (`"Run it" + more`) starts with. */
+function textOf<N>(node: N | undefined, read: ObjectReader<N>): string | undefined {
+	return read.literal(node) ?? (read.left(node) === undefined ? undefined : textOf(read.left(node), read));
 }
 
 /**
@@ -105,7 +112,7 @@ export function agentTool<N>(object: N, read: ObjectReader<N>): WayIn | undefine
 	const name = read.literal(read.property(object, "name"));
 	const config = read.property(object, "config");
 	const sides = read.isObject(config) ? [object, config] : [object];
-	const description = sides.map((side) => read.literal(read.property(side, "description"))).find((each) => each !== undefined);
+	const description = sides.map((side) => textOf(read.property(side, "description"), read)).find((each) => each !== undefined);
 
 	if (name === undefined || description === undefined || !TOOL_NAME.test(name) || !TOOL_KEYS.some((key) => sides.some((side) => read.property(side, key) !== undefined))) {
 		return undefined;
@@ -122,7 +129,7 @@ export function cliCommand<N>(object: N, read: ObjectReader<N>): WayIn | undefin
 		return undefined;
 	}
 
-	return { "facet": "cli command", "id": name, "label": firstSentence(read.literal(read.property(object, "description")) ?? "") };
+	return { "facet": "cli command", "id": name, "label": firstSentence(textOf(read.property(object, "description"), read) ?? "") };
 }
 
 // ── ways in ──────────────────────────────────────────────────────────────────────────────────────────────────
@@ -254,7 +261,7 @@ if (isEntry(import.meta)) {
 			const host = { ...ts.createCompilerHost(options), "fileExists": (name: string) => name === "/r/" + file, "readFile": () => text, "getSourceFile": (name: string, target: any) => ts.createSourceFile(name, text, target, true) };
 			const program = ts.createProgram(["/r/" + file], options, host);
 
-			return analyzeFile(classicHost(ts, program, (name) => name.slice(3)), file, program.getSourceFile("/r/" + file) as any, text, "v1").ways;
+			return analyzeFile(classicHost(ts, program, (name) => name.slice(3)), file, program.getSourceFile("/r/" + file), text, "v1").ways;
 		}
 
 		/** What a file states, the same in both readings: `facet id · label`. */
@@ -267,7 +274,7 @@ if (isEntry(import.meta)) {
 		}
 
 		// An agent tool: its description and schema beside its name, or in util/mcp's `defineTool` `config`.
-		assert.deepEqual(stated("tools.ts", `const eval = { "name": "page_eval", "description": "Evaluate it. Awaited.", "inputSchema": { "type": "object" } };\nexport const tools = [defineTool({ "name": "runs_ledger", "config": { "description": "The run ledger. Newest first.", "inputSchema": {} }, "handler": async () => ok(1) })];\n`), ["agent tool page_eval · Evaluate it", "agent tool runs_ledger · The run ledger"]);
+		assert.deepEqual(stated("tools.ts", `const eval = { "name": "page_eval", "description": "Evaluate it. Awaited.", "inputSchema": { "type": "object" } };\nexport const run = defineTool({ "name": "terminal_run", "config": { "description": "Run a command line" + (more ? "; and " + more : "") + ". Each call is its own shell.", "inputSchema": {} }, "handler": run });\nexport const tools = [defineTool({ "name": "runs_ledger", "config": { "description": "The run ledger. Newest first.", "inputSchema": {} }, "handler": async () => ok(1) })];\n`), ["agent tool page_eval · Evaluate it", "agent tool runs_ledger · The run ledger", "agent tool terminal_run · Run a command line"]);
 
 		// Not agent tools: no handler or schema (in either place), or not a tool's name.
 		assert.deepEqual(stated("other.ts", `const a = { "name": "x", "description": "Only words." };\nconst b = { "name": "pkg", "config": { "description": "A package." } };\nconst c = { "name": "Some Name", "description": "A person.", "handler": f };\n`), []);
