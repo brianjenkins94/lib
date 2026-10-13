@@ -169,7 +169,7 @@ export class CoverageReplayer {
 
 		const changes = transitions.map(([declaration, kind]): CoverageChange => {
 			const file = declaration.slice(0, declaration.lastIndexOf("#"));
-			const reachedBy = [...reaches].filter(([, reached]) => reached.has(declaration)).map(([key]) => key).sort();
+			const reachedBy = [...reaches].filter(([, reached]) => reached.has(declaration)).map(([key]) => key).sort((one, other) => one.localeCompare(other));
 			const own = reachedBy.some((key) => features.get(key)?.roots.includes(declaration) === true);
 			const after = leadsTo.get(declaration) ?? (changed.includes(declaration) ? declaration : undefined);
 			let share: CoverageChange["share"] = "none";
