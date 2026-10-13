@@ -2,9 +2,9 @@ import * as path from "node:path";
 import * as url from "node:url";
 
 /** This module's own file: from `import.meta.url` as an ES module, from `__filename` as CommonJS (a CommonJS bundle leaves
- *  `import.meta` empty). A browser CommonJS bundle has neither. */
+ *  `import.meta` empty). A bundle served over http has neither — its URL is no file — and nothing here touches `path`. */
 const meta = (import.meta as Partial<ImportMeta> | undefined)?.url;
-const ownFile = meta === undefined ? (typeof __filename === "string" ? __filename : undefined) : meta.startsWith("file:") ? url.fileURLToPath(meta) : meta;
+const ownFile = meta === undefined ? (typeof __filename === "string" ? __filename : undefined) : meta.startsWith("file:") ? url.fileURLToPath(meta) : undefined;
 
 export const __root = ownFile === undefined ? "/" : path.join(path.dirname(ownFile), "..");
 
