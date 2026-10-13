@@ -235,6 +235,60 @@ export function queryRuns(runs: RunEnvelope[], query: RunQuery = {}): RunAnswer 
 	return { "total": matched.length, "runs": matched.slice(0, query.limit ?? 20), "effects": [...effects.values()].toSorted((a, b) => b.runs - a.runs || a.capability.localeCompare(b.capability) || a.resource.localeCompare(b.resource)) };
 }
 
+/** What a baseline accepted of each package (audit's `Baseline.packages`): its version, and what it may do. */
+export type AcceptedPackages = Record<string, { "version"?: string; "caps": string[] }>;
+
+/** A package's call a run made that its baseline doesn't account for: the package isn't in it (`new`), or the
+ *  capability isn't among those accepted of it (`beyond`) — with the run it was in, and the version accepted, when the
+ *  one that ran isn't it. A refused or skipped call counts too: it's what the package tried. */
+export interface BeyondBaseline {
+	"kind": "new" | "beyond";
+	"package": string;
+	"capability": string;
+	"resource": string;
+	"how": Effect["how"];
+	"calls": number;
+	"run": { "id": string; "user": string; "entry": string; "endedAt": string };
+	"accepted"?: { "version"?: string; "caps": string[] };
+}
+
+/** A capability as a baseline names it: the network's kinds are `net`'s. */
+const capabilityClass = (capability: string): string => (capability.startsWith("net") ? "net" : capability);
+
+/** Every package call in `runs` that `accepted` (the baseline's packages) doesn't account for, newest run first. Pure:
+ *  the runs and the baseline are both committed, so this is as true of the history as of now. */
+export function beyondBaseline(runs: RunEnvelope[], accepted: AcceptedPackages): BeyondBaseline[] {
+	const found: BeyondBaseline[] = [];
+
+	for (const run of runs.toSorted((one, other) => other.endedAt.localeCompare(one.endedAt))) {
+		for (const effect of run.effects ?? []) {
+			if (effect.package !== undefined) {
+				const at = effect.package.lastIndexOf("@");
+				const name = at > 0 ? effect.package.slice(0, at) : effect.package;
+				const version = at > 0 ? effect.package.slice(at + 1) : undefined;
+				const entry = accepted[name];
+				const capability = capabilityClass(effect.capability);
+				const covered = entry !== undefined && (entry.caps.includes(capability) || (capability.startsWith("fs:") && entry.caps.includes("fs")));
+
+				if (!covered) {
+					found.push({
+						"kind": entry === undefined ? "new" : "beyond",
+						"package": effect.package,
+						"capability": effect.capability,
+						"resource": effect.resource,
+						"how": effect.how,
+						"calls": effect.calls,
+						"run": { "id": run.id, "user": run.user, "entry": run.entry, "endedAt": run.endedAt },
+						...entry === undefined || entry.version === version ? {} : { "accepted": entry }
+					});
+				}
+			}
+		}
+	}
+
+	return found;
+}
+
 /** How far to trust what an entry does, from its runs (`confidence`). */
 export interface Confidence {
 	/** `unproven` (score under 20), `provisional` (under 60), or `trusted`. */
@@ -532,6 +586,19 @@ if (isEntry(import.meta)) {
 		const byWhom = queryRuns(parseRuns([run("e", "2026-10-05T00:00:00.000Z", "app.js", [{ "capability": "fs:read", "resource": "/workspace/a.txt", "how": "made", "calls": 1 }, { "capability": "fs:read", "resource": "/workspace/a.txt", "how": "made", "calls": 2, "package": "greet@1.2.3" }])].map((each) => JSON.stringify(each)).join("\n")));
 
 		assert.deepEqual(byWhom.effects.map((each) => [each.package, each.calls]), [[undefined, 1], ["greet@1.2.3", 2]]);
+
+		// Beyond the baseline: a package's call it doesn't account for — a capability not accepted of it (a later version's
+		// net), or a package it doesn't have — and not the program's own, nor what it does account for.
+		const accepted = { "tool": { "version": "1.0.0", "caps": ["exec", "fs"] } };
+		const beyond = beyondBaseline(parseRuns([{ ...run("f", "2026-10-06T00:00:00.000Z", "app.js", [
+			{ "capability": "exec", "resource": "ls", "how": "denied", "calls": 1, "package": "tool@1.1.0" },
+			{ "capability": "fs:write", "resource": "/workspace/x", "how": "denied", "calls": 1, "package": "tool@1.1.0" },
+			{ "capability": "net", "resource": "evil.example", "how": "made", "calls": 2, "package": "tool@1.1.0" },
+			{ "capability": "fs:read", "resource": "/etc/passwd", "how": "made", "calls": 1, "package": "other@2.0.0" },
+			{ "capability": "net", "resource": "api.example.com", "how": "made", "calls": 1 }
+		]) }].map((each) => JSON.stringify(each)).join("\n")), accepted);
+
+		assert.deepEqual(beyond.map((each) => [each.kind, each.package, each.capability, each.accepted?.version]), [["beyond", "tool@1.1.0", "net", "1.0.0"], ["new", "other@2.0.0", "fs:read", undefined]]);
 
 		// By package: a name (any version, a scope's too) or a name@version.
 		const withPackages = parseRuns([{ ...run("d", "2026-10-04T00:00:00.000Z", "app.js"), "packages": { "greet@1.2.3": {}, "@scope/inner@0.1.0": {} } }].map((each) => JSON.stringify(each)).join("\n"));
