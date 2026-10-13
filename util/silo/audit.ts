@@ -22,6 +22,7 @@ import { find } from "@brianjenkins94/util/find";
 import * as fs from "@brianjenkins94/util/fs";
 
 import { type Surface, type SurfaceEntry, add, builtinCaps, classifyKind, detect, surfaceOfSource } from "./detect.js";
+import { type AcceptedPackages, syncPackages } from "./evidence.js";
 import { type SiloPaths, ensureSiloDir, findRoot, siloPaths } from "./paths.js";
 import { type ReviewStore, serializeStore } from "./review.js";
 
@@ -155,8 +156,8 @@ export function capabilitiesOf(file: string): string[] {
 
 interface DepEntry { "kind": string; "version"?: string; "members": string[]; "dynamic": boolean; "caps": string[] }
 export type WsConsumer = Record<string, DepEntry>;   // spec → dep, for one workspace
-interface PkgEntry { "version"?: string; "caps": string[] }
-export interface Baseline { "consumer": Record<string, WsConsumer>; "packages": Record<string, PkgEntry> }
+type PkgEntry = AcceptedPackages[string];
+export interface Baseline { "consumer": Record<string, WsConsumer>; "packages": AcceptedPackages }
 
 export const loadBaseline = (paths: SiloPaths): Baseline => ({ "consumer": {}, "packages": {}, ...(fs.existsSync(paths.baseline) ? JSON.parse(fs.readFileSync(paths.baseline)) : {}) });
 
@@ -315,14 +316,26 @@ export async function establishBaseline(paths: SiloPaths, target: string): Promi
 	return b;
 }
 
-/** The baseline, made if there isn't one (establishBaseline) — never remade: what's in it is what was accepted, and a
- *  change to it is an approval, not something a command does on the way. */
-export async function ensureBaseline(paths: SiloPaths, target: string = paths.root): Promise<{ "created": boolean; "baseline": Baseline }> {
-	if (fs.existsSync(paths.baseline)) {
-		return { "created": false, "baseline": loadBaseline(paths) };
+/** The baseline, made if there isn't one (establishBaseline) — else brought up to what's installed: a library added is
+ *  accepted as its code is, a new version that can do more is pending until it's accepted (evidence's syncPackages). What
+ *  was accepted is never remade, and runs never change it: an accepted change is an approval. `changed` names the
+ *  packages synced (none when it was just made). */
+export async function ensureBaseline(paths: SiloPaths, target: string = paths.root): Promise<{ "created": boolean; "baseline": Baseline; "changed": ReturnType<typeof syncPackages>["changed"] }> {
+	const none = { "added": [], "updated": [], "pending": [] };
+
+	if (!fs.existsSync(paths.baseline)) {
+		return { "created": true, "baseline": await establishBaseline(paths, target), "changed": none };
 	}
 
-	return { "created": true, "baseline": await establishBaseline(paths, target) };
+	const baseline = loadBaseline(paths);
+	const { packages, changed } = syncPackages(baseline.packages, await installedPackages(paths.root));
+
+	if (changed.added.length + changed.updated.length + changed.pending.length > 0) {
+		baseline.packages = Object.fromEntries(Object.entries(packages).toSorted(([one], [other]) => one.localeCompare(other)));
+		await saveBaseline(paths, baseline);
+	}
+
+	return { "created": false, "baseline": baseline, "changed": changed };
 }
 
 // ───────────────────────────────────────────────────────────────────────────────────────────────────
@@ -366,15 +379,21 @@ if (isEntry(import.meta)) {
 		assert.deepEqual(packages["fetcher"]?.caps, ["net"]);
 		assert.deepEqual(packages["@scope/quiet"]?.caps, []);
 
-		// Made once, never remade: a second ensure leaves what was accepted.
+		// Made once; then kept up to what's installed, never remade: what was accepted stays, a library added is accepted,
+		// and a new version that can do more is pending.
 		const paths = siloPaths(root);
 		const first = await ensureBaseline(paths);
 
 		assert.equal(first.created, true);
 		assert.ok("tool" in first.baseline.packages);
-		fs.writeFileSync(paths.baseline, JSON.stringify({ ...first.baseline, "packages": {} }));
-		assert.equal((await ensureBaseline(paths)).created, false);
-		assert.deepEqual(loadBaseline(paths).packages, {});
+		fs.writeFileSync(paths.baseline, JSON.stringify({ ...first.baseline, "packages": { "tool": { "version": "0.9.0", "caps": [] } } }));
+
+		const again = await ensureBaseline(paths);
+
+		assert.equal(again.created, false);
+		assert.deepEqual(again.changed, { "added": ["@scope/quiet", "fetcher"], "updated": [], "pending": ["tool"] });
+		assert.deepEqual(loadBaseline(paths).packages["tool"], { "version": "0.9.0", "caps": [], "pending": { "version": "1.0.0", "caps": ["exec"] } });
+		assert.deepEqual((await ensureBaseline(paths)).changed, { "added": [], "updated": [], "pending": [] }, "nothing installed changed: nothing to do");
 
 		await fs.rm(root, { "recursive": true, "force": true });
 	})();
