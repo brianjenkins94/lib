@@ -13,11 +13,12 @@
  *     evidence/<user>/<env>/<file>.jsonl  SHARED · what one person's runs observed of a file (./evidence)
  *     <collection>/<user>/<file>.jsonl    SHARED · one person's annotations of a file: notes, … (./annotations)
  *     baseline.json                       SHARED · the dependency-capability baseline (derived, regenerated: ./audit)
+ *     versions.json                       SHARED · the exact version each dependency loads at, when no lockfile says
+ *                                                  (the editor's: each range resolved a week old, kept until it changes)
  *     review.json                         SHARED · which code units were reviewed (./review, ./audit)
  *     local/                              LOCAL  · this machine's alone, never committed:
  *       runs/<user>.jsonl                   runs too frequent or personal to share (an MCP server's tool calls)
  *       samples/<file>.jsonl                value samples (a real value can hold secrets)
- *       versions.json                       the exact version this machine loads of each dependency (resolved, a week old)
  *       …                                   caches and raw detail (CPU profiles, recorded results, parse caches)
  *
  * Designed for collaborators. Anything a person writes goes in a file only they write, named for them (`<kind>/<user>`),
@@ -86,9 +87,10 @@ export const POLICY_GLOB = `**/${SILO_DIR}/{policy.json,policy/*.json}`;
 /** What analysis says the code can do. */
 export const capabilitiesPath = (): string => `${SILO_DIR}/capabilities.json`;
 
-/** The exact version this machine loads of each dependency — its ranges resolved, nothing younger than a week (the
- *  editor's shared resolver) — local: resolved again as they change, and a day later can answer differently. */
-export const versionsPath = (): string => `${LOCAL_DIR}/versions.json`;
+/** The exact version each dependency loads at, where no lockfile says — the editor's resolver: each range resolved to
+ *  the newest version at least a week old, and kept until the range changes (a lockfile's way: shared, so every
+ *  collaborator loads what the baseline was made from). */
+export const versionsPath = (): string => `${SILO_DIR}/versions.json`;
 
 /** What one person's runs saw the code do. */
 export const observedCapabilitiesPath = (user: string): string => `${SILO_DIR}/capabilities/${userFile(user)}.json`;
@@ -131,7 +133,7 @@ if (isEntry(import.meta)) {
 		assert.equal(userPolicyPath("Ada L"), ".silo/policy/ada-l.json");
 		assert.equal(observedCapabilitiesPath(""), ".silo/capabilities/local.json", "no usable name: `local`");
 		assert.equal(runsPath("ada"), ".silo/runs/ada.jsonl");
-		assert.equal(versionsPath(), ".silo/local/versions.json");
+		assert.equal(versionsPath(), ".silo/versions.json");
 		assert.equal(runsPath("ada", "local"), ".silo/local/runs/ada.jsonl");
 		assert.equal(evidencePathFor("ada", "laptop.tsval.chromium-140.macos", "src/a.ts"), ".silo/evidence/ada/laptop.tsval.chromium-140.macos/src/a.ts.jsonl");
 		assert.equal(annotationsPath("Notes", "ada", "src/a.ts"), ".silo/notes/ada/src/a.ts.jsonl");
