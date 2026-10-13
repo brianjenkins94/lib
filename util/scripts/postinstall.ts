@@ -35,7 +35,9 @@ export async function postinstall(workspaces?: string[]) {
 	// fallback is just "try npm, else pnpm".
 	return mapAsync(workspaces, async function(workspace: string) {
 		// FROM: https://github.com/vercel/turborepo/blob/1ae620cdf454d0258a162a96976e3064433391a2/packages/turbo/bin/turbo#L29
-		const npm = await exec("npm", ["install", "--before=" + NPM_BEFORE, "--install-links=false", "--loglevel=error", "--prefer-offline", "--no-audit", "--progress=false"], { "cwd": workspace });
+		// (not its --prefer-offline: npm then trusts its cache unrevalidated — a stale packument fails --before on a
+		// version it hasn't heard of (ETARGET), and a mutable `@latest.tgz` URL installs whatever it cached last)
+		const npm = await exec("npm", ["install", "--before=" + NPM_BEFORE, "--install-links=false", "--loglevel=error", "--no-audit", "--progress=false"], { "cwd": workspace });
 
 		if (npm.ok) {
 			return npm.exitCode;
