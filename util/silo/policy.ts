@@ -4,7 +4,7 @@
  *     on. Governs what code can DO.
  *   • IMPORT policy (was `policy/import-policy.ts`) — a denylist of module specifiers (use my fs wrapper, not
  *     node:fs; never left-pad). Governs what a module may DEPEND ON. `extractImports` is a parser-free import
- *     lister (complements `./oxc` `surfaceOfSource`, which is AST-based).
+ *     lister (complements `./reach` `surfaceOf`, which reads TypeScript's tree).
  */
 
 import { Ajv2020, type ValidateFunction } from "ajv/dist/2020.js";
@@ -26,7 +26,7 @@ export function isDangerous(cap: string): boolean {
 
 // ── Capability-policy RULES (the `.silo/policy.json` engine) ───────────────────────────────────────────
 // The rule model over a policy FILE — the base `policy.json` contract plus per-user overrides. No vscode, no node, no
-// oxc, so the exact same rules govern the panel's display, the runtime enforcer (the almostnode/SW interceptors'
+// parser, so the exact same rules govern the panel's display, the runtime enforcer (the almostnode/SW interceptors'
 // decision endpoint), and a pre-armed debugger.
 //
 // A rule is `{ when, then }`: WHEN the program reaches something (a call, an input, a line) whose facts — the SUBJECT,
@@ -512,7 +512,7 @@ export interface ImportPolicy {
 export interface Violation { "specifier": string; "use"?: string; "reason"?: string }
 
 /** Every module specifier the source imports — static, dynamic, side-effect, and require(). Parser-free
- *  (regex) so it works on any source without an AST; `./oxc` `surfaceOfSource` is the AST-based analog. */
+ *  (regex) so it works on any source without an AST; `./reach` `surfaceOf` is the tree-based analog. */
 export function extractImports(src: string): string[] {
 	const out = new Set<string>();
 	const add = (re: RegExp) => { for (const m of src.matchAll(re)) { out.add(m[1]); } };

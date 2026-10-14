@@ -21,7 +21,7 @@ import { shortHash } from "@brianjenkins94/util/hash";
 // node:async_hooks.
 import type { BrokerScope } from "./broker";
 import { sinks } from "@brianjenkins94/util/logger";
-// The run ledger and the policy (util/silo) — oxc-free (util/fs only), so recording/gating never pulls the kernels.
+// The run ledger and the policy (util/silo) — parser-free (util/fs only), so recording/gating never pulls the analysis.
 import { type SiloPaths, siloPaths } from "@brianjenkins94/util/silo/paths";
 import { type Confidence, confidence } from "@brianjenkins94/util/silo/evidence";
 import type { RunScope } from "@brianjenkins94/util/silo/layout";

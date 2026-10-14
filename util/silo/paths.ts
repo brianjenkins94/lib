@@ -1,7 +1,7 @@
 /**
- * silo — the `.silo/` location + file layout (Node, oxc-free). Extracted from the prototype's `shared/paths.ts`.
+ * silo — the `.silo/` location + file layout (Node, parser-free). Extracted from the prototype's `shared/paths.ts`.
  * Kept dependency-light (only `util/fs` and the pure `./layout`) so a consumer can keep the run ledger / baseline
- * without pulling the oxc-based analysis kernels — `./audit` (baseline + drift) and `./runs` (the ledger's Node side)
+ * without pulling the analysis (TypeScript's) — `./audit` (baseline + drift) and `./runs` (the ledger's Node side)
  * both build on this, and so can `util/mcp`.
  */
 
@@ -9,7 +9,7 @@ import * as path from "node:path";
 
 import * as fs from "@brianjenkins94/util/fs";
 
-import { baselinePath, GITATTRIBUTES, GITIGNORE, LOCAL_DIR, reviewPath, runsPath, withLines } from "./layout.js";
+import { baselinePath, GITATTRIBUTES, GITIGNORE, LOCAL_DIR, runsPath, withLines } from "./layout.js";
 
 /** Resolve the silo root, git-`.git`-style. The nearest ancestor holding a `.silo/` is authoritative — you
  *  pick the scope by where you commit it (monorepo root → one baseline; sub-package → its own). If none
@@ -27,7 +27,7 @@ export function findRoot(start: string): string {
 
 /** The `.silo/` files a Node process uses, as absolute paths under `root` — what each is, and whether it's shared, is
  *  `./layout`'s. */
-export interface SiloPaths { "root": string; "siloDir": string; "baseline": string; "review": string; "runs": string; "localRuns": string }
+export interface SiloPaths { "root": string; "siloDir": string; "baseline": string; "runs": string; "localRuns": string }
 
 export function siloPaths(root: string = findRoot(process.cwd())): SiloPaths {
 	const at = (relative: string): string => path.join(root, ...relative.split("/"));
@@ -36,7 +36,6 @@ export function siloPaths(root: string = findRoot(process.cwd())): SiloPaths {
 		"root": root,
 		"siloDir": at(".silo"),
 		"baseline": at(baselinePath()),
-		"review": at(reviewPath()),
 		"runs": path.dirname(at(runsPath("local"))),
 		"localRuns": path.dirname(at(runsPath("local", "local")))
 	};

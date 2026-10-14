@@ -17,7 +17,7 @@
  * same name (counted as the top-level one).
  * Each declaration carries a fingerprint — its AST without positions — so a change in comments or whitespace isn't one.
  *
- * `oxc` + pure AST logic only, the same portability contract as `./features`: no fs, git or network.
+ * Pure logic only, the same portability contract as `./features`: no parser, fs, git or network.
  */
 
 import type { WayIn } from "./features";
@@ -124,8 +124,8 @@ export interface Analysis {
 /**
  * Reads a snapshot of the program: its ways in and its declaration graph, from one reading of each file. Called once per
  * snapshot, oldest first, so one may build each from the last. `files`: the program's files by path, each by the id of
- * its content; `read` gets a content. oxc's (`./oxc`) is the default; TypeScript's read the same over its own tree
- * (`./ts-analysis`): TypeScript 7's in Node (`./typescript`), and a TypeScript server's (the editor's history plugin).
+ * its content; `read` gets a content. TypeScript reads it (`./ts-analysis`): TypeScript 7.1's in Node (`./typescript`,
+ * silo's), and a TypeScript server's (the editor's history plugin).
  */
 export interface Analyzer {
 	analyze(files: ReadonlyMap<string, string>, read: (oid: string) => Promise<string>): Promise<Analysis>;

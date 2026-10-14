@@ -296,7 +296,25 @@ export function coverageMarkdown(steps: CoverageStep[], options: { "title"?: str
 if (isEntry(import.meta)) {
 	void (async function() {
 		const assert: typeof import("node:assert").strict = (await import("node:assert")).strict;
-		const { oxcAnalyzer } = await import(["./oxc"].join(""));
+		// What reads the code: TypeScript 7.1's analyzer (lib's dev dependency `typescript-7`) over a folder with only a
+		// tsconfig. (Specifiers made at run time, so a bundler of this module doesn't follow them.)
+		const { typescriptAnalyzer, typescriptModules }: typeof import("./typescript") = await import(/* @vite-ignore */ ["./typescript"].join(""));
+		const fs = await import("node:fs");
+		const os = await import("node:os");
+		const path = await import("node:path");
+		const folder = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "silo-coverage-")));
+
+		fs.writeFileSync(path.join(folder, "tsconfig.json"), JSON.stringify({ "compilerOptions": { "module": "esnext", "moduleResolution": "bundler", "target": "esnext", "allowJs": true, "strict": false } }));
+
+		const modules = (await typescriptModules(import.meta.dirname, "typescript-7"))!;
+		const analyzers: { "close"?: () => void }[] = [];
+		const analyzer = async (): Promise<Awaited<ReturnType<typeof typescriptAnalyzer>> & object> => {
+			const made = (await typescriptAnalyzer({ "root": folder, "typescript": modules }))!;
+
+			analyzers.push(made);
+
+			return made;
+		};
 		const blobs = new Map<string, string>();
 		const put = (text: string): string => {
 			const oid = "oid" + blobs.size;
@@ -323,7 +341,7 @@ if (isEntry(import.meta)) {
 			snapshot("3", observed({ "g": { "ever": 2, "lastRun": "r2" }, "h": { "ever": 1, "lastRun": "r2" }, "u": { "ever": 0, "lastRun": "r2" } }), [envelope("r1"), envelope("r2")]),
 			// Nothing ran: nothing to tell.
 			snapshot("4", observed({ "g": { "ever": 2, "lastRun": "r2" }, "h": { "ever": 1, "lastRun": "r2" }, "u": { "ever": 0, "lastRun": "r2" } }), [envelope("r1"), envelope("r2")])
-		], read, { "analyzer": oxcAnalyzer(), "place": place })) {
+		], read, { "analyzer": await analyzer(), "place": place })) {
 			steps.push(step);
 		}
 
@@ -351,12 +369,18 @@ if (isEntry(import.meta)) {
 			snapshot("1"),
 			snapshot("2", undefined, [envelope("r1", { "app.tsx": "rejected root state" })]),
 			{ ...snapshot("3", observed({ "g": { "ever": 1, "lastRun": "r2" } }), [envelope("r1", { "app.tsx": "rejected root state" }), envelope("r2")]), "files": [{ "path": "app.js", "oid": put(app + "@@\n") }, { "path": ".silo/evidence/ada/env/app.js.jsonl", "oid": put(observed({ "g": { "ever": 1, "lastRun": "r2" } })) }, { "path": ".silo/runs/ada.jsonl", "oid": put([envelope("r1", { "app.tsx": "rejected root state" }), envelope("r2")].join("\n") + "\n") }] }
-		], read, { "analyzer": oxcAnalyzer(), "place": unplaceable })) {
+		], read, { "analyzer": await analyzer(), "place": unplaceable })) {
 			broken.push(step);
 		}
 
 		assert.deepEqual(broken.map((step) => step.unparsed), [{}, { "app.tsx": "rejected root state" }, { "app.js": "Parser failed to consume input" }], "each said once: the envelope's in the interval its run came");
 		assert.equal(broken[2]!.unplaced, 0, "an unparsable text isn't counted as unplaced spans");
 		assert.match(coverageMarkdown(broken), /couldn't parse `app\.tsx`\*\* — what ran there isn't counted: rejected root state/u);
+
+		for (const each of analyzers) {
+			each.close?.();
+		}
+
+		fs.rmSync(folder, { "force": true, "recursive": true });
 	})();
 }

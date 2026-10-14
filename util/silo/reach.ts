@@ -210,8 +210,8 @@ export function findReach(ts: Ts, sourceFile: TsNode, config: MatcherConfig = AL
  * The import surface of `sourceFile` (a TypeScript SourceFile, read by `ts`): each specifier it imports and the members
  * it uses of it — a named import's name, `default`, a namespace's `ns.member` (`ns[expr]` is dynamic), and a
  * `require("x")` / `import("x")` (dynamic: what's used of it isn't named). A side-effect import is the specifier alone;
- * a type-only import doesn't run, so isn't counted. The same reading as `./oxc`'s surfaceOfSource, off the tree a
- * compiler already holds.
+ * a type-only import doesn't run, so isn't counted. Off the tree a
+ * compiler already holds — the editor's TypeScript server (6.x), or TypeScript 7.1 (`./typescript`'s astOf).
  */
 export function surfaceOf(ts: Ts, sourceFile: TsNode): Surface {
 	const surface: Surface = new Map();
@@ -294,7 +294,7 @@ if (isEntry(import.meta)) {
 		assert.equal(src.slice(first.start, first.end), "fetch(\"https://example.com/a\")");
 		assert.deepEqual(reach("fido.get(\"/a\"); map.get(\"/b\");", ["fido.get"]).map((each) => each.callee), ["fido.get"]);
 
-		// The import surface, off TypeScript's tree: the same answer as oxc's reading of the same text (silo audit's).
+		// The import surface, off TypeScript's tree: silo audit's, and the editor's baseline consumer.
 		const imports = [
 			"import \"./setup\";",
 			"import React, { useState as state, type FC } from \"react\";",
@@ -304,7 +304,6 @@ if (isEntry(import.meta)) {
 			"fs.readFileSync(\"a\"); path[process.argv[2]];",
 			"const later = await import(\"chalk\"); const old = require(\"debug\");"
 		].join("\n");
-		const { surfaceOfSource } = await import(/* @vite-ignore */ ["./oxc"].join("")) as typeof import("./oxc");
 		const entries = (surface: Surface): unknown => Object.fromEntries([...surface].map(([spec, use]) => [spec, { "members": [...use.members].sort(), "dynamic": use.dynamic }]));
 		const read = surfaceOf(ts, ts.createSourceFile("app.ts", imports, ts.ScriptTarget.Latest, true));
 
@@ -316,6 +315,29 @@ if (isEntry(import.meta)) {
 			"chalk": { "members": [], "dynamic": true },
 			"debug": { "members": [], "dynamic": true }
 		});
-		assert.deepEqual(entries(read), entries(surfaceOfSource("app.ts", imports)), "the same reading as oxc's");
+
+		// TypeScript 7.1's tree (its AST module, adapted: astOf) reads the same: both readings, on either compiler. (lib's
+		// dev dependency `typescript-7`; the editor's TypeScript server is 6.x today.)
+		const { astOf, readSources, typescriptModules } = await import(/* @vite-ignore */ ["./typescript"].join("")) as typeof import("./typescript");
+		const fs = await import("node:fs");
+		const os = await import("node:os");
+		const path = await import("node:path");
+		const modules = (await typescriptModules(import.meta.dirname, "typescript-7"))!;
+		const folder = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "silo-reach-")));
+		const file = path.join(folder, "app.ts");
+
+		fs.writeFileSync(file, imports + "\n" + src);
+
+		const sources = readSources(modules, folder, [file]);
+
+		try {
+			const both = imports + "\n" + src;
+
+			assert.deepEqual(entries(surfaceOf(astOf(modules), sources.read(file))), entries(surfaceOf(ts, ts.createSourceFile("app.ts", both, ts.ScriptTarget.Latest, true))), "the same surface, read by TypeScript 7.1");
+			assert.deepEqual(findReach(astOf(modules), sources.read(file)), findReach(ts, ts.createSourceFile("app.ts", both, ts.ScriptTarget.Latest, true)), "the same reach, read by TypeScript 7.1");
+		} finally {
+			sources.close();
+			fs.rmSync(folder, { "force": true, "recursive": true });
+		}
 	})();
 }

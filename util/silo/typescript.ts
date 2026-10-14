@@ -1,6 +1,6 @@
 /**
  * silo — TypeScript 7's analyzer (Node): a program's ways in and declaration graph read by the compiler itself
- * (`./ts-analysis`, with TypeScript 7's API as its host), in place of oxc's. What a declaration uses is what the checker
+ * (`./ts-analysis`, with TypeScript 7's API as its host). What a declaration uses is what the checker
  * says each of its names is — an import followed through re-exports and the tsconfig's `paths`, a scope's own local left
  * out, a method call resolved to the declaration that holds the method — so reach follows the program as TypeScript sees
  * it.
@@ -8,28 +8,83 @@
  * One compiler process for a whole replay: the first snapshot is a synthetic program over the snapshot's sources (a
  * filesystem layer of their contents over the disk, which still serves `node_modules`), and each later one is an update
  * with a layer of what changed — nothing is checked out. A file is analyzed again only when it, or a file it resolves
- * names into, changed. The program's own packages (a workspace's, by their package.json) resolve to their sources, as in
- * oxc's — not to an installed copy under node_modules.
+ * names into, changed. The program's own packages (a workspace's, by their package.json) resolve to their sources — not
+ * to an installed copy under node_modules.
  *
- * Needs TypeScript ≥ 7.1 (`typescript/sync`) — the analyzed repository's own, so its program is read by its TypeScript:
- * `typescriptAnalyzer` answers undefined without it, so a caller falls back to oxc's (`oxcAnalyzer`). Node ids are the same as oxc's — a file's own names, `file#name` — so a feature's roots
- * (`./features`) name nodes in either graph. Types are left out, as in oxc's: a type changes no behavior.
+ * Needs TypeScript ≥ 7.1 (its API: `typescript/sync`, under `typescript/unstable/` in the nightlies before it was
+ * promoted) — the caller's (silo bundles one), else the analyzed repository's own: `typescriptAnalyzer` answers undefined
+ * without one. Node ids are a file's own names, `file#name`, so a feature's roots (`./features`) name nodes in the graph.
+ * Types are left out: a type changes no behavior.
+ *
+ * And the same TypeScript as a reader of single files (`readSources`): each file's SourceFile, for `./reach`'s readings
+ * (`astOf` adapts 7.1's AST module to them) — silo audit's import surface, read by the compiler the analysis uses.
  */
 
 import type { WayIn } from "./features";
 import type { Analyzer } from "./graph";
 import type { FileAnalysis, TsHost, TsNode } from "./ts-analysis";
+import * as fs from "node:fs";
 import { createRequire } from "node:module";
+import * as os from "node:os";
+import * as path from "node:path";
 import * as url from "node:url";
 import { isEntry } from "@brianjenkins94/util/env";
 import { isManifest, isSource, waysInManifest } from "./features";
 import { candidates, packageOf } from "./graph";
 import { analysisOf, analyzeFile, stale } from "./ts-analysis";
 
-/** TypeScript's `sync` and `ast` modules (≥ 7.1), loosely typed: the few calls below. */
+/** TypeScript's `sync` and `ast` modules (≥ 7.1), and its node predicates (`ast/is`), loosely typed: the few calls below. */
 export interface TypeScriptModules {
 	"sync": { "API": new (options: { "cwd": string }) => any };
 	"ast": { "SyntaxKind": Record<string | number, string | number> };
+	"is"?: Record<string, (node: any) => boolean>;
+}
+
+/**
+ * TypeScript ≥ 7.1's modules as installed beside `from` (a folder; default package name `typescript`), or undefined when
+ * there's none that new. Its API at `typescript/sync`, or at `typescript/unstable/sync` in the 7.1 nightlies before it
+ * was promoted.
+ */
+export async function typescriptModules(from: string, name = "typescript"): Promise<TypeScriptModules | undefined> {
+	const resolve = createRequire(from.replace(/\/$/u, "") + "/package.json").resolve;
+
+	for (const prefix of ["", "unstable/"]) {
+		try {
+			const load = async (subpath: string): Promise<any> => import(/*! @external */ url.pathToFileURL(resolve(`${name}/${prefix}${subpath}`)).href);
+
+			return { "sync": await load("sync"), "ast": await load("ast"), "is": await load("ast/is") } as TypeScriptModules;
+		} catch { /* not at this path */ }
+	}
+
+	return undefined;
+}
+
+/** TypeScript 7.1's AST module as `./reach`'s readings take a `ts`: its node predicates and SyntaxKind — and
+ *  isStringLiteralLike, which 7.1 doesn't have (a string literal, or a template with no substitutions). */
+export function astOf(modules: TypeScriptModules): any {
+	const is = modules.is ?? {};
+
+	return { ...is, "SyntaxKind": modules.ast.SyntaxKind, "isStringLiteralLike": (node: any) => is["isStringLiteral"]!(node) || is["isNoSubstitutionTemplateLiteral"]!(node) };
+}
+
+/**
+ * Each of `files` (absolute paths under `root`) as TypeScript 7.1 parses it — one compiler process, every file opened in
+ * one snapshot. `read` gives a file's SourceFile (undefined for one it couldn't); `close` ends the process.
+ */
+export function readSources(modules: TypeScriptModules, root: string, files: readonly string[]): { "read": (file: string) => any; "close": () => void } {
+	const api = new modules.sync.API({ "cwd": root });
+	const snapshot = api.createSnapshot({ "openFiles": [...files] });
+
+	return {
+		"read": (file) => {
+			try {
+				return snapshot.getDefaultProjectForFile(file)?.program.getSourceFile(file);
+			} catch {
+				return undefined;
+			}
+		},
+		"close": () => api.close?.()
+	};
 }
 
 export interface TypeScriptAnalyzerOptions {
@@ -43,19 +98,33 @@ export interface TypeScriptAnalyzerOptions {
 
 const ALIAS = 2_097_152; // SymbolFlags.Alias
 
+/** What a tsconfig's compilerOptions come to, as the compiler parses them — for a project with none, TypeScript's for a
+ *  module a bundler resolves (parsed from a temporary tsconfig, so the compiler gives its own values). */
+function parsedOptions(api: any, tsconfig: string): Record<string, unknown> {
+	if (fs.existsSync(tsconfig)) {
+		return api.parseConfigFile(tsconfig).options;
+	}
+
+	const folder = fs.mkdtempSync(path.join(os.tmpdir(), "silo-tsconfig-"));
+
+	try {
+		fs.writeFileSync(path.join(folder, "tsconfig.json"), JSON.stringify({ "compilerOptions": { "module": "esnext", "moduleResolution": "bundler", "target": "esnext", "jsx": "preserve" } }));
+
+		return api.parseConfigFile(path.join(folder, "tsconfig.json")).options;
+	} finally {
+		fs.rmSync(folder, { "force": true, "recursive": true });
+	}
+}
+
 /** TypeScript's analyzer, or undefined when no TypeScript ≥ 7.1 is to be had. */
 export async function typescriptAnalyzer(options: TypeScriptAnalyzerOptions): Promise<Analyzer | undefined> {
 	let ts = options.typescript;
 
-	if (ts === undefined) {
-		try {
-			// The repository's TypeScript, not whichever one lib was installed beside.
-			const resolve = createRequire(options.root.replace(/\/$/u, "") + "/package.json").resolve;
+	// (else the repository's TypeScript, not whichever one lib was installed beside)
+	ts ??= await typescriptModules(options.root);
 
-			ts = { "sync": await import(/*! @external */ url.pathToFileURL(resolve("typescript/sync")).href), "ast": await import(/*! @external */ url.pathToFileURL(resolve("typescript/ast")).href) } as TypeScriptModules;
-		} catch {
-			return undefined;
-		}
+	if (ts === undefined) {
+		return undefined;
 	}
 
 	if (typeof ts.sync?.API !== "function" || ts.ast?.SyntaxKind === undefined) {
@@ -65,8 +134,9 @@ export async function typescriptAnalyzer(options: TypeScriptAnalyzerOptions): Pr
 	const kinds = ts.ast.SyntaxKind;
 	const root = options.root.replace(/\/$/u, "");
 	const api = new ts.sync.API({ "cwd": root });
-	// The program reads the JavaScript sources too, as oxc's does.
-	const baseOptions = { ...api.parseConfigFile(options.tsconfig ?? root + "/tsconfig.json").options, "allowJs": true };
+	// The program reads the JavaScript sources too. A project with no tsconfig (plain JavaScript, say) is read with
+	// TypeScript's defaults for a module that a bundler resolves.
+	const baseOptions = { ...parsedOptions(api, options.tsconfig ?? root + "/tsconfig.json"), "allowJs": true };
 	let compilerOptions: Record<string, unknown> = baseOptions;
 	let packagesKey = "";
 
@@ -196,7 +266,7 @@ export async function typescriptAnalyzer(options: TypeScriptAnalyzerOptions): Pr
 				}
 			}
 
-			// A manifest's ways in are its JSON's: read as oxc's are.
+			// A manifest's ways in are its JSON's (./features' waysInManifest).
 			const manifests = new Map<string, WayIn[]>();
 
 			for (const [path, oid] of files) {
@@ -223,9 +293,6 @@ export async function typescriptAnalyzer(options: TypeScriptAnalyzerOptions): Pr
 if (isEntry(import.meta)) {
 	void (async function() {
 		const assert: typeof import("node:assert").strict = (await import("node:assert")).strict;
-		const fs = await import("node:fs");
-		const os = await import("node:os");
-		const path = await import("node:path");
 		const { replay } = await import("./history");
 
 		// A repository with only a tsconfig on disk: every version of its sources comes from the snapshots.
@@ -233,16 +300,14 @@ if (isEntry(import.meta)) {
 
 		fs.writeFileSync(path.join(root, "tsconfig.json"), JSON.stringify({ "compilerOptions": { "module": "esnext", "moduleResolution": "bundler", "target": "esnext", "strict": false } }));
 
-		// A TypeScript ≥ 7.1 to test with: SILO_TYPESCRIPT names its package folder (lib's own is older).
-		const from = process.env["SILO_TYPESCRIPT"];
-		const analyzer = await typescriptAnalyzer({ "root": root, ...from === undefined ? {} : { "typescript": { "sync": await import(url.pathToFileURL(path.join(from, "dist/api/sync/api.js")).href), "ast": await import(url.pathToFileURL(path.join(from, "dist/ast/index.js")).href) } } });
+		// The TypeScript ≥ 7.1 lib tests with (its dev dependency `typescript-7`; lib's own `typescript` is older).
+		const modules = await typescriptModules(import.meta.dirname, "typescript-7");
 
-		if (analyzer === undefined) {
-			console.log("silo/typescript: skipped — no TypeScript ≥ 7.1 (set SILO_TYPESCRIPT to one's package folder)");
-			fs.rmSync(root, { "force": true, "recursive": true });
+		assert.ok(modules !== undefined, "typescript-7 (lib's dev dependency) is installed");
 
-			return;
-		}
+		const analyzer = await typescriptAnalyzer({ "root": root, "typescript": modules });
+
+		assert.ok(analyzer !== undefined);
 
 		const blobs = new Map<string, string>();
 		let next = 0;
@@ -257,7 +322,7 @@ if (isEntry(import.meta)) {
 				return { "path": file, "oid": oid };
 			})
 		});
-		// A method call: oxc's name matching can't tell which `go` this is; the checker can.
+		// A method call: name matching alone can't tell which `go` this is; the checker can.
 		const extension = "import { Runner } from \"./runner\";\nimport { other } from \"./other\";\nconst runner = new Runner();\nexport function activate() {\n\tvscode.commands.registerCommand(\"run.go\", () => runner.go());\n\tvscode.commands.registerCommand(\"run.other\", () => other());\n}\n";
 		const runner = (go: string): string => `import { shout } from "./shout";\nexport class Runner { go() { return shout(${go}); } }\n`;
 		const steps = [];
@@ -279,6 +344,19 @@ if (isEntry(import.meta)) {
 
 		assert.deepEqual(changes(steps[1]!), ["changed run.go via x/shout.ts#shout"], "through the method the call resolves to, and the import it uses");
 		assert.deepEqual(changes(steps[2]!), ["changed run.other via x/other.ts#other"], "a later snapshot reads its own version of the file");
+
+		// A project with no tsconfig (plain JavaScript): read with TypeScript's defaults, its ways in found all the same.
+		const plain = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "silo-typescript-plain-")));
+		const untyped = (await typescriptAnalyzer({ "root": plain, "typescript": modules }))!;
+
+		try {
+			const { ways } = await untyped.analyze(new Map([["cli.js", "cli"]]), async () => "defineCommand(\"notes\", () => 1);\n");
+
+			assert.deepEqual(ways.get("cli.js")?.map((way) => way.facet + " " + way.id), ["terminal command notes"]);
+		} finally {
+			untyped.close?.();
+			fs.rmSync(plain, { "force": true, "recursive": true });
+		}
 	})();
 }
 

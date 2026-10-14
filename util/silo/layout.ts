@@ -15,7 +15,6 @@
  *     baseline.json                       SHARED · the dependency-capability baseline (derived, regenerated: ./audit)
  *     versions.json                       SHARED · the exact version each dependency loads at, when no lockfile says
  *                                                  (the editor's: each range resolved a week old, kept until it changes)
- *     review.json                         SHARED · which code units were reviewed (./review, ./audit)
  *     local/                              LOCAL  · this machine's alone, never committed:
  *       runs/<user>.jsonl                   runs too frequent or personal to share (an MCP server's tool calls)
  *       samples/<file>.jsonl                value samples (a real value can hold secrets)
@@ -116,9 +115,6 @@ export const annotationsPath = (collection: string, user: string, file: string):
 
 /** The dependency-capability baseline (./audit). */
 export const baselinePath = (): string => `${SILO_DIR}/baseline.json`;
-
-/** Which code units were reviewed (./review). */
-export const reviewPath = (): string => `${SILO_DIR}/review.json`;
 
 /** Where this machine keeps the value samples of `file` (./evidence). */
 export const samplesPath = (file: string): string => `${LOCAL_DIR}/samples/${file}.jsonl`;

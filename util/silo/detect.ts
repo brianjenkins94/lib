@@ -3,7 +3,7 @@
  * (dogfooded in `ok-claude`); was `detect/analysis-core.ts` + `detect/capability-detectors.ts`.
  *
  * The capabilities code implies (fs:read, fs:write, net, exec, env, eval), and the shape of a consumer surface —
- * which specifiers + members a file imports (read by `./oxc`'s surfaceOfSource). Pure string logic ONLY: no
+ * which specifiers + members a file imports (read by `./reach`'s surfaceOf). Pure string logic ONLY: no
  * parser, fs, git, node:module, network, or top-level side effects, so it runs unchanged in Node AND the browser.
  * Keep it pure, or it stops being portable. The Node orchestration around it — file walking, node_modules version
  * resolution, the `.silo/` baseline — lives in `./audit`.

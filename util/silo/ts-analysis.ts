@@ -1,9 +1,9 @@
 /**
  * silo — what a program says about itself, read from TypeScript's own tree (pure, any host): each file's ways in (the
- * same recognizers as `./features`' oxc ones) and its part of the declaration graph (`./graph`), with every name
+ * recognizers whose patterns are `./features`') and its part of the declaration graph (`./graph`), with every name
  * resolved by TypeScript's checker. One reading, two hosts:
  *
- *   • TypeScript 7's API, in Node — `./typescript` (`silo history --analyzer typescript`);
+ *   • TypeScript 7.1's API, in Node — `./typescript` (silo's command line, with the TypeScript it bundles);
  *   • a TypeScript server's own TypeScript, in-process — `classicHost` here: the editor's history plugin, which reads the
  *     program the server already holds, edits as they're typed included.
  *
@@ -11,8 +11,8 @@
  * name is resolved — a `TsHost`. A file's result (`FileAnalysis`) is plain JSON, so a plugin can hand it over as it is;
  * `analysisOf` makes a program's `Analysis` of them.
  *
- * Ids are the same as oxc's: a feature keyed by what it is, a node by its file's own name for it (`file#name`; a module's
- * body `#(top)`; an import by its local name), so either analyzer's output reads the same downstream.
+ * Ids: a feature keyed by what it is, a node by its file's own name for it (`file#name`; a module's body `#(top)`; an
+ * import by its local name), so either host's output reads the same downstream.
  */
 
 import type { WayIn } from "./features";
@@ -650,6 +650,16 @@ export function graphOf(files: ReadonlyMap<string, FileAnalysis>): DeclarationGr
 
 // ── the in-process host ──────────────────────────────────────────────────────────────────────────────────────
 
+/** One text read on its own by a classic TypeScript (≤ 6, in process: a TypeScript server's, a `typescript` package's)
+ *  — no other files, so a name resolves within it alone. A file read apart from its program: a single buffer, a test. */
+export function readText(ts: any, file: string, text: string, version = "v1"): FileAnalysis {
+	const options = { "allowJs": true, "noLib": true, "noResolve": true };
+	const host = { ...ts.createCompilerHost(options), "fileExists": (name: string) => name === "/r/" + file, "readFile": () => text, "getSourceFile": (name: string, target: unknown) => ts.createSourceFile(name, text, target, true) };
+	const program = ts.createProgram(["/r/" + file], options, host);
+
+	return analyzeFile(classicHost(ts, program, (name) => name.slice(3)), file, program.getSourceFile("/r/" + file), text, version);
+}
+
 /**
  * The host for TypeScript's in-process API (a TypeScript server's, a `typescript` package's): `ts` the module, `program`
  * its program, `relative` a file's path in the program's own terms (undefined for one outside it: a library, a package).
@@ -751,7 +761,7 @@ if (isEntry(import.meta)) {
 			"x/shout.ts": "export const shout = (s: string) => s + \"?\";\n"
 		});
 
-		// The same ways in as oxc's recognizers find, keyed the same — a name made at run time by how it's written.
+		// The ways in the recognizers find, keyed by what they are — a name made at run time by how it's written.
 		assert.deepEqual([...features.keys()].sort(), ["command|run.go", "hub request|" + DEBUG]);
 		// A local of the function it's registered in counts as what it's made from (`runner` → the makeRunner import), and a
 		// method call is what declares the method (`runner.go` → the object makeRunner returns); on through a class's method

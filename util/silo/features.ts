@@ -20,9 +20,9 @@
  * features rather than removing and re-adding them. Each way in carries a FINGERPRINT of its own code — the registration
  * call with its inline handler, as the AST without positions — so a change in comments or whitespace isn't a change —
  * and where that code leads (`roots`, node ids in the program's declaration graph, `./graph`), so a change anywhere it
- * reaches is a change to it. oxc's recognizers are here; `./ts-analysis` has the same over TypeScript's tree.
+ * reaches is a change to it. The recognizers' patterns are here; `./ts-analysis` reads them off TypeScript's tree.
  *
- * `oxc` + pure AST logic only, the same portability contract as `./detect`: no fs, git or network.
+ * Pure logic only, the same portability contract as `./detect`: no parser, fs, git or network.
  */
 
 import { isEntry } from "@brianjenkins94/util/env";
@@ -105,7 +105,7 @@ export const words = (name: string): string => name.replace(/([a-z])([A-Z])/gu, 
 /** A description's first sentence: a way in's label. */
 export const firstSentence = (text: string): string => text.split(/\.\s|\n/u)[0].slice(0, 120);
 
-/** How a recognizer reads an object literal in its own tree (oxc's, TypeScript's). */
+/** How a recognizer reads an object literal in the tree it's given (TypeScript's). */
 export interface ObjectReader<N> {
 	/** A property's value, by its key. */
 	"property": (object: N, key: string) => N | undefined;
@@ -268,27 +268,15 @@ export function featuresOf(files: Iterable<{ "file": string; "ways": WayIn[] }>)
 if (isEntry(import.meta)) {
 	void (async function() {
 		const assert: typeof import("node:assert").strict = (await import("node:assert")).strict;
-		// Both readings, oxc's and TypeScript's. (Specifiers made at run time, so a bundler of this module doesn't follow
-		// them into either: the tests only run here.)
-		const { waysIn }: typeof import("./oxc") = await import(/* @vite-ignore */ ["./oxc"].join(""));
-		const { analyzeFile, classicHost }: typeof import("./ts-analysis") = await import(/* @vite-ignore */ ["./ts-analysis"].join(""));
+		// TypeScript's reading. (Specifiers made at run time, so a bundler of this module doesn't follow them: the tests only
+		// run here.)
+		const { readText }: typeof import("./ts-analysis") = await import(/* @vite-ignore */ ["./ts-analysis"].join(""));
 		const ts: typeof import("typescript") = (await import(/* @vite-ignore */ ["typescript"].join(""))).default;
+		const tsWaysIn = (file: string, text: string): WayIn[] => readText(ts, file, text).ways;
 
-		function tsWaysIn(file: string, text: string): WayIn[] {
-			const options = { "allowJs": true, "noLib": true, "noResolve": true };
-			const host = { ...ts.createCompilerHost(options), "fileExists": (name: string) => name === "/r/" + file, "readFile": () => text, "getSourceFile": (name: string, target: any) => ts.createSourceFile(name, text, target, true) };
-			const program = ts.createProgram(["/r/" + file], options, host);
-
-			return analyzeFile(classicHost(ts, program, (name) => name.slice(3)), file, program.getSourceFile("/r/" + file), text, "v1").ways;
-		}
-
-		/** What a file states, the same in both readings: `facet id · label`. */
+		/** What a file states: `facet id · label`. */
 		function stated(file: string, text: string): string[] {
-			const [oxc, typescript] = [waysIn(file, text), tsWaysIn(file, text)].map((ways) => ways.map((way) => way.facet + " " + way.id + (way.label === "" ? "" : " · " + way.label)).sort());
-
-			assert.deepEqual(typescript, oxc, "both readings agree");
-
-			return oxc;
+			return tsWaysIn(file, text).map((way) => way.facet + " " + way.id + (way.label === "" ? "" : " · " + way.label)).sort();
 		}
 
 		// An agent tool: its description and schema beside its name, or in util/mcp's `defineTool` `config`.
@@ -301,8 +289,8 @@ if (isEntry(import.meta)) {
 		assert.deepEqual(stated("cli.ts", `run(command({ "name": "history", "description": "What changed. Told from the code.", "config": juvy({}), "handler": (config) => 0 }));\nconst build = command({ name: "build-all", args: {}, handler: () => 0 });\n`), ["cli command build-all", "cli command history · What changed"]);
 
 		// A tool moved to another file and into `defineTool`'s shape is the same feature, not one removed and one added.
-		const before = { "file": "tools/files.ts", "ways": waysIn("tools/files.ts", `export const read = { "name": "files_read", "description": "Read a file.", "handler": read };\n`) };
-		const after = { "file": "tools/files/tools.ts", "ways": waysIn("tools/files/tools.ts", `export default [defineTool({ "name": "files_read", "config": { "description": "Read a file.", "inputSchema": {} }, "handler": read })];\n`) };
+		const before = { "file": "tools/files.ts", "ways": tsWaysIn("tools/files.ts", `export const read = { "name": "files_read", "description": "Read a file.", "handler": read };\n`) };
+		const after = { "file": "tools/files/tools.ts", "ways": tsWaysIn("tools/files/tools.ts", `export default [defineTool({ "name": "files_read", "config": { "description": "Read a file.", "inputSchema": {} }, "handler": read })];\n`) };
 
 		assert.deepEqual([...featuresOf([before]).keys()], [...featuresOf([after]).keys()]);
 		assert.deepEqual([...featuresOf([after]).keys()], ["agent tool|files_read"]);

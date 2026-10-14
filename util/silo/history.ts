@@ -26,7 +26,7 @@ import type { Exercise } from "./exercise";
 import type { Feature, WayIn } from "./features";
 import type { Analyzer, DeclarationGraph } from "./graph";
 import { isEntry } from "@brianjenkins94/util/env";
-import { featuresOf, INTERNAL_FACETS, isManifest } from "./features";
+import { featuresOf, INTERNAL_FACETS, isManifest, waysInManifest } from "./features";
 import { changedDeclarations, reachers } from "./graph";
 
 /** One version of the program: its files, each by the id of its content (a git blob id, a hash). */
@@ -63,7 +63,7 @@ export interface Step {
 export interface ReplayOptions {
 	/** Which files to read (default: sources and manifests outside build output, vendored code, tests and fixtures). */
 	"include"?: (path: string) => boolean;
-	/** What reads each snapshot: its ways in and declaration graph — oxc's (`./oxc`) or TypeScript's (`./ts-analysis`).
+	/** What reads each snapshot: its ways in and declaration graph — TypeScript's (`./ts-analysis`, `./typescript`).
 	 *  The caller's choice, so this module loads neither. */
 	"analyzer": Analyzer;
 }
@@ -582,9 +582,20 @@ export function historyMarkdown(steps: Step[], options: NarrateOptions & { "titl
 if (isEntry(import.meta)) {
 	void (async function() {
 		const assert: typeof import("node:assert").strict = (await import("node:assert")).strict;
-		// oxc's reading, for the tests: this module loads no analyzer itself. (A specifier made at run time, so a bundler
-		// of this module doesn't follow it into oxc: the tests only run here.)
-		const { fileFingerprint, oxcAnalyzer, waysIn }: typeof import("./oxc") = await import(/* @vite-ignore */ ["./oxc"].join(""));
+		// TypeScript's readings, for the tests: this module loads no analyzer itself. A file on its own, by lib's TypeScript;
+		// a history, by TypeScript 7.1's analyzer (lib's dev dependency `typescript-7`) over a folder with only a tsconfig.
+		// (Specifiers made at run time, so a bundler of this module doesn't follow them: the tests only run here.)
+		const { readText }: typeof import("./ts-analysis") = await import(/* @vite-ignore */ ["./ts-analysis"].join(""));
+		const { typescriptAnalyzer, typescriptModules }: typeof import("./typescript") = await import(/* @vite-ignore */ ["./typescript"].join(""));
+		const ts: typeof import("typescript") = (await import(/* @vite-ignore */ ["typescript"].join(""))).default;
+		const fs = await import("node:fs");
+		const os = await import("node:os");
+		const path = await import("node:path");
+		const waysIn = (file: string, text: string): WayIn[] => (isManifest(file) ? waysInManifest(text) : readText(ts, file, text).ways);
+		const top = (file: string, text: string): string => readText(ts, file, text).declarations["(top)"]?.fingerprint ?? "";
+		const folder = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "silo-history-")));
+
+		fs.writeFileSync(path.join(folder, "tsconfig.json"), JSON.stringify({ "compilerOptions": { "module": "esnext", "moduleResolution": "bundler", "target": "esnext", "jsx": "preserve", "strict": false } }));
 
 		// Snapshots in memory: each file's content is its own id.
 		const blobs = new Map<string, string>();
@@ -609,8 +620,14 @@ if (isEntry(import.meta)) {
 		async function run(snapshots: Snapshot[]): Promise<Step[]> {
 			const steps: Step[] = [];
 
-			for await (const step of replay(snapshots, read, { "analyzer": oxcAnalyzer() })) {
-				steps.push(step);
+			const analyzer = (await typescriptAnalyzer({ "root": folder, "typescript": (await typescriptModules(import.meta.dirname, "typescript-7"))! }))!;
+
+			try {
+				for await (const step of replay(snapshots, read, { "analyzer": analyzer })) {
+					steps.push(step);
+				}
+			} finally {
+				analyzer.close?.();
 			}
 
 			return steps;
@@ -643,8 +660,8 @@ if (isEntry(import.meta)) {
 		assert.deepEqual(waysIn("worker.ts", "import { run } from \"./run\";\naddEventListener(\"message\", (event) => run(event.data));\nfunction later() { addEventListener(\"message\", () => 0); }\n").map((way) => way.facet + " " + way.roots.join(",")), ["worker worker.ts#run"]);
 
 		// Any literal fingerprints, a BigInt too; equal code, equal prints, whatever its spacing.
-		assert.equal(fileFingerprint("a.ts", "const n = 10n;"), fileFingerprint("a.ts", "const  n=10n ; // ten"));
-		assert.notEqual(fileFingerprint("a.ts", "const n = 10n;"), fileFingerprint("a.ts", "const n = 11n;"));
+		assert.equal(top("a.ts", "console.log(10n);"), top("a.ts", "console.log( 10n ) ; // ten"));
+		assert.notEqual(top("a.ts", "console.log(10n);"), top("a.ts", "console.log(11n);"));
 
 		// The history: added, a comment-only edit (no change), a handler edit (changed), a move, a rename, a removal.
 		const steps = await run([

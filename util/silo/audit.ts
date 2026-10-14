@@ -1,16 +1,16 @@
 /**
- * silo — the Node audit layer over the pure kernels (`./detect`, `./review`). Extracted from the `silo`
- * prototype; combines `detect/import-surface.ts` (fs file-walking), `commands/audit.ts` (baseline + drift),
- * `shared/paths.ts` (root/`.silo/` layout), and the fs half of `commands/review-store.ts` — with silo's two
- * heavy edges CUT:
+ * silo — the Node audit layer over the pure kernels (`./detect`, `./reach`). Extracted from the `silo`
+ * prototype; combines `detect/import-surface.ts` (fs file-walking), `commands/audit.ts` (baseline + drift) and
+ * `shared/paths.ts` (root/`.silo/` layout) — with silo's two heavy edges CUT:
  *
  *   • NO node_modules-package capability probing (silo's `detect/package-capabilities` → rolldown/webcrack
  *     DCE — that lives in `./packages`). A builtin's caps come from `./detect` `builtinCaps`; a package
  *     records its member/version surface but no bundle-probed cap set. A file's own reach is `./detect`
  *     `detect` (a pure source scan).
- *   • NO trust-ratchet review coupling in drift (silo's git-heavy `commands/review.ts`). `capabilityDrift`
- *     returns the capability/surface diff as data; review STATE is read from the store via `./review`
- *     `understoodOf`, separately.
+ *   • NO review: the prototype's per-function "have you read it" (its AI-approval purpose) was dropped.
+ *
+ * Each file's import surface is read by TypeScript ≥ 7.1 (`./typescript`'s readSources, `./reach`'s surfaceOf) — the
+ * caller's (silo bundles one), else the project's own.
  *
  * The project root is a PARAMETER (default `findRoot(cwd)`), not the cwd-anchored module constants silo used.
  */
@@ -22,12 +22,12 @@ import { find } from "@brianjenkins94/util/find";
 import * as fs from "@brianjenkins94/util/fs";
 
 import { type Surface, type SurfaceEntry, type WsConsumer, add, classifyKind, consumerOf, detect, packageCaps, surfaceEntries } from "./detect.js";
-import { surfaceOfSource } from "./oxc.js";
 import { type BaselinePackages, syncPackages } from "./evidence.js";
 import { type SiloPaths, ensureSiloDir, findRoot, siloPaths } from "./paths.js";
-import { type ReviewStore, serializeStore } from "./review.js";
+import { surfaceOf } from "./reach.js";
+import { type TypeScriptModules, astOf, readSources, typescriptModules } from "./typescript.js";
 
-// The `.silo/` location + layout live in ./paths (oxc-free, shared with ./runs and util/mcp). Re-exported so
+// The `.silo/` location + layout live in ./paths (parser-free, shared with ./runs and util/mcp). Re-exported so
 // `@brianjenkins94/util/silo/audit` stays a one-stop import for the audit surface.
 export { ensureSiloDir, findRoot, siloPaths, type SiloPaths };
 
@@ -57,9 +57,15 @@ export function classify(spec: string, fromDir: string, stopRoot: string = fromD
 	return { "kind": "package", "pkg": pkg };
 }
 
-/** The consumer surface of a file — reads it, then delegates to the pure kernel. */
-export function analyze(file: string): Surface {
-	return surfaceOfSource(file, fs.readFileSync(file));
+/** TypeScript ≥ 7.1 to read the code with: `typescript`, else the project's own (at `root`). Throws without one. */
+async function typescriptFor(root: string, typescript?: TypeScriptModules): Promise<TypeScriptModules> {
+	const found = typescript ?? await typescriptModules(root);
+
+	if (found === undefined) {
+		throw new Error("silo reads the code with TypeScript 7.1 or later: install one in the project (silo bundles its own)");
+	}
+
+	return found;
 }
 
 /** A directory that is its own package and is marked `private: true`. Such NESTED workspaces are silo-ignored
@@ -79,21 +85,6 @@ async function files(target: string): Promise<string[]> {
 	return (await find(target).type("f").prune(prune).exec()).filter((f) => !path.basename(f).startsWith(".") && isCode(path.basename(f)));
 }
 
-/** Merge every code file under `target` into one consumer surface (specifier → members). */
-export async function projectSurface(target: string): Promise<{ "perFile": Record<string, Record<string, SurfaceEntry>>; "surface": Record<string, SurfaceEntry> }> {
-	const merged: Surface = new Map();
-	const perFile: Record<string, Record<string, SurfaceEntry>> = {};
-
-	for (const f of await files(path.resolve(target))) {
-		const s = analyze(f);
-
-		perFile[path.relative(process.cwd(), f)] = Object.fromEntries([...s].map(([k, v]) => [k, { "members": [...v.members].sort(), "dynamic": v.dynamic }]));
-		for (const [spec, use] of s) { for (const m of use.members) { add(merged, spec, m); } if (use.dynamic) { add(merged, spec, "", true); } }
-	}
-
-	return { "perFile": perFile, "surface": Object.fromEntries([...merged].map(([k, v]) => [k, { "members": [...v.members].sort(), "dynamic": v.dynamic }])) };
-}
-
 /** Nearest enclosing package (a file's "workspace"), as a path relative to `root` ("." for root code). */
 function owningWorkspace(file: string, root: string): string {
 	const rootAbs = path.resolve(root);
@@ -104,42 +95,34 @@ function owningWorkspace(file: string, root: string): string {
 	}
 }
 
-/** Like projectSurface, but partitioned by workspace (nearest package.json) — so a monorepo audit can
- *  attribute each dep's usage to the package that imports it, keyed by path relative to `root`. */
-export async function workspaceSurfaces(target: string, root: string): Promise<Record<string, Record<string, SurfaceEntry>>> {
+/** Each workspace's surface (its nearest package.json's folder, relative to `root`): what its code files under
+ *  `target` import, read by `typescript` — so a monorepo audit attributes each dep's usage to the package that imports it. */
+export async function workspaceSurfaces(target: string, root: string, typescript: TypeScriptModules): Promise<Record<string, Record<string, SurfaceEntry>>> {
+	const all = await files(path.resolve(target));
+	const sources = readSources(typescript, path.resolve(root), all);
+	const ts = astOf(typescript);
 	const buckets = new Map<string, Surface>();
 
-	for (const f of await files(path.resolve(target))) {
-		const ws = owningWorkspace(f, root);
-		const bucket = buckets.get(ws) ?? new Map();
+	try {
+		for (const f of all) {
+			const sourceFile = sources.read(f);
+			const ws = owningWorkspace(f, root);
+			const bucket = buckets.get(ws) ?? new Map();
 
-		buckets.set(ws, bucket);
-		for (const [spec, use] of analyze(f)) {
-			for (const m of use.members) { add(bucket, spec, m); }
-			if (use.dynamic) { add(bucket, spec, "", true); }
+			buckets.set(ws, bucket);
+
+			for (const [spec, use] of sourceFile === undefined ? [] : surfaceOf(ts, sourceFile)) {
+				for (const m of use.members) { add(bucket, spec, m); }
+				if (use.dynamic) { add(bucket, spec, "", true); }
+			}
 		}
+	} finally {
+		sources.close();
 	}
 
 	const out: Record<string, Record<string, SurfaceEntry>> = {};
 
 	for (const [ws, surface] of [...buckets].sort((a, b) => a[0].localeCompare(b[0]))) { out[ws] = surfaceEntries(surface); }
-
-	return out;
-}
-
-/** Per workspace, which files import each specifier — so drift can attribute a drifting capability back to
- *  the source file(s) that brought it in. Same walk/keys as `workspaceSurfaces`; file paths relative to cwd. */
-export async function workspaceImporters(target: string, root: string): Promise<Record<string, Record<string, string[]>>> {
-	const out: Record<string, Record<string, string[]>> = {};
-
-	for (const f of await files(path.resolve(target))) {
-		const ws = owningWorkspace(f, root);
-		const rel = path.relative(process.cwd(), f);
-		out[ws] ??= {};
-		const byWs = out[ws];
-
-		for (const spec of analyze(f).keys()) { (byWs[spec] ??= []).push(rel); }
-	}
 
 	return out;
 }
@@ -170,9 +153,9 @@ export async function saveBaseline(paths: SiloPaths, b: Baseline): Promise<void>
  *  members are imported (+ dynamic), its resolved version, and — for builtins — the capabilities that reach
  *  (`./detect` `builtinCaps`). Packages carry an empty `caps` (no DCE probe here); their drift is tracked by
  *  member/version/dynamic expansion. This is silo `auditConsumer`'s data-collection half, without printing. */
-export async function consumerSurface(target: string, root: string): Promise<Record<string, WsConsumer>> {
+export async function consumerSurface(target: string, root: string, typescript?: TypeScriptModules): Promise<Record<string, WsConsumer>> {
 	// (each workspace's deps resolved local-first, then hoisted root)
-	return consumerOf(await workspaceSurfaces(path.resolve(target), root), (workspace, pkg) => classify(pkg, path.join(root, workspace), root).version);
+	return consumerOf(await workspaceSurfaces(path.resolve(target), root, await typescriptFor(root, typescript)), (workspace, pkg) => classify(pkg, path.join(root, workspace), root).version);
 }
 
 /** One dependency's change vs the baseline. `new`/`expanded` count as drift; `version`/`removed` are
@@ -192,11 +175,11 @@ export interface DriftResult { "fresh": boolean; "drift": number; "changes": Cap
 
 /** Capability drift of `target` vs the committed baseline — structured, never printed. `fresh` = no baseline
  *  yet (nothing to gate against; onboard first). Mirrors silo `auditConsumer`'s new/↑/~/removed marks. */
-export async function capabilityDrift(paths: SiloPaths, target: string): Promise<DriftResult> {
+export async function capabilityDrift(paths: SiloPaths, target: string, typescript?: TypeScriptModules): Promise<DriftResult> {
 	if (!fs.existsSync(paths.baseline)) { return { "fresh": true, "drift": 0, "changes": [] }; }
 
 	const b = loadBaseline(paths);
-	const next = await consumerSurface(target, paths.root);
+	const next = await consumerSurface(target, paths.root, typescript);
 	const changes: CapabilityChange[] = [];
 
 	for (const ws of Object.keys(next).sort()) {
@@ -283,10 +266,10 @@ export async function installedPackages(root: string): Promise<Record<string, Pk
 /** First-run onboarding: take the CURRENT surface as the baseline starting line and write it — what the code imports
  *  (`consumer`) and what each installed package can do (`packages`) — the TOFU bare `silo` does on a fresh project.
  *  Every later expansion still drifts against this. */
-export async function establishBaseline(paths: SiloPaths, target: string): Promise<Baseline> {
+export async function establishBaseline(paths: SiloPaths, target: string, typescript?: TypeScriptModules): Promise<Baseline> {
 	const b = loadBaseline(paths);
 
-	b.consumer = await consumerSurface(target, paths.root);
+	b.consumer = await consumerSurface(target, paths.root, typescript);
 	b.packages = await installedPackages(paths.root);
 	await saveBaseline(paths, b);
 
@@ -295,12 +278,13 @@ export async function establishBaseline(paths: SiloPaths, target: string): Promi
 
 /** The baseline, made if there isn't one (establishBaseline) — else brought up to what's installed: a library added is
  *  taken as its code is, a new version that can do more records what it grew (evidence's syncPackages). It's never
- *  remade, and runs never change it. `changed` names the packages synced (none when it was just made). */
-export async function ensureBaseline(paths: SiloPaths, target: string = paths.root): Promise<{ "created": boolean; "baseline": Baseline; "changed": ReturnType<typeof syncPackages>["changed"] }> {
+ *  remade, and runs never change it. `changed` names the packages synced (none when it was just made). `typescript` reads
+ *  the code when it's made (default: the project's own, ≥ 7.1). */
+export async function ensureBaseline(paths: SiloPaths, target: string = paths.root, typescript?: TypeScriptModules): Promise<{ "created": boolean; "baseline": Baseline; "changed": ReturnType<typeof syncPackages>["changed"] }> {
 	const none = { "added": [], "updated": [], "grew": [] };
 
 	if (!fs.existsSync(paths.baseline)) {
-		return { "created": true, "baseline": await establishBaseline(paths, target), "changed": none };
+		return { "created": true, "baseline": await establishBaseline(paths, target, typescript), "changed": none };
 	}
 
 	const baseline = loadBaseline(paths);
@@ -312,21 +296,6 @@ export async function ensureBaseline(paths: SiloPaths, target: string = paths.ro
 	}
 
 	return { "created": false, "baseline": baseline, "changed": changed };
-}
-
-// ───────────────────────────────────────────────────────────────────────────────────────────────────
-// Review store — fs persistence for the hash-anchored review records (record shape lives in ./review)
-// ───────────────────────────────────────────────────────────────────────────────────────────────────
-
-/** Load `.silo/review.json` (unit id → record), or `{}` when it doesn't exist yet. */
-export function loadReviewStore(paths: SiloPaths): ReviewStore {
-	try { return JSON.parse(fs.readFileSync(paths.review)); } catch { return {}; }
-}
-
-/** Write the review store, git-merge-friendly (sorted, one record per line — see `./review` `serializeStore`). */
-export async function saveReviewStore(paths: SiloPaths, store: ReviewStore): Promise<void> {
-	await ensureSiloDir(paths);
-	fs.writeFileSync(paths.review, serializeStore(store));
 }
 
 if (isEntry(import.meta)) {
@@ -366,11 +335,18 @@ if (isEntry(import.meta)) {
 
 		// Made once; then kept up to what's installed, never remade: a library added is taken as it is, and a new version
 		// that can do more records what it grew.
+		// (read by the TypeScript ≥ 7.1 lib tests with, its dev dependency `typescript-7`)
+		const typescript = await typescriptModules(import.meta.dirname, "typescript-7");
 		const paths = siloPaths(root);
-		const first = await ensureBaseline(paths);
+
+		await assert.rejects(ensureBaseline(paths), /TypeScript 7\.1 or later/u, "no TypeScript in the project, none passed");
+
+		const first = await ensureBaseline(paths, root, typescript);
 
 		assert.equal(first.created, true);
 		assert.ok("tool" in first.baseline.packages);
+		// The code's use of its dependencies, read by TypeScript: app.js uses tool's spawn.
+		assert.deepEqual(first.baseline.consumer, { ".": { "tool": { "kind": "package", "version": "1.0.0", "members": ["spawn"], "dynamic": false, "caps": [] } } });
 		fs.writeFileSync(paths.baseline, JSON.stringify({ ...first.baseline, "packages": { "tool": { "version": "0.9.0", "caps": [] } } }));
 
 		const again = await ensureBaseline(paths);

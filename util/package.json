@@ -30,7 +30,6 @@
     "node-schedule": "*",
     "node-stdlib-browser": "*",
     "object-scan": "*",
-    "oxc-parser": "*",
     "papaparse": "*",
     "playwright": "*",
     "pluralize": "*",
@@ -44,5 +43,8 @@
   "engines": {
     "node": ">=24.0.0",
     "npm": ">=10.0.0"
+  },
+  "devDependencies": {
+    "typescript-7": "npm:typescript@7.1.0-dev.20261007.1"
   }
 }
