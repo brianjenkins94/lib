@@ -126,6 +126,41 @@ export function add(s: Surface, spec: string, member: string, dynamic = false): 
 	s.set(spec, u);
 }
 
+/** One dependency as a workspace's code uses it: what kind of specifier, the version installed, the members its code
+ *  imports (`dynamic`: some it can't name), and — for a builtin — the capabilities those reach. */
+export interface DepEntry { "kind": string; "version"?: string; "members": string[]; "dynamic": boolean; "caps": string[] }
+export type WsConsumer = Record<string, DepEntry>;   // spec → dep, for one workspace
+
+/**
+ * The baseline's `consumer` — each workspace's use of its dependencies — from each workspace's merged surface:
+ * local specifiers left out (own files), a builtin's capabilities read off its members (builtinCaps), a package's
+ * version as `versionOf` says (node_modules on desktop, the editor's resolved versions in the browser). Pure.
+ */
+export function consumerOf(surfaces: Record<string, Record<string, SurfaceEntry>>, versionOf: (workspace: string, pkg: string) => string | undefined): Record<string, WsConsumer> {
+	const out: Record<string, WsConsumer> = {};
+
+	for (const workspace of Object.keys(surfaces).sort()) {
+		const current: WsConsumer = {};
+
+		out[workspace] = current;
+
+		for (const [spec, use] of Object.entries(surfaces[workspace]).sort(([one], [other]) => one.localeCompare(other))) {
+			const kind = classifyKind(spec);
+
+			if (kind.kind !== "local") {
+				const version = kind.pkg === undefined ? undefined : versionOf(workspace, kind.pkg);
+
+				current[spec] = { "kind": kind.kind, ...version === undefined ? {} : { "version": version }, "members": use.members, "dynamic": use.dynamic, "caps": kind.kind === "builtin" ? builtinCaps(spec, use.members, use.dynamic) : [] };
+			}
+		}
+	}
+
+	return out;
+}
+
+/** A surface as the baseline writes it: members sorted, a Set no longer. */
+export const surfaceEntries = (surface: Surface): Record<string, SurfaceEntry> => Object.fromEntries([...surface].map(([spec, use]) => [spec, { "members": [...use.members].sort(), "dynamic": use.dynamic }]));
+
 /** Builtins ARE capabilities — map (specifier, members) directly, no bundling. */
 export function builtinCaps(spec: string, members: string[], dynamic = false): string[] {
 	const base = spec.replace(/^node:/u, "");

@@ -748,11 +748,12 @@ export function surfaceOfSource(file: string, src: string): Surface {
 
 	// 1. collect import bindings
 	for (const stmt of program.body as any[]) {
-		if (stmt.type !== "ImportDeclaration") { continue; }
+		if (stmt.type !== "ImportDeclaration" || stmt.importKind === "type") { continue; }   // (a type-only import doesn't run)
 		const spec = stmt.source.value as string;
 
 		if (!stmt.specifiers?.length) { add(surface, spec, ""); continue; }   // side-effect import
 		for (const sp of stmt.specifiers) {
+			if (sp.importKind === "type") { continue; }
 			if (sp.type === "ImportSpecifier") {
 				const imported = sp.imported.name ?? sp.imported.value;
 
@@ -790,6 +791,8 @@ export function surfaceOfSource(file: string, src: string): Surface {
 			if ((isReq || isDyn) && n.arguments?.[0]?.type === "Literal" && typeof n.arguments[0].value === "string") {
 				add(surface, n.arguments[0].value, "", true);
 			}
+		} else if (n.type === "ImportExpression" && n.source?.type === "Literal" && typeof n.source.value === "string") {
+			add(surface, n.source.value, "", true);   // import("x"): oxc's own node, not a call
 		}
 	});
 

@@ -21,7 +21,7 @@ import { isEntry } from "@brianjenkins94/util/env";
 import { find } from "@brianjenkins94/util/find";
 import * as fs from "@brianjenkins94/util/fs";
 
-import { type Surface, type SurfaceEntry, add, builtinCaps, classifyKind, detect, packageCaps } from "./detect.js";
+import { type Surface, type SurfaceEntry, type WsConsumer, add, classifyKind, consumerOf, detect, packageCaps, surfaceEntries } from "./detect.js";
 import { surfaceOfSource } from "./oxc.js";
 import { type BaselinePackages, syncPackages } from "./evidence.js";
 import { type SiloPaths, ensureSiloDir, findRoot, siloPaths } from "./paths.js";
@@ -122,7 +122,7 @@ export async function workspaceSurfaces(target: string, root: string): Promise<R
 
 	const out: Record<string, Record<string, SurfaceEntry>> = {};
 
-	for (const [ws, surface] of [...buckets].sort((a, b) => a[0].localeCompare(b[0]))) { out[ws] = Object.fromEntries([...surface].map(([k, v]) => [k, { "members": [...v.members].sort(), "dynamic": v.dynamic }])); }
+	for (const [ws, surface] of [...buckets].sort((a, b) => a[0].localeCompare(b[0]))) { out[ws] = surfaceEntries(surface); }
 
 	return out;
 }
@@ -155,8 +155,7 @@ export function capabilitiesOf(file: string): string[] {
 // Baseline + capability drift (silo's commands/audit.ts, minus the package-DCE and the review ratchet)
 // ───────────────────────────────────────────────────────────────────────────────────────────────────
 
-interface DepEntry { "kind": string; "version"?: string; "members": string[]; "dynamic": boolean; "caps": string[] }
-export type WsConsumer = Record<string, DepEntry>;   // spec → dep, for one workspace
+export type { WsConsumer };
 type PkgEntry = BaselinePackages[string];
 export interface Baseline { "consumer": Record<string, WsConsumer>; "packages": BaselinePackages }
 
@@ -172,25 +171,8 @@ export async function saveBaseline(paths: SiloPaths, b: Baseline): Promise<void>
  *  (`./detect` `builtinCaps`). Packages carry an empty `caps` (no DCE probe here); their drift is tracked by
  *  member/version/dynamic expansion. This is silo `auditConsumer`'s data-collection half, without printing. */
 export async function consumerSurface(target: string, root: string): Promise<Record<string, WsConsumer>> {
-	const surfaces = await workspaceSurfaces(path.resolve(target), root);
-	const out: Record<string, WsConsumer> = {};
-
-	for (const ws of Object.keys(surfaces).sort()) {
-		const wsDir = path.join(root, ws);   // resolve this workspace's deps local-first, then hoisted root
-		const cur: WsConsumer = {};
-		out[ws] = cur;
-
-		for (const [spec, use] of Object.entries(surfaces[ws]).sort((a, b) => a[0].localeCompare(b[0]))) {
-			const c = classify(spec, wsDir, root);
-
-			if (c.kind === "local") { continue; }   // own files — tracked as their own units, not deps
-			const caps = c.kind === "builtin" ? builtinCaps(spec, use.members, use.dynamic) : [];
-
-			cur[spec] = { "kind": c.kind, "version": c.version, "members": use.members, "dynamic": use.dynamic, "caps": caps };
-		}
-	}
-
-	return out;
+	// (each workspace's deps resolved local-first, then hoisted root)
+	return consumerOf(await workspaceSurfaces(path.resolve(target), root), (workspace, pkg) => classify(pkg, path.join(root, workspace), root).version);
 }
 
 /** One dependency's change vs the baseline. `new`/`expanded` count as drift; `version`/`removed` are

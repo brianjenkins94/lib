@@ -21,7 +21,7 @@
  */
 
 import { isEntry } from "@brianjenkins94/util/env";
-import { CALL_DETECTORS } from "./detect";
+import { add, CALL_DETECTORS, type Surface } from "./detect";
 
 /**
  * One capability-reach shape. `capability` is the silo axis it exercises (net, fs:read, fs:write, exec, env).
@@ -206,6 +206,58 @@ export function findReach(ts: Ts, sourceFile: TsNode, config: MatcherConfig = AL
 	return found;
 }
 
+/**
+ * The import surface of `sourceFile` (a TypeScript SourceFile, read by `ts`): each specifier it imports and the members
+ * it uses of it — a named import's name, `default`, a namespace's `ns.member` (`ns[expr]` is dynamic), and a
+ * `require("x")` / `import("x")` (dynamic: what's used of it isn't named). A side-effect import is the specifier alone;
+ * a type-only import doesn't run, so isn't counted. The same reading as `./oxc`'s surfaceOfSource, off the tree a
+ * compiler already holds.
+ */
+export function surfaceOf(ts: Ts, sourceFile: TsNode): Surface {
+	const surface: Surface = new Map();
+	const namespaces = new Map<string, string>();   // a namespace import's local name → its specifier
+
+	for (const statement of sourceFile.statements) {
+		if (ts.isImportDeclaration(statement) && ts.isStringLiteralLike(statement.moduleSpecifier)) {
+			const spec: string = statement.moduleSpecifier.text;
+			const clause = statement.importClause;
+
+			if (clause === undefined) {
+				add(surface, spec, "");   // side-effect import
+			} else if (!clause.isTypeOnly) {
+				if (clause.name !== undefined) {
+					add(surface, spec, "default");
+				}
+
+				if (clause.namedBindings !== undefined && ts.isNamespaceImport(clause.namedBindings)) {
+					namespaces.set(clause.namedBindings.name.text, spec);
+					surface.set(spec, surface.get(spec) ?? { "members": new Set<string>(), "dynamic": false });
+				} else if (clause.namedBindings !== undefined) {
+					for (const element of clause.namedBindings.elements) {
+						if (!element.isTypeOnly) {
+							add(surface, spec, (element.propertyName ?? element.name).text);
+						}
+					}
+				}
+			}
+		}
+	}
+
+	(function visit(node: TsNode): void {
+		if (ts.isPropertyAccessExpression(node) && ts.isIdentifier(node.expression) && namespaces.has(node.expression.text)) {
+			add(surface, namespaces.get(node.expression.text)!, node.name.text);
+		} else if (ts.isElementAccessExpression(node) && ts.isIdentifier(node.expression) && namespaces.has(node.expression.text)) {
+			add(surface, namespaces.get(node.expression.text)!, "", true);
+		} else if (ts.isCallExpression(node) && (node.expression.kind === ts.SyntaxKind.ImportKeyword || (ts.isIdentifier(node.expression) && node.expression.text === "require")) && node.arguments.length > 0 && ts.isStringLiteralLike(node.arguments[0])) {
+			add(surface, node.arguments[0].text, "", true);
+		}
+
+		node.forEachChild(visit);
+	})(sourceFile);
+
+	return surface;
+}
+
 if (isEntry(import.meta)) {
 	void (async function() {
 		const assert: typeof import("node:assert").strict = (await import("node:assert")).strict;
@@ -241,5 +293,29 @@ if (isEntry(import.meta)) {
 
 		assert.equal(src.slice(first.start, first.end), "fetch(\"https://example.com/a\")");
 		assert.deepEqual(reach("fido.get(\"/a\"); map.get(\"/b\");", ["fido.get"]).map((each) => each.callee), ["fido.get"]);
+
+		// The import surface, off TypeScript's tree: the same answer as oxc's reading of the same text (silo audit's).
+		const imports = [
+			"import \"./setup\";",
+			"import React, { useState as state, type FC } from \"react\";",
+			"import type { Options } from \"lodash\";",
+			"import * as fs from \"node:fs\";",
+			"import * as path from \"node:path\";",
+			"fs.readFileSync(\"a\"); path[process.argv[2]];",
+			"const later = await import(\"chalk\"); const old = require(\"debug\");"
+		].join("\n");
+		const { surfaceOfSource } = await import(/* @vite-ignore */ ["./oxc"].join("")) as typeof import("./oxc");
+		const entries = (surface: Surface): unknown => Object.fromEntries([...surface].map(([spec, use]) => [spec, { "members": [...use.members].sort(), "dynamic": use.dynamic }]));
+		const read = surfaceOf(ts, ts.createSourceFile("app.ts", imports, ts.ScriptTarget.Latest, true));
+
+		assert.deepEqual(entries(read), {
+			"./setup": { "members": [], "dynamic": false },
+			"react": { "members": ["default", "useState"], "dynamic": false },
+			"node:fs": { "members": ["readFileSync"], "dynamic": false },
+			"node:path": { "members": [], "dynamic": true },
+			"chalk": { "members": [], "dynamic": true },
+			"debug": { "members": [], "dynamic": true }
+		});
+		assert.deepEqual(entries(read), entries(surfaceOfSource("app.ts", imports)), "the same reading as oxc's");
 	})();
 }
