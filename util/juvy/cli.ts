@@ -151,10 +151,24 @@ const HELP_FLAGS = new Set(["--help", "-h"]);
 /** What `run` writes to and exits through: a process — the real one, unless it's given another shaped like these parts
  *  of one (a shell that isn't a process, a test). */
 export interface RunProcess {
-	"stdout": { "write": (text: string) => unknown };
-	"stderr": { "write": (text: string) => unknown };
+	"stdout": RunStream;
+	"stderr": RunStream;
 	"exitCode"?: number | string | null;
 	"exit": (code?: number | string | null) => unknown;
+}
+
+/** Where `run` writes: a Node stream (its `write` calls back once what was queued before is written), or anything that
+ *  writes at once. */
+interface RunStream { "write": (text: string, callback?: () => void) => unknown; "writableLength"?: number }
+
+/** Once everything written to `stream` so far is out: a pipe's writes are asynchronous, and exiting before them cuts the
+ *  output off (at the pipe's 64 KB). Only a Node stream queues (`writableLength`); anything else wrote at once. */
+async function flushed(stream: RunStream): Promise<void> {
+	if (stream.writableLength !== undefined) {
+		await new Promise<void>((resolve) => {
+			stream.write("", resolve);
+		});
+	}
 }
 
 async function dispatch(node: JuvyCommand | JuvyApp, argv: string[], path: string[], proc: RunProcess): Promise<void> {
@@ -233,7 +247,10 @@ export async function run(app: JuvyCommand | JuvyApp, options: RunOptions = {}):
 		proc.exitCode = 1;
 	}
 
-	if (exit) { proc.exit(proc.exitCode ?? 0); }
+	if (exit) {
+		await Promise.all([flushed(proc.stdout), flushed(proc.stderr)]);
+		proc.exit(proc.exitCode ?? 0);
+	}
 }
 
 // ---------------------------------------------------------------------------------------------------------
@@ -332,5 +349,15 @@ if (isEntry(import.meta)) {
 
 		await ran(command({ "name": "run", "config": juvy({ "args": { "format": Array, "default": [], "positional": "rest" } }, { "stopEarly": true }), "handler": (config) => { passed = config.get("args"); } }), ["app.ts", "--help"]);
 		assert.deepEqual(passed, ["app.ts", "--help"]);
+
+		// --- it exits only once what was written is out: a pipe's writes finish later ---
+
+		const order: string[] = [];
+		const queued = (name: string): RunStream => ({ "writableLength": 0, "write": (text, callback) => { setTimeout(() => { order.push(`${name} ${text === "" ? "flushed" : "wrote"}`); callback?.(); }, 5); } });
+		const piped: RunProcess = { "stdout": queued("stdout"), "stderr": queued("stderr"), "exit": () => { order.push("exit"); } };
+
+		await run(command({ "name": "say", "config": juvy({}), "handler": () => { piped.stdout.write("a lot"); } }), { "argv": [], "process": piped });
+		assert.deepEqual(order.slice(-1), ["exit"]);
+		assert.ok(order.indexOf("stdout wrote") < order.indexOf("exit") && order.includes("stdout flushed") && order.includes("stderr flushed"));
 	})();
 }
