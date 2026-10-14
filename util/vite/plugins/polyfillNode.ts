@@ -1,25 +1,37 @@
 import type { PluginOption } from "vite";
 import type { Plugin as EsbuildPlugin } from "esbuild";
 import type { Plugin as RolldownPlugin } from "rolldown";
-import { builtinModules, createRequire } from "node:module";
+import { builtinModules } from "node:module";
 import * as url from "node:url";
-import stdlib from "node-stdlib-browser";
-import { nodePolyfills } from "vite-plugin-node-polyfills";
+import { defineEnv } from "unenv";
 import { externalSpecifiers } from "@brianjenkins94/util/vite/external";
 
-const NAMESPACE = "\0external-global:";
-
 /**
- * node-stdlib-browser's global shim: exports `process`, `Buffer`, `global`. esbuild's `inject`
- * pulls these into any module that uses them as free globals (env.ts reads `process.platform`
- * without importing it) — the esbuild-side equivalent of the globals vite-plugin-node-polyfills
- * injects for `polyfillNode`.
+ * Node's built-ins for a browser bundle: unenv's (https://github.com/unjs/unenv — what esm.sh and Cloudflare's Node
+ * compatibility build on; some ported from Node's own source). Each built-in listed resolves to unenv's module, with its
+ * `node:` form and subpaths (`node:util/types`); what can't work in a browser (fs, child_process, …) is there by name
+ * and says it isn't implemented when it's called. unenv's modules import each other by Node's names, and those are
+ * unenv's own whatever was listed. The globals code written for Node reads unimported — `process`, `Buffer`, `global`,
+ * `setImmediate` — are injected from unenv too (a build's; the dep optimizer gets an inline `process`, below).
  */
-const NODE_GLOBALS_SHIM = url.fileURLToPath(import.meta.resolve("node-stdlib-browser/helpers/esbuild/shim"));
+const { env } = defineEnv({ "nodeCompat": true, "resolve": true });
 
-function isFunctional(builtin: string): boolean {
-	return stdlib[builtin] !== undefined && !/mock[/\\]empty/u.test(stdlib[builtin]);
+/** A built-in's name, without `node:` and its subpath (`node:fs/promises` → `fs`). */
+const base = (id: string): string => id.replace(/^node:/u, "").split("/")[0];
+
+/** Whether a module is unenv's own (its imports of Node's built-ins are unenv's). */
+const isUnenv = (importer: string | undefined): boolean => importer !== undefined && /[\\/]node_modules[\\/]unenv[\\/]/u.test(importer);
+
+/** The file of unenv's module for built-in `id` imported from `importer` — when `id` is one of `builtins` (or the
+ *  importer is unenv's) and unenv has it; else undefined. */
+function unenvFile(id: string, importer: string | undefined, builtins: ReadonlySet<string>): string | undefined {
+	const file = env.alias[id];
+
+	return file !== undefined && (builtins.has(base(id)) || isUnenv(importer)) ? file : undefined;
 }
+
+/** unenv's globals, as rolldown's `transform.inject` takes them. */
+const GLOBALS = env.inject as Record<string, string | [string, string]>;
 
 /**
  * Externalize `@external`-annotated dynamic imports (see util/vite/external.ts) that a consuming app may not
@@ -55,257 +67,85 @@ export function externalOptionalDeps(): PluginOption {
 	} as PluginOption;
 }
 
-/**
- * vite-plugin-node-polyfills injects bare imports of its OWN shims (`vite-plugin-node-polyfills/shims/buffer`, …) wherever
- * a module reads `Buffer`/`global`/`process` as a free global, and they resolve from the INJECTED module's real path. A
- * consumer that only has the plugin through this package (a strict pnpm install doesn't hoist it) can't resolve them
- * from its own files or a linked `file:` package. Resolve them from here, where the plugin is a declared dependency.
- * BUILD only: Vite's dep optimizer rejects absolute shim paths as entries ("cannot be external"), and in dev the
- * optimizer bundles the shims itself.
- */
-function nodePolyfillShims(): PluginOption {
-	return {
-		"name": "node-polyfill-shims",
-		"apply": "build",
-		"config": () => ({
-			"resolve": {
-				"alias": Object.fromEntries(["buffer", "global", "process"].map(function(name) {
-					const id = `vite-plugin-node-polyfills/shims/${name}`;
-
-					// The ES module build: the CommonJS one sets `exports.default` without `__esModule`, so a default import of it
-					// is its exports object, not the shim (`process.argv` undefined).
-					return [id, url.fileURLToPath(import.meta.resolve(id))];
-				}))
-			}
-		})
-	} as PluginOption;
-}
-
-const SUBPATH = "node-subpath:";
-
-/**
- * Node's builtin subpaths (`node:util/types`, `node:assert/strict`, `node:path/posix`, …) of a polyfilled builtin → the
- * matching property of the parent's polyfill (`util.types`, `assert.strict`, `path.posix`), with named exports mirrored
- * from real Node's module at build time; empty where the polyfill lacks it. vite-plugin-node-polyfills aliases `util`
- * etc. by PREFIX, so without this `util/types` becomes a file the polyfill doesn't have. Aliased from a `config` hook
- * placed AFTER nodePolyfills(): aliases outrank resolveId, and a later config hook's aliases are merged in FRONT.
- * Only real Node subpaths are matched, so a package's own subpath (`process/browser`) is left alone.
- */
-function nodeBuiltinSubpaths(polyfill: string[]): PluginOption[] {
-	const subpaths = builtinModules.filter((id) => id.includes("/") && !id.startsWith("node:") && polyfill.includes(id.split("/")[0]) && !isFunctional(id));
-
-	if (subpaths.length === 0) {
-		return [];
-	}
-
-	return [{
-		"name": "node-builtin-subpaths",
-		"config": () => ({
-			"resolve": { "alias": [{ "find": new RegExp(`^(?:node:)?(${subpaths.join("|")})$`, "u"), "replacement": SUBPATH + "$1" }] }
-		}),
-		"resolveId": (id) => (id.startsWith(SUBPATH) ? "\0" + id : undefined),
-		"load": async function(id) {
-			if (!id.startsWith("\0" + SUBPATH)) {
-				return undefined;
-			}
-
-			const subpath = id.slice(SUBPATH.length + 1);
-			const [parent, ...rest] = subpath.split("/");
-			let names: string[] = [];
-
-			try {
-				names = Object.keys(await import(`node:${subpath}`) as Record<string, unknown>).filter((name) => name !== "default" && /^[A-Za-z_$][\w$]*$/u.test(name));
-			} catch { /* not importable here — default export only */ }
-
-			return `import parent from ${JSON.stringify(parent)};\nconst sub = (parent && parent[${JSON.stringify(rest.join("/"))}]) || {};\nexport default sub;\n${names.map((name) => `export const ${name} = sub[${JSON.stringify(name)}];`).join("\n")}\n`;
-		}
-	} as PluginOption];
-}
-
-export function polyfillNode(builtins = builtinModules): PluginOption {
-	const polyfill = builtins.filter(isFunctional);
-	const stub = builtins.filter((builtin) => !isFunctional(builtin));
-
-	// The optional `node:` prefix matters: `import … from "node:fs"` must reach the stub too — without it, Vite claims
-	// the id as an empty "browser external" (no named exports), so `readFileSync` etc. are undefined instead of no-ops.
-	const filter = new RegExp(`^(?:${NAMESPACE})?(?:node:)?(${stub.join("|")})(/.*)?$`, "u");
+/** Node's built-ins `builtins` (default: all of them) as unenv's, for a Vite build or dev server — and unenv's globals
+ *  injected into a build. */
+export function polyfillNode(builtins: readonly string[] = builtinModules): PluginOption {
+	const listed = new Set(builtins.map(base));
 
 	return [
 		externalOptionalDeps(),
-		...(polyfill.length > 0 ? [...nodePolyfills({ "include": polyfill, "protocolImports": true }), nodePolyfillShims(), ...nodeBuiltinSubpaths(polyfill)] : []),
-		...(stub.length > 0 ? [{
-			"name": "node-stdlib-browser-alias",
+		{
+			"name": "polyfill-node",
 			"enforce": "pre",
-			"resolveId": function(id) {
-				const [_, match] = filter.exec(id) ?? [];
-
-				if (match !== undefined && stub.some((builtin) => id.replace(/^node:/u, "").startsWith(builtin))) {
-					return NAMESPACE + id;
-				}
-			},
-			"load": async function(id) {
-				const [_, match] = filter.exec(id) ?? [];
-
-				if (match !== undefined) {
-					return Object.entries(await import(match)).map(function([key, value]) {
-						// An object-valued default (e.g. `import fs from "node:fs"`) keeps its members as no-ops too, not `undefined`.
-						return `export ${key === "default" ? "default" : `const ${key} =`} ${typeof value === "function" ? "function () {}" : key === "default" && typeof value === "object" && value !== null ? `{ ${Object.entries(value).map(([member, inner]) => `${JSON.stringify(member)}: ${typeof inner === "function" ? "function () {}" : undefined}`).join(", ")} }` : undefined};`;
-					}).join("\n");
-				}
-			}
-		} as PluginOption] : [])
+			"config": () => ({ "build": { "rolldownOptions": { "transform": { "inject": GLOBALS } } } }),
+			"resolveId": (id: string, importer: string | undefined) => unenvFile(id, importer, listed)
+		} as PluginOption
 	];
 }
 
+/** A module of unenv's globals, as esbuild's `inject` takes them (a file whose exports are the globals). */
+const NODE_GLOBALS = url.fileURLToPath(new URL("./nodeGlobals.ts", import.meta.url));
+
 /**
- * The esbuild counterpart of {@link polyfillNode}, for `optimizeDeps.esbuildOptions.plugins`.
- *
- * Vite's dep optimizer pre-bundles with esbuild and BYPASSES the Vite plugin pipeline, so a
- * dependency pulled into the optimizer (e.g. a client import of fido) never sees `polyfillNode`
- * and its `node:*` imports blow up in the browser. This gives esbuild the same treatment:
- *  - functional builtins  → resolved to their node-stdlib-browser polyfill (so `node:url`'s
- *    `fileURLToPath`, `node:util`, `buffer`, … actually work), and
- *  - un-polyfillable ones (`fs`, …) → a generated module of no-op named exports, so a named
- *    import like `{ readFileSync }` links (esbuild would otherwise error on the missing export)
- *    and simply does nothing unless called.
- *
- * It's a *rough* equivalent — it doesn't inject the `Buffer`/`process` globals the way
- * `vite-plugin-node-polyfills` can; it covers the import-resolution half, which is what a
- * Node-leaning dep (static `node:*` imports at module load) needs to load client-side.
+ * The esbuild counterpart of {@link polyfillNode}, for `optimizeDeps.esbuildOptions.plugins`: Vite's dep optimizer
+ * pre-bundled with esbuild (before Vite 8) and BYPASSES the Vite plugin pipeline, so a dependency pulled into it (a
+ * client import of fido) never sees `polyfillNode` and its `node:*` imports blow up in the browser. Same resolution;
+ * the globals injected from a module of them (nodeGlobals.ts).
  */
-export function polyfillNodeEsbuild(builtins = builtinModules): EsbuildPlugin {
-	const STUB_NS = "polyfill-node-stub";
-	// Strip an optional `node:` prefix and any subpath (`fs/promises` → `fs`) to the base builtin.
-	const base = (id: string): string => id.replace(/^node:/u, "").split("/")[0];
+export function polyfillNodeEsbuild(builtins: readonly string[] = builtinModules): EsbuildPlugin {
+	const listed = new Set(builtins.map(base));
 	// esbuild filters run on Go's RE2 (no `u` flag); builtin names are `[a-z_/]` so no escaping needed.
-	const filter = new RegExp(`^(?:node:)?(?:${builtins.join("|")})(?:/.*)?$`);
+	const filter = new RegExp(`^(?:node:)?(?:${builtinModules.join("|")})(?:/.*)?$`);
 
 	return {
 		"name": "polyfill-node-esbuild",
-		async setup(build) {
+		setup(build) {
 			// A pre-bundled dep's `import.meta.url` is its .vite/deps chunk URL, not the app's;
 			// point it at the page instead (mirrors the render pipeline). Node-path helpers that
 			// consume it still guard for a non-file: URL (see util/env.ts). Existing defines win.
 			build.initialOptions.define = { "import.meta.url": "location.href", ...build.initialOptions.define };
-			// Provide the `process`/`Buffer`/`global` globals for deps that reference them unimported.
 			// Vite runs these esbuildOptions in BOTH the dep-scan pass (write:false — which marks
 			// resolved paths external, and an *injected* file may not be external) and the optimize
 			// pass (write:true). Inject only in the optimize pass; during scan it would error out
 			// ("injected path cannot be marked as external") and abort dependency discovery.
 			if (build.initialOptions.write !== false) {
-				build.initialOptions.inject = [...build.initialOptions.inject ?? [], NODE_GLOBALS_SHIM];
+				build.initialOptions.inject = [...build.initialOptions.inject ?? [], NODE_GLOBALS];
 			}
 
-			// A `stdlib` entry can be a package dir OR a file, and esbuild's own resolver handles both
-			// (honoring the browser field) — no `browser-resolve`. `build.resolve` is only callable from
-			// a callback (post-setup), so resolve each functional builtin's polyfill lazily + cache it.
-			const polyfilled = new Map<string, string | undefined>();
+			build.onResolve({ "filter": filter }, (args) => {
+				const file = unenvFile(args.path, args.importer, listed);
 
-			build.onResolve({ filter }, async function(args) {
-				const name = base(args.path);
-
-				if (isFunctional(name)) {
-					if (!polyfilled.has(name)) {
-						const resolved = await build.resolve(stdlib[name], { "kind": "import-statement", "resolveDir": process.cwd() });
-
-						polyfilled.set(name, resolved.errors.length === 0 ? resolved.path : undefined);
-					}
-
-					const entry = polyfilled.get(name);
-
-					if (entry !== undefined) {
-						return { "path": entry };
-					}
-				}
-
-				// Known-but-un-polyfillable (fs, …): hand off to the stub loader below.
-				if (stdlib[name] !== undefined) {
-					return { "path": name, "namespace": STUB_NS };
-				}
-
-				return undefined;
-			});
-
-			build.onLoad({ "filter": /.*/, "namespace": STUB_NS }, async function(args) {
-				// Import the REAL builtin (this runs in Node at build time) to mirror its named
-				// exports as no-ops, so downstream named imports link.
-				const real = await import(args.path).catch(() => ({}));
-				const contents = Object.entries(real).map(function([key, value]) {
-					// An object-valued default (e.g. `import fs from "node:fs"`) keeps its members as no-ops too, not `undefined`.
-					return `export ${key === "default" ? "default" : `const ${key} =`} ${typeof value === "function" ? "function () {}" : key === "default" && typeof value === "object" && value !== null ? `{ ${Object.entries(value).map(([member, inner]) => `${JSON.stringify(member)}: ${typeof inner === "function" ? "function () {}" : "undefined"}`).join(", ")} }` : "undefined"};`;
-				}).join("\n");
-
-				return { "contents": contents || "export default {};", "loader": "js" };
+				return file === undefined ? undefined : { "path": file };
 			});
 		}
 	};
 }
 
 /**
- * The Rolldown counterpart of {@link polyfillNodeEsbuild}, for `optimizeDeps.rolldownOptions.plugins`.
+ * The Rolldown counterpart of {@link polyfillNodeEsbuild}, for `optimizeDeps.rolldownOptions.plugins`: Vite 8's dep
+ * optimizer pre-bundles with ROLLDOWN (it stubs esbuild plugins and throws "Not implemented" the instant one touches the
+ * esbuild `build` object), so this gives it the same resolution through `resolveId` — and `process`, read as a free
+ * global at module load by node-leaning deps (fido → `process.platform`), as a minimal INLINE shim.
  *
- * Vite 8's dep optimizer pre-bundles with ROLLDOWN, not esbuild: it stubs esbuild plugins and throws
- * "Not implemented" the instant one touches the esbuild `build` object, so `polyfillNodeEsbuild` dies in
- * its `setup`. Rolldown runs Rollup-style plugins, so this gives the optimizer the same treatment through
- * `resolveId`/`load`/`transform`:
- *  - functional builtins → resolved to their node-stdlib-browser polyfill (so `node:url`'s `fileURLToPath`,
- *    `node:util`, `buffer`, … work);
- *  - un-polyfillable ones (`fs`, …) → a `\0`-virtual module of no-op named exports, so `{ readFileSync }` links;
- *  - `process`, read as a free global at module load by node-leaning deps (fido → `process.platform`) → a
- *    minimal INLINE shim.
- *
- * The `process` shim is inlined deliberately: `optimizeDeps.rolldownOptions.inject` is rejected by Vite
- * ("Invalid key: Expected never"), and injecting it by IMPORTING node-stdlib-browser's shim adds a dep edge
- * that churns Vite's optimizer into a 504-loop. Only `process` is covered — the only free global these deps
- * read; a dep that needs a real `Buffer` would want `stdlib.buffer`'s `Buffer` given the same treatment.
+ * The `process` shim is inlined deliberately: `optimizeDeps.rolldownOptions.inject` is rejected by Vite ("Invalid key:
+ * Expected never"), and injecting it by IMPORTING a module adds a dep edge that churns Vite's optimizer into a 504-loop.
+ * Only `process` is covered — the only free global these deps read.
  */
-export function polyfillNodeRolldown(builtins = builtinModules): RolldownPlugin {
-	const STUB = "\0polyfill-node-stub:";
-	// Strip an optional `node:` prefix and any subpath (`fs/promises` → `fs`) to the base builtin.
-	const base = (id: string): string => id.replace(/^node:/u, "").split("/")[0];
-	const filter = new RegExp(`^(?:node:)?(?:${builtins.join("|")})(?:/.*)?$`, "u");
+export function polyfillNodeRolldown(builtins: readonly string[] = builtinModules): RolldownPlugin {
+	const listed = new Set(builtins.map(base));
 	// A minimal browser `process`, inlined (no import edge to churn the optimizer); `var` so it's a
 	// harmless no-op in a module that already has one.
 	const PROCESS_SHIM = `var process = globalThis.process ?? { "env": {}, "argv": [], "platform": "browser", "version": "", "versions": {}, "cwd": () => "/", "nextTick": (fn) => queueMicrotask(fn) };\n`;
 
 	return {
 		"name": "polyfill-node-rolldown",
-		"resolveId": function(id) {
-			if (!filter.test(id)) {
-				return null;
-			}
-
-			const name = base(id);
-
-			if (isFunctional(name)) {
-				// stdlib maps some builtins to a package DIRECTORY (path-browserify, util); resolving that with
-				// `this.resolve(dir, undefined)` yields the directory (rolldown then fails to load it). Node's
-				// require.resolve applies package `main`/`index` resolution, so it lands on the real entry file.
-				return createRequire(import.meta.url).resolve(stdlib[name]);
-			}
-
-			// Known-but-un-polyfillable (fs, …) → the stub loader below.
-			return stdlib[name] !== undefined ? STUB + name : null;
-		},
-		"load": async function(id) {
-			if (!id.startsWith(STUB)) {
-				return null;
-			}
-
-			// Import the REAL builtin (runs in Node here) to mirror its named exports as no-ops.
-			const real = await import(id.slice(STUB.length)).catch(() => ({}));
-
-			return Object.entries(real).map(function([key, value]) {
-				// An object-valued default (e.g. `import fs from "node:fs"`) keeps its members as no-ops too, not `undefined`.
-				return `export ${key === "default" ? "default" : `const ${key} =`} ${typeof value === "function" ? "function () {}" : key === "default" && typeof value === "object" && value !== null ? `{ ${Object.entries(value).map(([member, inner]) => `${JSON.stringify(member)}: ${typeof inner === "function" ? "function () {}" : "undefined"}`).join(", ")} }` : "undefined"};`;
-			}).join("\n") || "export default {};";
-		},
+		"resolveId": (id, importer) => unenvFile(id, importer, listed) ?? null,
 		"transform": function(code, id) {
-			// Skip the polyfills themselves; inject only where `process` is read as a free global — a property read
-			// (`process.platform`, `process["env"]`), in a module that doesn't declare a `process` of its own. Merely
-			// containing the word isn't enough: turndown (via just-bash) has `function process(node)`, and a `var process`
-			// on top of that is a redeclaration that fails the whole dependency bundle.
-			if (id.includes("node-stdlib-browser") || !(/(?<![\w.$])process\s*[.[]/u).test(code) || (/\b(?:function|var|let|const|class)\s+process\b/u).test(code)) {
+			// Skip unenv's own; inject only where `process` is read as a free global — a property read (`process.platform`,
+			// `process["env"]`), in a module that doesn't declare a `process` of its own. Merely containing the word isn't
+			// enough: turndown (via just-bash) has `function process(node)`, and a `var process` on top of that is a
+			// redeclaration that fails the whole dependency bundle.
+			if (isUnenv(id) || !(/(?<![\w.$])process\s*[.[]/u).test(code) || (/\b(?:function|var|let|const|class)\s+process\b/u).test(code)) {
 				return null;
 			}
 

@@ -28,15 +28,14 @@
     "jsx-async-runtime": "*",
     "mime": "*",
     "node-schedule": "*",
-    "node-stdlib-browser": "*",
     "object-scan": "*",
     "papaparse": "*",
     "playwright": "*",
     "pluralize": "*",
     "rolldown": "*",
     "tar-stream": "*",
+    "unenv": ">=2.0.0-rc.24",
     "vite": "*",
-    "vite-plugin-node-polyfills": "*",
     "webcrack": "*",
     "zod": "*"
   },
@@ -46,6 +45,7 @@
   },
   "devDependencies": {
     "typescript": "^6",
-    "typescript-7": "npm:typescript@7.1.0-dev.20261007.1"
+    "typescript-7": "npm:typescript@7.1.0-dev.20261007.1",
+    "unenv": "2.0.0-rc.24"
   }
 }
