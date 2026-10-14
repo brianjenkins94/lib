@@ -19,6 +19,7 @@
  * through its own file system; this decides their shape and where they go.
  */
 
+import type { WsConsumer } from "./detect.js";
 import { evidencePathFor, slug } from "./layout.js";
 import { isEntry } from "@brianjenkins94/util/env";
 
@@ -267,6 +268,72 @@ export function covers(caps: readonly string[], capability: string): boolean {
  *  version grew, which is outside the baseline until the policy allows it. */
 export function settledCaps(entry: BaselinePackages[string]): string[] {
 	return entry.caps.filter((capability) => entry.grew?.[capability] === undefined);
+}
+
+/**
+ * What the gate decides a package's call against: the settled join — what the part of `name` the project's code uses
+ * could reach when it began to (each workspace's entries for it, its subpaths too, less what grew since) — or, for a
+ * package no workspace imports itself (one a dependency uses), the whole package's settled capabilities. Undefined when
+ * the baseline has neither.
+ */
+export function settledReach(baseline: { "consumer"?: Record<string, WsConsumer>; "packages"?: BaselinePackages }, name: string): string[] | undefined {
+	const entries = Object.values(baseline.consumer ?? {}).flatMap((workspace) => Object.entries(workspace).filter(([spec, entry]) => entry.kind === "package" && (spec === name || spec.startsWith(name + "/"))).map(([, entry]) => entry));
+
+	if (entries.length > 0) {
+		return [...new Set(entries.flatMap((entry) => entry.caps.filter((capability) => entry.grew?.[capability] === undefined)))].sort();
+	}
+
+	const entry = baseline.packages?.[name];
+
+	return entry === undefined ? undefined : settledCaps(entry);
+}
+
+/**
+ * The baseline's `consumer` brought up to the code's use of its dependencies now (`next`): each entry as it is now, and
+ * what its reach gained since `previous` — a capability the entry couldn't reach before — recorded in its `grew` with
+ * what brought it in: the members the code started using, else the version the package moved to. A use that's new
+ * altogether grows too (the code started using a package it had), unless the package itself is new (`added`: taken as
+ * it is, as syncPackages takes a library added). With no `previous` (the baseline being made) nothing grows. Pure;
+ * `grew` names the entries that grew, `workspace spec`.
+ */
+export function syncConsumer(previous: Record<string, WsConsumer> | undefined, next: Record<string, WsConsumer>, added: ReadonlySet<string> = new Set()): { "consumer": Record<string, WsConsumer>; "grew": string[] } {
+	const consumer: Record<string, WsConsumer> = structuredClone(next);
+	const grew: string[] = [];
+
+	if (previous === undefined) {
+		return { "consumer": consumer, "grew": grew };
+	}
+
+	for (const [workspace, entries] of Object.entries(consumer)) {
+		for (const [spec, entry] of Object.entries(entries)) {
+			const before = previous[workspace]?.[spec];
+			const name = spec.startsWith("@") ? spec.split("/").slice(0, 2).join("/") : spec.split("/")[0];
+			const kept = { ...before?.grew };
+
+			if (before !== undefined || (entry.kind === "package" && !added.has(name))) {
+				const reach = before?.caps ?? [];
+				const members = entry.members.filter((member) => before?.members.includes(member) !== true);
+				const origin = members.length > 0 ? members.join(", ") : entry.dynamic && before?.dynamic !== true ? "*" : entry.version ?? "";
+
+				for (const capability of entry.caps.filter((each) => !covers(reach, each))) {
+					kept[capability] ??= origin;
+				}
+			}
+
+			// (what grew stays grown while it's still reached; a capability no longer reached drops out)
+			const still = Object.fromEntries(Object.entries(kept).filter(([capability]) => entry.caps.includes(capability)));
+
+			if (Object.keys(still).length > 0) {
+				entry.grew = still;
+			}
+
+			if (Object.keys(still).length > Object.keys(before?.grew ?? {}).filter((capability) => entry.caps.includes(capability)).length) {
+				grew.push(workspace + " " + spec);
+			}
+		}
+	}
+
+	return { "consumer": consumer, "grew": grew };
 }
 
 /**
@@ -717,5 +784,27 @@ if (isEntry(import.meta)) {
 		assert.deepEqual(confidence([...clean, toolRun("stop", "v2", 130, true)], "tool:fetch_page", "v2"), confidence(clean, "tool:fetch_page", "v2"));
 		assert.ok(confidence([...clean, toolRun("bad", "v2", 1)], "tool:fetch_page", "v2").score < 72, "a failure lowers it");
 		assert.deepEqual(confidence(clean, "tool:other", "v2"), { "band": "unproven", "score": 0, "n": 0 });
+
+		// The join's reach at the call: the code's use of a package it imports (less what grew), else the whole package.
+		const joined = { "consumer": { ".": { "tool": { "kind": "package", "version": "1.0.0", "members": ["load"], "dynamic": false, "caps": ["fs:read", "net"], "grew": { "net": "fetchAll" } }, "tool/extra": { "kind": "package", "version": "1.0.0", "members": ["x"], "dynamic": false, "caps": ["env"] } } }, "packages": { "tool": { "version": "1.0.0", "caps": ["exec", "fs", "net"] }, "deep": { "version": "2.0.0", "caps": ["exec"] } } };
+
+		assert.deepEqual(settledReach(joined, "tool"), ["env", "fs:read"], "the join: its subpaths too, less what grew");
+		assert.deepEqual(settledReach(joined, "deep"), ["exec"], "a package only a dependency uses: the whole package");
+		assert.equal(settledReach(joined, "absent"), undefined);
+
+		// The code's use growing: a member it started using that reaches more grows (with that member); a new use of a
+		// package it had grows; a package just added is taken as it is; a capability no longer reached drops out.
+		const entry = (members: string[], caps: string[], extra: Partial<WsConsumer[string]> = {}): WsConsumer[string] => ({ "kind": "package", "version": "1.0.0", "members": members, "dynamic": false, "caps": caps, ...extra });
+		const before = { ".": { "tool": entry(["load"], ["fs:read"]), "other": entry(["a"], ["exec"], { "grew": { "exec": "a" } }) } };
+		const grown = syncConsumer(before, { ".": { "tool": entry(["load", "fetchAll"], ["fs:read", "net"]), "other": entry(["b"], ["env"]), "fresh": entry(["go"], ["net"]), "known": entry(["run"], ["exec"]) } }, new Set(["fresh"]));
+
+		assert.deepEqual(grown.consumer["."]["tool"].grew, { "net": "fetchAll" });
+		assert.equal(grown.consumer["."]["other"].grew?.["exec"], undefined, "no longer reached: no longer grown");
+		assert.deepEqual(grown.consumer["."]["other"].grew, { "env": "b" });
+		assert.equal(grown.consumer["."]["fresh"].grew, undefined, "a package just added: taken as it is");
+		assert.deepEqual(grown.consumer["."]["known"].grew, { "exec": "run" }, "a new use of a package it had");
+		assert.deepEqual(grown.grew.sort(), [". known", ". other", ". tool"]);
+		assert.deepEqual(syncConsumer(undefined, { ".": { "tool": entry(["load"], ["net"]) } }).consumer["."]["tool"].grew, undefined, "the baseline being made: nothing grows");
+		assert.deepEqual(syncConsumer(grown.consumer, grown.consumer).grew, [], "nothing new: nothing grows again");
 	})();
 }

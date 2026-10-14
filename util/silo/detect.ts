@@ -127,8 +127,11 @@ export function add(s: Surface, spec: string, member: string, dynamic = false): 
 }
 
 /** One dependency as a workspace's code uses it: what kind of specifier, the version installed, the members its code
- *  imports (`dynamic`: some it can't name), and — for a builtin — the capabilities those reach. */
-export interface DepEntry { "kind": string; "version"?: string; "members": string[]; "dynamic": boolean; "caps": string[] }
+ *  imports (`dynamic`: some it can't name), and the capabilities those reach — a builtin's by its members, a package's
+ *  by its slice (`./slice`, the join; the whole package's when no slice could be built). `grew`: each capability its
+ *  reach gained after the baseline was made, with what brought it in — the members the code started using, or the
+ *  version it moved to (evidence's syncConsumer). */
+export interface DepEntry { "kind": string; "version"?: string; "members": string[]; "dynamic": boolean; "caps": string[]; "grew"?: Record<string, string> }
 export type WsConsumer = Record<string, DepEntry>;   // spec → dep, for one workspace
 
 /**
