@@ -244,10 +244,10 @@ export function queryRuns(runs: RunEnvelope[], query: RunQuery = {}): RunAnswer 
 	return { "total": matched.length, "runs": matched.slice(0, query.limit ?? 20), "effects": [...effects.values()].toSorted((a, b) => b.runs - a.runs || a.capability.localeCompare(b.capability) || a.resource.localeCompare(b.resource)) };
 }
 
-/** What a baseline accepted of each package (audit's `Baseline.packages`): its version, and what its own code may do —
- *  and, when a newer version installed can do more, that version and what it can do, `pending` until it's accepted
- *  (acceptPending): until then, what's new in it asks at the call. */
-export type AcceptedPackages = Record<string, { "version"?: string; "caps": string[]; "pending"?: { "version"?: string; "caps": string[] } }>;
+/** What a baseline says of each package (audit's `Baseline.packages`): its version, and what its own code can do — with,
+ *  for each capability a later version gained, the version that gained it (`grew`). A fact, as the rest is: what a grown
+ *  capability does at the call is the policy's to say (it asks, by default), never the baseline's. */
+export type BaselinePackages = Record<string, { "version"?: string; "caps": string[]; "grew"?: Record<string, string> }>;
 
 /** A package as it's installed: its version, and what its own code can do (`./detect`, by static analysis). */
 export type InstalledPackages = Record<string, { "version"?: string; "caps": string[] }>;
@@ -263,17 +263,22 @@ export function covers(caps: readonly string[], capability: string): boolean {
 	return caps.includes(named) || (named.startsWith("fs:") && caps.includes("fs"));
 }
 
+/** What a package's baseline accounts for at the call: what its code could do when it was added — not what a later
+ *  version grew, which is outside the baseline until the policy allows it. */
+export function settledCaps(entry: BaselinePackages[string]): string[] {
+	return entry.caps.filter((capability) => entry.grew?.[capability] === undefined);
+}
+
 /**
- * `accepted` brought up to what's `installed` — what changes when libraries are added, never what runs see. A package
- * not in it is accepted as its code is now (trust on first use: what a library can do is accepted when it's added). A new
- * version whose code can do nothing more takes the accepted one's place; one that can do more is `pending` — its new
- * capabilities ask at the call until it's accepted (acceptPending). The accepted version installed again drops a pending
- * one. A package no longer installed stays: what was accepted of it still was. Pure; `changed` names the packages, by
- * what happened to each.
+ * `baseline` brought up to what's `installed` — what changes when libraries are added, never what runs see. A package
+ * not in it is taken as its code is now (trust on first use: what a library can do is settled when it's added). A new
+ * version takes the old one's place; what it can do that the old couldn't is recorded with the version that grew it,
+ * and asks at the call as anything outside the baseline does. A package no longer installed stays: what it could do
+ * still was. Pure; `changed` names the packages, by what happened to each (`grew`: a new version that can do more).
  */
-export function syncPackages(accepted: AcceptedPackages, installed: InstalledPackages): { "packages": AcceptedPackages; "changed": { "added": string[]; "updated": string[]; "pending": string[] } } {
-	const packages: AcceptedPackages = structuredClone(accepted);
-	const changed = { "added": [] as string[], "updated": [] as string[], "pending": [] as string[] };
+export function syncPackages(baseline: BaselinePackages, installed: InstalledPackages): { "packages": BaselinePackages; "changed": { "added": string[]; "updated": string[]; "grew": string[] } } {
+	const packages: BaselinePackages = structuredClone(baseline);
+	const changed = { "added": [] as string[], "updated": [] as string[], "grew": [] as string[] };
 
 	for (const [name, now] of Object.entries(installed).toSorted(([one], [other]) => one.localeCompare(other))) {
 		const entry = packages[name];
@@ -282,36 +287,22 @@ export function syncPackages(accepted: AcceptedPackages, installed: InstalledPac
 		if (entry === undefined) {
 			packages[name] = { ...now.version === undefined ? {} : { "version": now.version }, "caps": caps };
 			changed.added.push(name);
-		} else if (entry.version === now.version) {
-			if (entry.pending !== undefined) {
-				delete entry.pending;
-				changed.updated.push(name);
-			}
-		} else if (entry.pending?.version !== now.version || entry.pending.caps.join() !== caps.join()) {
-			if (caps.every((capability) => covers(entry.caps, capability))) {
-				packages[name] = { ...now.version === undefined ? {} : { "version": now.version }, "caps": entry.caps };
-				changed.updated.push(name);
-			} else {
-				entry.pending = { ...now.version === undefined ? {} : { "version": now.version }, "caps": caps };
-				changed.pending.push(name);
-			}
+		} else if (entry.version !== now.version) {
+			const grown = caps.filter((capability) => !covers(entry.caps, capability));
+			const grew = { ...entry.grew, ...Object.fromEntries(grown.map((capability) => [capability, now.version ?? ""])) };
+
+			packages[name] = { ...now.version === undefined ? {} : { "version": now.version }, "caps": [...entry.caps, ...grown].toSorted(), ...Object.keys(grew).length === 0 ? {} : { "grew": grew } };
+			(grown.length === 0 ? changed.updated : changed.grew).push(name);
 		}
 	}
 
 	return { "packages": packages, "changed": changed };
 }
 
-/** `accepted` with `name`'s pending version accepted: its version, and what its code can do, now what's accepted of it.
- *  Unchanged when it has none. The approval a pending version waits for — made by a person, never by a run. */
-export function acceptPending(accepted: AcceptedPackages, name: string): AcceptedPackages {
-	const pending = accepted[name]?.pending;
-
-	return pending === undefined ? accepted : { ...accepted, [name]: { ...pending.version === undefined ? {} : { "version": pending.version }, "caps": pending.caps } };
-}
-
 /** A package's call a run made that its baseline doesn't account for: the package isn't in it (`new`), or the
- *  capability isn't among those accepted of it (`beyond`) — with the run it was in, and the version accepted, when the
- *  one that ran isn't it. A refused or skipped call counts too: it's what the package tried. */
+ *  capability isn't among what it could do when added (`beyond`; `grew`: the version that gained it, when one did) —
+ *  with the run it was in, and the baseline's version, when the one that ran isn't it. A refused or skipped call counts
+ *  too: it's what the package tried. */
 export interface BeyondBaseline {
 	"kind": "new" | "beyond";
 	"package": string;
@@ -320,12 +311,13 @@ export interface BeyondBaseline {
 	"how": Effect["how"];
 	"calls": number;
 	"run": { "id": string; "user": string; "entry": string; "endedAt": string };
-	"accepted"?: { "version"?: string; "caps": string[] };
+	"grew"?: string;
+	"baseline"?: BaselinePackages[string];
 }
 
-/** Every package call in `runs` that `accepted` (the baseline's packages) doesn't account for, newest run first. Pure:
+/** Every package call in `runs` that `baseline` (the baseline's packages) doesn't account for, newest run first. Pure:
  *  the runs and the baseline are both committed, so this is as true of the history as of now. */
-export function beyondBaseline(runs: RunEnvelope[], accepted: AcceptedPackages): BeyondBaseline[] {
+export function beyondBaseline(runs: RunEnvelope[], baseline: BaselinePackages): BeyondBaseline[] {
 	const found: BeyondBaseline[] = [];
 
 	for (const run of runs.toSorted((one, other) => other.endedAt.localeCompare(one.endedAt))) {
@@ -334,8 +326,9 @@ export function beyondBaseline(runs: RunEnvelope[], accepted: AcceptedPackages):
 				const at = effect.package.lastIndexOf("@");
 				const name = at > 0 ? effect.package.slice(0, at) : effect.package;
 				const version = at > 0 ? effect.package.slice(at + 1) : undefined;
-				const entry = accepted[name];
-				const covered = entry !== undefined && covers(entry.caps, effect.capability);
+				const entry = baseline[name];
+				const covered = entry !== undefined && covers(settledCaps(entry), effect.capability);
+				const grew = Object.entries(entry?.grew ?? {}).find(([capability]) => covers([capability], effect.capability))?.[1];
 
 				if (!covered) {
 					found.push({
@@ -346,7 +339,8 @@ export function beyondBaseline(runs: RunEnvelope[], accepted: AcceptedPackages):
 						"how": effect.how,
 						"calls": effect.calls,
 						"run": { "id": run.id, "user": run.user, "entry": run.entry, "endedAt": run.endedAt },
-						...entry === undefined || entry.version === version ? {} : { "accepted": entry }
+						...grew === undefined ? {} : { "grew": grew },
+						...entry === undefined || entry.version === version ? {} : { "baseline": entry }
 					});
 				}
 			}
@@ -654,37 +648,35 @@ if (isEntry(import.meta)) {
 
 		assert.deepEqual(byWhom.effects.map((each) => [each.package, each.calls]), [[undefined, 1], ["greet@1.2.3", 2]]);
 
-		// Beyond the baseline: a package's call it doesn't account for — a capability not accepted of it (a later version's
-		// net), or a package it doesn't have — and not the program's own, nor what it does account for.
-		const accepted = { "tool": { "version": "1.0.0", "caps": ["exec", "fs"] } };
+		// Beyond the baseline: a package's call it doesn't account for — a capability it couldn't do when added (a later
+		// version's net, grown in 1.1.0), or a package it doesn't have — and not the program's own, nor what it does account for.
+		const baseline = { "tool": { "version": "1.0.0", "caps": ["exec", "fs", "net"], "grew": { "net": "1.0.0" } } };
 		const beyond = beyondBaseline(parseRuns([{ ...run("f", "2026-10-06T00:00:00.000Z", "app.js", [
 			{ "capability": "exec", "resource": "ls", "how": "denied", "calls": 1, "package": "tool@1.1.0" },
 			{ "capability": "fs:write", "resource": "/workspace/x", "how": "denied", "calls": 1, "package": "tool@1.1.0" },
 			{ "capability": "net", "resource": "evil.example", "how": "made", "calls": 2, "package": "tool@1.1.0" },
 			{ "capability": "fs:read", "resource": "/etc/passwd", "how": "made", "calls": 1, "package": "other@2.0.0" },
 			{ "capability": "net", "resource": "api.example.com", "how": "made", "calls": 1 }
-		]) }].map((each) => JSON.stringify(each)).join("\n")), accepted);
+		]) }].map((each) => JSON.stringify(each)).join("\n")), baseline);
 
-		assert.deepEqual(beyond.map((each) => [each.kind, each.package, each.capability, each.accepted?.version]), [["beyond", "tool@1.1.0", "net", "1.0.0"], ["new", "other@2.0.0", "fs:read", undefined]]);
+		assert.deepEqual(beyond.map((each) => [each.kind, each.package, each.capability, each.grew, each.baseline?.version]), [["beyond", "tool@1.1.0", "net", "1.0.0", "1.0.0"], ["new", "other@2.0.0", "fs:read", undefined, undefined]]);
 
-		// Libraries added: a new one accepted as its code is; a new version that can do nothing more takes the old one's
-		// place; one that can do more is pending, its new capability not accepted until it's accepted; the accepted version
-		// installed again drops the pending one; one no longer installed stays.
+		// Libraries added: a new one taken as its code is; a new version that can do nothing more takes the old one's
+		// place; one that can do more takes it too, what it grew recorded with the version that grew it — outside what's
+		// settled, so it asks at the call; one no longer installed stays.
 		const synced = syncPackages({ "tool": { "version": "1.0.0", "caps": ["exec", "fs"] }, "same": { "version": "1.0.0", "caps": ["net"] }, "gone": { "version": "1.0.0", "caps": [] } }, {
 			"tool": { "version": "1.1.0", "caps": ["exec", "fs:read", "net"] },
 			"same": { "version": "1.2.0", "caps": ["net"] },
 			"fresh": { "version": "0.1.0", "caps": ["env"] }
 		});
 
-		assert.deepEqual(synced.changed, { "added": ["fresh"], "updated": ["same"], "pending": ["tool"] });
-		assert.deepEqual(synced.packages["tool"], { "version": "1.0.0", "caps": ["exec", "fs"], "pending": { "version": "1.1.0", "caps": ["exec", "fs:read", "net"] } });
+		assert.deepEqual(synced.changed, { "added": ["fresh"], "updated": ["same"], "grew": ["tool"] });
+		assert.deepEqual(synced.packages["tool"], { "version": "1.1.0", "caps": ["exec", "fs", "net"], "grew": { "net": "1.1.0" } });
 		assert.deepEqual(synced.packages["same"], { "version": "1.2.0", "caps": ["net"] });
 		assert.deepEqual(synced.packages["gone"], { "version": "1.0.0", "caps": [] });
-		assert.ok(!covers(synced.packages["tool"].caps, "net") && covers(synced.packages["tool"].caps, "fs:read"), "pending isn't accepted");
-		assert.deepEqual(syncPackages(synced.packages, { "tool": { "version": "1.1.0", "caps": ["exec", "fs:read", "net"] } }).changed, { "added": [], "updated": [], "pending": [] }, "already pending: nothing new");
-		assert.equal(syncPackages(synced.packages, { "tool": { "version": "1.0.0", "caps": ["exec", "fs"] } }).packages["tool"].pending, undefined, "back to the accepted version");
-		assert.deepEqual(acceptPending(synced.packages, "tool")["tool"], { "version": "1.1.0", "caps": ["exec", "fs:read", "net"] });
-		assert.equal(acceptPending(synced.packages, "same"), synced.packages, "nothing pending: unchanged");
+		assert.ok(!covers(settledCaps(synced.packages["tool"]), "net") && covers(settledCaps(synced.packages["tool"]), "fs:read"), "what grew isn't settled");
+		assert.deepEqual(syncPackages(synced.packages, { "tool": { "version": "1.1.0", "caps": ["exec", "fs:read", "net"] } }).changed, { "added": [], "updated": [], "grew": [] }, "the same version: nothing new");
+		assert.deepEqual(syncPackages(synced.packages, { "tool": { "version": "1.2.0", "caps": ["env", "net"] } }).packages["tool"], { "version": "1.2.0", "caps": ["env", "exec", "fs", "net"], "grew": { "env": "1.2.0", "net": "1.1.0" } }, "what grew keeps the version that grew it");
 		assert.ok(covers(["net"], "net.ws") && !covers(["fs:read"], "fs:write"));
 
 		// By package: a name (any version, a scope's too) or a name@version.

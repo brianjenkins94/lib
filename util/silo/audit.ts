@@ -22,7 +22,7 @@ import { find } from "@brianjenkins94/util/find";
 import * as fs from "@brianjenkins94/util/fs";
 
 import { type Surface, type SurfaceEntry, add, builtinCaps, classifyKind, detect, surfaceOfSource } from "./detect.js";
-import { type AcceptedPackages, syncPackages } from "./evidence.js";
+import { type BaselinePackages, syncPackages } from "./evidence.js";
 import { type SiloPaths, ensureSiloDir, findRoot, siloPaths } from "./paths.js";
 import { type ReviewStore, serializeStore } from "./review.js";
 
@@ -156,8 +156,8 @@ export function capabilitiesOf(file: string): string[] {
 
 interface DepEntry { "kind": string; "version"?: string; "members": string[]; "dynamic": boolean; "caps": string[] }
 export type WsConsumer = Record<string, DepEntry>;   // spec → dep, for one workspace
-type PkgEntry = AcceptedPackages[string];
-export interface Baseline { "consumer": Record<string, WsConsumer>; "packages": AcceptedPackages }
+type PkgEntry = BaselinePackages[string];
+export interface Baseline { "consumer": Record<string, WsConsumer>; "packages": BaselinePackages }
 
 export const loadBaseline = (paths: SiloPaths): Baseline => ({ "consumer": {}, "packages": {}, ...(fs.existsSync(paths.baseline) ? JSON.parse(fs.readFileSync(paths.baseline)) : {}) });
 
@@ -303,7 +303,7 @@ export async function installedPackages(root: string): Promise<Record<string, Pk
 	return Object.fromEntries(Object.entries(packages).sort(([one], [other]) => one.localeCompare(other)));
 }
 
-/** First-run onboarding: accept the CURRENT surface as the baseline starting line and write it — what the code imports
+/** First-run onboarding: take the CURRENT surface as the baseline starting line and write it — what the code imports
  *  (`consumer`) and what each installed package can do (`packages`) — the TOFU bare `silo` does on a fresh project.
  *  Every later expansion still drifts against this. */
 export async function establishBaseline(paths: SiloPaths, target: string): Promise<Baseline> {
@@ -317,11 +317,10 @@ export async function establishBaseline(paths: SiloPaths, target: string): Promi
 }
 
 /** The baseline, made if there isn't one (establishBaseline) — else brought up to what's installed: a library added is
- *  accepted as its code is, a new version that can do more is pending until it's accepted (evidence's syncPackages). What
- *  was accepted is never remade, and runs never change it: an accepted change is an approval. `changed` names the
- *  packages synced (none when it was just made). */
+ *  taken as its code is, a new version that can do more records what it grew (evidence's syncPackages). It's never
+ *  remade, and runs never change it. `changed` names the packages synced (none when it was just made). */
 export async function ensureBaseline(paths: SiloPaths, target: string = paths.root): Promise<{ "created": boolean; "baseline": Baseline; "changed": ReturnType<typeof syncPackages>["changed"] }> {
-	const none = { "added": [], "updated": [], "pending": [] };
+	const none = { "added": [], "updated": [], "grew": [] };
 
 	if (!fs.existsSync(paths.baseline)) {
 		return { "created": true, "baseline": await establishBaseline(paths, target), "changed": none };
@@ -330,7 +329,7 @@ export async function ensureBaseline(paths: SiloPaths, target: string = paths.ro
 	const baseline = loadBaseline(paths);
 	const { packages, changed } = syncPackages(baseline.packages, await installedPackages(paths.root));
 
-	if (changed.added.length + changed.updated.length + changed.pending.length > 0) {
+	if (changed.added.length + changed.updated.length + changed.grew.length > 0) {
 		baseline.packages = Object.fromEntries(Object.entries(packages).toSorted(([one], [other]) => one.localeCompare(other)));
 		await saveBaseline(paths, baseline);
 	}
@@ -379,8 +378,8 @@ if (isEntry(import.meta)) {
 		assert.deepEqual(packages["fetcher"]?.caps, ["net"]);
 		assert.deepEqual(packages["@scope/quiet"]?.caps, []);
 
-		// Made once; then kept up to what's installed, never remade: what was accepted stays, a library added is accepted,
-		// and a new version that can do more is pending.
+		// Made once; then kept up to what's installed, never remade: a library added is taken as it is, and a new version
+		// that can do more records what it grew.
 		const paths = siloPaths(root);
 		const first = await ensureBaseline(paths);
 
@@ -391,9 +390,9 @@ if (isEntry(import.meta)) {
 		const again = await ensureBaseline(paths);
 
 		assert.equal(again.created, false);
-		assert.deepEqual(again.changed, { "added": ["@scope/quiet", "fetcher"], "updated": [], "pending": ["tool"] });
-		assert.deepEqual(loadBaseline(paths).packages["tool"], { "version": "0.9.0", "caps": [], "pending": { "version": "1.0.0", "caps": ["exec"] } });
-		assert.deepEqual((await ensureBaseline(paths)).changed, { "added": [], "updated": [], "pending": [] }, "nothing installed changed: nothing to do");
+		assert.deepEqual(again.changed, { "added": ["@scope/quiet", "fetcher"], "updated": [], "grew": ["tool"] });
+		assert.deepEqual(loadBaseline(paths).packages["tool"], { "version": "1.0.0", "caps": ["exec"], "grew": { "exec": "1.0.0" } });
+		assert.deepEqual((await ensureBaseline(paths)).changed, { "added": [], "updated": [], "grew": [] }, "nothing installed changed: nothing to do");
 
 		await fs.rm(root, { "recursive": true, "force": true });
 	})();
