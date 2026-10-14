@@ -1,13 +1,10 @@
 /**
  * silo — the Node audit layer over the pure kernels (`./detect`, `./reach`). Extracted from the `silo`
  * prototype; combines `detect/import-surface.ts` (fs file-walking), `commands/audit.ts` (baseline + drift) and
- * `shared/paths.ts` (root/`.silo/` layout) — with silo's two heavy edges CUT:
- *
- *   • NO node_modules-package capability probing (silo's `detect/package-capabilities` → rolldown/webcrack
- *     DCE — that lives in `./packages`). A builtin's caps come from `./detect` `builtinCaps`; a package
- *     records its member/version surface but no bundle-probed cap set. A file's own reach is `./detect`
- *     `detect` (a pure source scan).
- *   • NO review: the prototype's per-function "have you read it" (its AI-approval purpose) was dropped.
+ * `shared/paths.ts` (root/`.silo/` layout). A builtin's caps come from `./detect` `builtinCaps`; a package's, in the
+ * code's use of it, are the join — what the members the code imports reach (`./slice`, rolldown tree-shaking the
+ * package's files in node_modules), as the editor's are off its tarball. The prototype's per-function review was
+ * dropped.
  *
  * Each file's import surface is read by TypeScript ≥ 7.1 (`./typescript`'s readSources, `./reach`'s surfaceOf) — the
  * caller's (silo bundles one), else the project's own.
@@ -22,9 +19,10 @@ import { find } from "@brianjenkins94/util/find";
 import * as fs from "@brianjenkins94/util/fs";
 
 import { type Surface, type SurfaceEntry, type WsConsumer, add, classifyKind, consumerOf, detect, packageCaps, surfaceEntries } from "./detect.js";
-import { type BaselinePackages, syncPackages } from "./evidence.js";
+import { type BaselinePackages, JOIN, joinedBefore, joinsWanted, syncConsumer, syncPackages } from "./evidence.js";
 import { type SiloPaths, ensureSiloDir, findRoot, siloPaths } from "./paths.js";
 import { surfaceOf } from "./reach.js";
+import { type Rolldown, sliceCaps } from "./slice.js";
 import { type TypeScriptModules, astOf, readSources, typescriptModules } from "./typescript.js";
 
 // The `.silo/` location + layout live in ./paths (parser-free, shared with ./runs and util/mcp). Re-exported so
@@ -44,17 +42,30 @@ export function classify(spec: string, fromDir: string, stopRoot: string = fromD
 
 	if (kind.kind !== "package") { return kind; }
 	const pkg = kind.pkg as string;
+	const dir = packageDir(pkg, fromDir, stopRoot);
 
-	// Walk node_modules up from the workspace dir to the project root: a workspace-local version wins, else the
-	// hoisted root one — so non-hoisted monorepos resolve the version each package actually has.
-	for (let d = path.resolve(fromDir), stop = path.resolve(stopRoot); ; d = path.dirname(d)) {
-		const pj = path.join(d, "node_modules", pkg, "package.json");
-
-		if (fs.existsSync(pj)) { try { return { "kind": "package", "pkg": pkg, "version": JSON.parse(fs.readFileSync(pj)).version }; } catch { break; } }
-		if (d === stop || d === path.dirname(d)) { break; }
+	if (dir !== undefined) {
+		try { return { "kind": "package", "pkg": pkg, "version": JSON.parse(fs.readFileSync(path.join(dir, "package.json"))).version }; } catch { /* (unreadable: no version) */ }
 	}
 
 	return { "kind": "package", "pkg": pkg };
+}
+
+/** Where package `pkg` is installed for code in `fromDir`: node_modules walked up to `stopRoot` — a workspace-local
+ *  install wins, else the hoisted one, so a non-hoisted monorepo resolves the copy each workspace actually has. */
+export function packageDir(pkg: string, fromDir: string, stopRoot: string = fromDir): string | undefined {
+	for (let d = path.resolve(fromDir), stop = path.resolve(stopRoot); ; d = path.dirname(d)) {
+		if (fs.existsSync(path.join(d, "node_modules", pkg, "package.json"))) { return path.join(d, "node_modules", pkg); }
+		if (d === stop || d === path.dirname(d)) { return undefined; }
+	}
+}
+
+/** A package's own files (in `dir`) that its analysis reads — code files and the manifest, by path within it — never a
+ *  nested node_modules: each dependency is its own entry. */
+export async function ownFiles(dir: string): Promise<Map<string, string>> {
+	const files = await find(dir).type("f").prune((container) => container !== dir && path.basename(container) === "node_modules").exec();
+
+	return new Map(files.map((file) => path.relative(dir, file).split(path.sep).join("/")).filter((file) => /\.[cm]?js$/u.test(file) || file === "package.json").map((file) => [file, fs.readFileSync(path.join(dir, file))] as const));
 }
 
 /** TypeScript ≥ 7.1 to read the code with: `typescript`, else the project's own (at `root`). Throws without one. */
@@ -140,7 +151,7 @@ export function capabilitiesOf(file: string): string[] {
 
 export type { WsConsumer };
 type PkgEntry = BaselinePackages[string];
-export interface Baseline { "consumer": Record<string, WsConsumer>; "packages": BaselinePackages }
+export interface Baseline { "consumer": Record<string, WsConsumer>; "packages": BaselinePackages; "join"?: number }
 
 export const loadBaseline = (paths: SiloPaths): Baseline => ({ "consumer": {}, "packages": {}, ...(fs.existsSync(paths.baseline) ? JSON.parse(fs.readFileSync(paths.baseline)) : {}) });
 
@@ -231,12 +242,8 @@ export async function installedPackages(root: string): Promise<Record<string, Pk
 		}
 	};
 
-	// (its own files — never a nested node_modules: each dependency is its own entry — read for detect's one package analysis)
-	const ownCaps = async (dir: string): Promise<string[]> => {
-		const files = await find(dir).type("f").prune((container) => container !== dir && path.basename(container) === "node_modules").exec();
-
-		return packageCaps(files.map((file) => path.relative(dir, file).split(path.sep).join("/")).filter((file) => /\.[cm]?js$/u.test(file) || file === "package.json").map((file) => [file, fs.readFileSync(path.join(dir, file))] as const));
-	};
+	// (its own files read for detect's one package analysis)
+	const ownCaps = async (dir: string): Promise<string[]> => packageCaps(await ownFiles(dir));
 
 	while (queue.length > 0) {
 		const modules = queue.shift() ?? "";
@@ -263,39 +270,88 @@ export async function installedPackages(root: string): Promise<Record<string, Pk
 	return Object.fromEntries(Object.entries(packages).sort(([one], [other]) => one.localeCompare(other)));
 }
 
+/** rolldown's, to slice with: `rolldown` when given, else the one installed beside util (its optional peer); undefined
+ *  without one — every join is then the whole package's. */
+async function rolldownOf(rolldown?: Rolldown): Promise<Rolldown | undefined> {
+	// (a specifier made at run time, so a bundler of this module doesn't follow it)
+	return rolldown ?? (await import(/* @vite-ignore */ ["rolldown"].join("")).catch(() => undefined) as { "rolldown"?: Rolldown } | undefined)?.rolldown;
+}
+
+/**
+ * Each package entry of the code's use (`read`, consumerSurface's) set to its join — kept from `existing` where it's
+ * the same use of the same version (evidence's joinsWanted), else its slice read off the package's files in
+ * node_modules (`./slice`), or the whole package's capabilities where no slice could be built (or there's no
+ * rolldown). A package that isn't installed keeps none: the policy decides its calls.
+ */
+export async function joinUses(read: Record<string, WsConsumer>, existing: Baseline | undefined, root: string, rolldown?: Rolldown): Promise<void> {
+	const wanted = joinsWanted(read, existing);
+	const bundler = wanted.size > 0 ? await rolldownOf(rolldown) : undefined;
+
+	for (const [name, slices] of wanted) {
+		// (by where each workspace's copy is: a non-hoisted monorepo can hold more than one)
+		const byDir = Map.groupBy(slices, (slice) => packageDir(name, path.join(root, slice.workspace), root) ?? "");
+
+		for (const [dir, each] of byDir) {
+			if (dir === "") {
+				continue;
+			}
+
+			const files = await ownFiles(dir);
+			const whole = packageCaps(files);
+
+			for (const slice of each) {
+				read[slice.workspace][slice.spec].caps = (bundler === undefined ? undefined : await sliceCaps(bundler, name, files, slice.spec, slice.members)) ?? whole;
+			}
+		}
+	}
+}
+
 /** First-run onboarding: take the CURRENT surface as the baseline starting line and write it — what the code imports
- *  (`consumer`) and what each installed package can do (`packages`) — the TOFU bare `silo` does on a fresh project.
- *  Every later expansion still drifts against this. */
-export async function establishBaseline(paths: SiloPaths, target: string, typescript?: TypeScriptModules): Promise<Baseline> {
+ *  (`consumer`, with the join of each package's use) and what each installed package can do (`packages`) — the TOFU
+ *  bare `silo` does on a fresh project. Every later expansion still drifts against this. */
+export async function establishBaseline(paths: SiloPaths, target: string, typescript?: TypeScriptModules, rolldown?: Rolldown): Promise<Baseline> {
 	const b = loadBaseline(paths);
 
 	b.consumer = await consumerSurface(target, paths.root, typescript);
+	await joinUses(b.consumer, undefined, paths.root, rolldown);
 	b.packages = await installedPackages(paths.root);
+	b.join = JOIN;
 	await saveBaseline(paths, b);
 
 	return b;
 }
 
-/** The baseline, made if there isn't one (establishBaseline) — else brought up to what's installed: a library added is
- *  taken as its code is, a new version that can do more records what it grew (evidence's syncPackages). It's never
- *  remade, and runs never change it. `changed` names the packages synced (none when it was just made). `typescript` reads
- *  the code when it's made (default: the project's own, ≥ 7.1). */
-export async function ensureBaseline(paths: SiloPaths, target: string = paths.root, typescript?: TypeScriptModules): Promise<{ "created": boolean; "baseline": Baseline; "changed": ReturnType<typeof syncPackages>["changed"] }> {
+/** The baseline, made if there isn't one (establishBaseline) — else brought up to what's installed and to the code: a
+ *  library added is taken as its code is, a new version that can do more records what it grew (evidence's
+ *  syncPackages), and the code's use of each package — its join — records what it reaches more, with the members that
+ *  brought it in (evidence's syncConsumer). It's never remade, and runs never change it. `changed` names the packages
+ *  synced, `used` the uses that grew (`workspace spec`; none of either when it was just made). `typescript` reads the
+ *  code (default: the project's own, ≥ 7.1); `rolldown` slices the joins (default: the one beside util). */
+export async function ensureBaseline(paths: SiloPaths, target: string = paths.root, typescript?: TypeScriptModules, rolldown?: Rolldown): Promise<{ "created": boolean; "baseline": Baseline; "changed": ReturnType<typeof syncPackages>["changed"]; "used": string[] }> {
 	const none = { "added": [], "updated": [], "grew": [] };
 
 	if (!fs.existsSync(paths.baseline)) {
-		return { "created": true, "baseline": await establishBaseline(paths, target, typescript), "changed": none };
+		return { "created": true, "baseline": await establishBaseline(paths, target, typescript, rolldown), "changed": none, "used": [] };
 	}
 
 	const baseline = loadBaseline(paths);
+	const before = JSON.stringify(baseline);
 	const { packages, changed } = syncPackages(baseline.packages, await installedPackages(paths.root));
+	const read = await consumerSurface(target, paths.root, typescript);
 
-	if (changed.added.length + changed.updated.length + changed.grew.length > 0) {
-		baseline.packages = Object.fromEntries(Object.entries(packages).toSorted(([one], [other]) => one.localeCompare(other)));
+	await joinUses(read, baseline, paths.root, rolldown);
+
+	const { consumer, grew } = syncConsumer(joinedBefore(baseline), read, new Set(changed.added));
+
+	baseline.packages = Object.fromEntries(Object.entries(packages).toSorted(([one], [other]) => one.localeCompare(other)));
+	baseline.consumer = consumer;
+	baseline.join = JOIN;
+
+	if (JSON.stringify(baseline) !== before) {
 		await saveBaseline(paths, baseline);
 	}
 
-	return { "created": false, "baseline": baseline, "changed": changed };
+	return { "created": false, "baseline": baseline, "changed": changed, "used": grew };
 }
 
 if (isEntry(import.meta)) {
@@ -315,11 +371,16 @@ if (isEntry(import.meta)) {
 		await write("node_modules/tool/node_modules/fetcher/index.js", "module.exports = () => fetch(\"https://example.com\");");
 		await write("node_modules/@scope/quiet/package.json", JSON.stringify({ "name": "@scope/quiet", "version": "0.1.0" }));
 		await write("node_modules/@scope/quiet/index.js", "module.exports = 1;");
+		await write("node_modules/kit/package.json", JSON.stringify({ "name": "kit", "version": "3.0.0", "type": "module", "exports": "./index.js" }));
+		await write("node_modules/kit/index.js", "export { save } from \"./save.js\";\nexport { ping } from \"./ping.js\";\n");
+		await write("node_modules/kit/save.js", "import { writeFileSync } from \"node:fs\";\nexport const save = (p, d) => writeFileSync(p, d);\n");
+		await write("node_modules/kit/ping.js", "export const ping = (u) => fetch(u);\n");
+		await write("lib.js", "import { save } from \"kit\";\nsave(\"a\", \"b\");\n");
 
 		// Each package by its own files: tool's exec isn't fetcher's, nor fetcher's net tool's.
 		const packages = await installedPackages(root);
 
-		assert.deepEqual(Object.keys(packages), ["@scope/quiet", "fetcher", "tool"]);
+		assert.deepEqual(Object.keys(packages), ["@scope/quiet", "fetcher", "kit", "tool"]);
 		assert.deepEqual(packages["tool"], { "version": "1.0.0", "caps": ["exec"] });
 		assert.deepEqual(packages["fetcher"]?.caps, ["net"]);
 		assert.deepEqual(packages["@scope/quiet"]?.caps, []);
@@ -345,16 +406,40 @@ if (isEntry(import.meta)) {
 
 		assert.equal(first.created, true);
 		assert.ok("tool" in first.baseline.packages);
-		// The code's use of its dependencies, read by TypeScript: app.js uses tool's spawn.
-		assert.deepEqual(first.baseline.consumer, { ".": { "tool": { "kind": "package", "version": "1.0.0", "members": ["spawn"], "dynamic": false, "caps": [] } } });
+		// The code's use of its dependencies, read by TypeScript, each package's with its join: app.js uses tool's spawn
+		// (one CommonJS object: the whole package), lib.js kit's save — not its ping.
+		assert.equal(first.baseline.join, 1);
+		assert.deepEqual(first.baseline.consumer, { ".": {
+			"kit": { "kind": "package", "version": "3.0.0", "members": ["save"], "dynamic": false, "caps": ["fs:write"] },
+			"tool": { "kind": "package", "version": "1.0.0", "members": ["spawn"], "dynamic": false, "caps": ["exec"] }
+		} });
+		assert.deepEqual(first.baseline.packages["kit"]?.caps, ["fs:write", "net"]);
 		fs.writeFileSync(paths.baseline, JSON.stringify({ ...first.baseline, "packages": { "tool": { "version": "0.9.0", "caps": [] } } }));
 
-		const again = await ensureBaseline(paths);
+		const again = await ensureBaseline(paths, root, typescript);
 
 		assert.equal(again.created, false);
-		assert.deepEqual(again.changed, { "added": ["@scope/quiet", "fetcher"], "updated": [], "grew": ["tool"] });
+		assert.deepEqual(again.changed, { "added": ["@scope/quiet", "fetcher", "kit"], "updated": [], "grew": ["tool"] });
 		assert.deepEqual(loadBaseline(paths).packages["tool"], { "version": "1.0.0", "caps": ["exec"], "grew": { "exec": "1.0.0" } });
-		assert.deepEqual((await ensureBaseline(paths)).changed, { "added": [], "updated": [], "grew": [] }, "nothing installed changed: nothing to do");
+		assert.deepEqual(again.used, [], "the code's use unchanged: nothing grew there");
+
+		const unchanged = fs.readFileSync(paths.baseline);
+
+		assert.deepEqual((await ensureBaseline(paths, root, typescript)).changed, { "added": [], "updated": [], "grew": [] }, "nothing installed changed: nothing to do");
+		assert.equal(fs.readFileSync(paths.baseline), unchanged, "nor written");
+
+		// The code starts using kit's ping: its join grows by net, with ping as what brought it in.
+		await write("lib.js", "import { save, ping } from \"kit\";\nsave(\"a\", await ping(\"https://example.com\"));\n");
+
+		const used = await ensureBaseline(paths, root, typescript);
+
+		assert.deepEqual(used.used, [". kit"]);
+		assert.deepEqual(used.baseline.consumer["."]["kit"], { "kind": "package", "version": "3.0.0", "members": ["ping", "save"], "dynamic": false, "caps": ["fs:write", "net"], "grew": { "net": "ping" } });
+
+		// A baseline without the join mark (an older one): its consumer is taken as read now — nothing grows from it.
+		fs.writeFileSync(paths.baseline, JSON.stringify({ ...loadBaseline(paths), "consumer": { ".": { "kit": { "kind": "package", "version": "3.0.0", "members": ["save"], "dynamic": false, "caps": [] } } }, "join": undefined }));
+		assert.deepEqual((await ensureBaseline(paths, root, typescript)).used, []);
+		assert.equal(loadBaseline(paths).join, 1);
 
 		await fs.rm(root, { "recursive": true, "force": true });
 	})();

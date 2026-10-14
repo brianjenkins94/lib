@@ -336,6 +336,52 @@ export function syncConsumer(previous: Record<string, WsConsumer> | undefined, n
 	return { "consumer": consumer, "grew": grew };
 }
 
+/** baseline.json's `join` mark: 1 when the consumer's package entries hold their joins (what the code's use of each can
+ *  reach). A baseline without it — from before, or written by a front end that doesn't slice — has none to keep or to
+ *  grow from. */
+export const JOIN = 1;
+
+/** One slice of a package to read for the join: the workspace and specifier of the code's use, and the members it uses
+ *  (`*`: all of them — a dynamic use, or one that names none). */
+export interface JoinSlice { "workspace": string; "spec": string; "members": string[] }
+
+/** The package a specifier names (`@scope/name/sub` → `@scope/name`). */
+function packageOfSpec(spec: string): string {
+	return spec.split("/").slice(0, spec.startsWith("@") ? 2 : 1).join("/");
+}
+
+/**
+ * The slices to read for the code's use now (`next`, consumerOf's), by package: every package entry's, but one that's
+ * the same use of the same version as in `existing` (a baseline with the join mark), whose join is kept — set on `next`,
+ * which this changes. Both front ends read what this names (the editor off tarballs, the command line off node_modules)
+ * and set each entry's `caps` to its slice's, or the whole package's where no slice could be built.
+ */
+export function joinsWanted(next: Record<string, WsConsumer>, existing: { "consumer"?: Record<string, WsConsumer>; "join"?: number } | undefined): Map<string, JoinSlice[]> {
+	const slices = new Map<string, JoinSlice[]>();
+
+	for (const [workspace, entries] of Object.entries(next)) {
+		for (const [spec, entry] of Object.entries(entries).filter(([, each]) => each.kind === "package")) {
+			const before = existing?.join === JOIN ? existing.consumer?.[workspace]?.[spec] : undefined;
+
+			if (before !== undefined && before.version === entry.version && before.dynamic === entry.dynamic && before.members.join() === entry.members.join()) {
+				entry.caps = before.caps;
+			} else {
+				const name = packageOfSpec(spec);
+
+				slices.set(name, [...slices.get(name) ?? [], { "workspace": workspace, "spec": spec, "members": entry.dynamic || entry.members.length === 0 ? ["*"] : entry.members }]);
+			}
+		}
+	}
+
+	return slices;
+}
+
+/** What the code's use grows from (syncConsumer's `previous`): `existing`'s consumer when it holds joins and was read —
+ *  an empty one wasn't (the code couldn't be read when the baseline was made) — else undefined: nothing grows. */
+export function joinedBefore(existing: { "consumer"?: Record<string, WsConsumer>; "join"?: number } | undefined): Record<string, WsConsumer> | undefined {
+	return existing?.join === JOIN && Object.keys(existing.consumer ?? {}).length > 0 ? existing.consumer : undefined;
+}
+
 /**
  * `baseline` brought up to what's `installed` — what changes when libraries are added, never what runs see. A package
  * not in it is taken as its code is now (trust on first use: what a library can do is settled when it's added). A new
@@ -806,5 +852,17 @@ if (isEntry(import.meta)) {
 		assert.deepEqual(grown.grew.sort(), [". known", ". other", ". tool"]);
 		assert.deepEqual(syncConsumer(undefined, { ".": { "tool": entry(["load"], ["net"]) } }).consumer["."]["tool"].grew, undefined, "the baseline being made: nothing grows");
 		assert.deepEqual(syncConsumer(grown.consumer, grown.consumer).grew, [], "nothing new: nothing grows again");
+
+		// What to slice: a use unchanged since a baseline with joins keeps its join; any other is read, `*` when dynamic.
+		const kept = { "consumer": { ".": { "tool": entry(["load"], ["fs:read"]), "@s/p/sub": entry(["x"], ["env"]) } }, "join": JOIN };
+		const now = { ".": { "tool": entry(["load"], []), "@s/p/sub": entry(["x"], [], { "version": "2.0.0" }), "dyn": entry([], [], { "dynamic": true }), "node:fs": { "kind": "builtin" as const, "members": ["readFileSync"], "dynamic": false, "caps": ["fs:read"] } } };
+		const wanted = joinsWanted(now, kept);
+
+		assert.deepEqual(now["."]["tool"].caps, ["fs:read"], "the same use of the same version: its join kept");
+		assert.deepEqual([...wanted], [["@s/p", [{ "workspace": ".", "spec": "@s/p/sub", "members": ["x"] }]], ["dyn", [{ "workspace": ".", "spec": "dyn", "members": ["*"] }]]]);
+		assert.equal(joinsWanted(structuredClone(now), { ...kept, "join": undefined }).size, 3, "no join mark: nothing kept");
+		assert.equal(joinedBefore({ "consumer": {}, "join": JOIN }), undefined, "an empty consumer wasn't read: nothing grows from it");
+		assert.equal(joinedBefore({ "consumer": kept.consumer }), undefined, "no join mark: nothing grows from it");
+		assert.equal(joinedBefore(kept), kept.consumer);
 	})();
 }
