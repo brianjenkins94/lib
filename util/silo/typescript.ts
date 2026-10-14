@@ -23,12 +23,11 @@
 import type { WayIn } from "./features";
 import type { Analyzer } from "./graph";
 import type { FileAnalysis, TsHost, TsNode } from "./ts-analysis";
-import * as fs from "node:fs";
 import { createRequire } from "node:module";
-import * as os from "node:os";
 import * as path from "node:path";
 import * as url from "node:url";
 import { isEntry } from "@brianjenkins94/util/env";
+import * as fs from "@brianjenkins94/util/fs";
 import { isManifest, isSource, waysInManifest } from "./features";
 import { candidates, packageOf } from "./graph";
 import { analysisOf, analyzeFile, stale } from "./ts-analysis";
@@ -100,19 +99,19 @@ const ALIAS = 2_097_152; // SymbolFlags.Alias
 
 /** What a tsconfig's compilerOptions come to, as the compiler parses them — for a project with none, TypeScript's for a
  *  module a bundler resolves (parsed from a temporary tsconfig, so the compiler gives its own values). */
-function parsedOptions(api: any, tsconfig: string): Record<string, unknown> {
+async function parsedOptions(api: any, tsconfig: string): Promise<Record<string, unknown>> {
 	if (fs.existsSync(tsconfig)) {
 		return api.parseConfigFile(tsconfig).options;
 	}
 
-	const folder = fs.mkdtempSync(path.join(os.tmpdir(), "silo-tsconfig-"));
+	const folder = await fs.mkdtemp(path.join(fs.tmpdir(), "silo-tsconfig-"));
 
 	try {
 		fs.writeFileSync(path.join(folder, "tsconfig.json"), JSON.stringify({ "compilerOptions": { "module": "esnext", "moduleResolution": "bundler", "target": "esnext", "jsx": "preserve" } }));
 
 		return api.parseConfigFile(path.join(folder, "tsconfig.json")).options;
 	} finally {
-		fs.rmSync(folder, { "force": true, "recursive": true });
+		await fs.rm(folder, { "force": true, "recursive": true });
 	}
 }
 
@@ -136,7 +135,7 @@ export async function typescriptAnalyzer(options: TypeScriptAnalyzerOptions): Pr
 	const api = new ts.sync.API({ "cwd": root });
 	// The program reads the JavaScript sources too. A project with no tsconfig (plain JavaScript, say) is read with
 	// TypeScript's defaults for a module that a bundler resolves.
-	const baseOptions = { ...parsedOptions(api, options.tsconfig ?? root + "/tsconfig.json"), "allowJs": true };
+	const baseOptions = { ...await parsedOptions(api, options.tsconfig ?? root + "/tsconfig.json"), "allowJs": true };
 	let compilerOptions: Record<string, unknown> = baseOptions;
 	let packagesKey = "";
 
@@ -296,7 +295,7 @@ if (isEntry(import.meta)) {
 		const { replay } = await import("./history");
 
 		// A repository with only a tsconfig on disk: every version of its sources comes from the snapshots.
-		const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "silo-typescript-")));
+		const root = await fs.realpath(await fs.mkdtemp(path.join(fs.tmpdir(), "silo-typescript-")));
 
 		fs.writeFileSync(path.join(root, "tsconfig.json"), JSON.stringify({ "compilerOptions": { "module": "esnext", "moduleResolution": "bundler", "target": "esnext", "strict": false } }));
 
@@ -337,7 +336,7 @@ if (isEntry(import.meta)) {
 			}
 		} finally {
 			analyzer.close?.();
-			fs.rmSync(root, { "force": true, "recursive": true });
+			await fs.rm(root, { "force": true, "recursive": true });
 		}
 
 		const changes = (step: (typeof steps)[number]): string[] => step.events.map((event) => event.type + " " + event.id + (event.type === "changed" && event.via === "reach" ? " via " + event.file + "#" + event.declaration : "")).sort();
@@ -346,7 +345,7 @@ if (isEntry(import.meta)) {
 		assert.deepEqual(changes(steps[2]!), ["changed run.other via x/other.ts#other"], "a later snapshot reads its own version of the file");
 
 		// A project with no tsconfig (plain JavaScript): read with TypeScript's defaults, its ways in found all the same.
-		const plain = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "silo-typescript-plain-")));
+		const plain = await fs.realpath(await fs.mkdtemp(path.join(fs.tmpdir(), "silo-typescript-plain-")));
 		const untyped = (await typescriptAnalyzer({ "root": plain, "typescript": modules }))!;
 
 		try {
@@ -355,7 +354,7 @@ if (isEntry(import.meta)) {
 			assert.deepEqual(ways.get("cli.js")?.map((way) => way.facet + " " + way.id), ["terminal command notes"]);
 		} finally {
 			untyped.close?.();
-			fs.rmSync(plain, { "force": true, "recursive": true });
+			await fs.rm(plain, { "force": true, "recursive": true });
 		}
 	})();
 }
