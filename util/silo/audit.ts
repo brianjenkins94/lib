@@ -21,7 +21,7 @@ import { isEntry } from "@brianjenkins94/util/env";
 import { find } from "@brianjenkins94/util/find";
 import * as fs from "@brianjenkins94/util/fs";
 
-import { type Surface, type SurfaceEntry, add, builtinCaps, classifyKind, detect, surfaceOfSource } from "./detect.js";
+import { type Surface, type SurfaceEntry, add, builtinCaps, classifyKind, detect, packageCaps, surfaceOfSource } from "./detect.js";
 import { type BaselinePackages, syncPackages } from "./evidence.js";
 import { type SiloPaths, ensureSiloDir, findRoot, siloPaths } from "./paths.js";
 import { type ReviewStore, serializeStore } from "./review.js";
@@ -265,17 +265,11 @@ export async function installedPackages(root: string): Promise<Record<string, Pk
 		}
 	};
 
+	// (its own files — never a nested node_modules: each dependency is its own entry — read for detect's one package analysis)
 	const ownCaps = async (dir: string): Promise<string[]> => {
-		const code = await find(dir).type("f").prune((container) => container !== dir && path.basename(container) === "node_modules").exec();
-		const caps = new Set<string>();
+		const files = await find(dir).type("f").prune((container) => container !== dir && path.basename(container) === "node_modules").exec();
 
-		for (const file of code.filter((each) => /\.[cm]?js$/u.test(each))) {
-			for (const cap of detect(fs.readFileSync(file))) {
-				caps.add(cap);
-			}
-		}
-
-		return [...caps].sort();
+		return packageCaps(files.map((file) => path.relative(dir, file).split(path.sep).join("/")).filter((file) => /\.[cm]?js$/u.test(file) || file === "package.json").map((file) => [file, fs.readFileSync(path.join(dir, file))] as const));
 	};
 
 	while (queue.length > 0) {
@@ -377,6 +371,15 @@ if (isEntry(import.meta)) {
 		assert.deepEqual(packages["tool"], { "version": "1.0.0", "caps": ["exec"] });
 		assert.deepEqual(packages["fetcher"]?.caps, ["net"]);
 		assert.deepEqual(packages["@scope/quiet"]?.caps, []);
+
+		// The one package analysis, on files however they were read: code files, and install hooks (a hook is exec, plus
+		// what its command reveals); what isn't code (a README naming a call) is not.
+		assert.deepEqual(packageCaps([
+			["package.json", JSON.stringify({ "name": "probe", "scripts": { "postinstall": "node -e \"fetch('https://x.example')\"", "test": "rm -rf /" } })],
+			["index.js", "module.exports = () => require('fs').readFileSync('a');"],
+			["README.md", "require('child_process').execSync('ls')"]
+		]), ["exec", "fs:read", "net"]);
+		assert.deepEqual(packageCaps([["package.json", "{"], ["index.js", "module.exports = 1;"]]), [], "no hooks, nothing it can do");
 
 		// Made once; then kept up to what's installed, never remade: a library added is taken as it is, and a new version
 		// that can do more records what it grew.

@@ -43,6 +43,46 @@ export function detect(code: string): string[] {
 	return refine(DETECTORS.filter(([re]) => re.test(code)).map(([, c]) => c));
 }
 
+/** A package's code files: what `detect` reads of it. */
+const CODE_FILE = /\.[cm]?js$/u;
+
+/** npm's install hooks: the code that runs without being imported. A hook is a shell command, so its mere existence is
+ *  `exec` at install time — the classic supply-chain vector, in package.json, not the file tree. (`bin` isn't one: a bin
+ *  only runs if you invoke it.) */
+const INSTALL_HOOKS = ["preinstall", "install", "postinstall"];
+
+/**
+ * What a package's own code can do, from its files however they were read — node_modules on the desktop, its published
+ * tarball in the editor — by path within the package: `detect` over each code file, never what it depends on (each
+ * dependency is its own), plus its install hooks (`exec`, and whatever a hook's command reveals). The one package
+ * analysis both front ends run. Pure.
+ */
+export function packageCaps(files: Iterable<readonly [string, string]>): string[] {
+	const caps = new Set<string>();
+
+	for (const [path, text] of files) {
+		if (CODE_FILE.test(path)) {
+			for (const cap of detect(text)) {
+				caps.add(cap);
+			}
+		} else if (path === "package.json") {
+			let scripts: Record<string, unknown> = {};
+
+			try {
+				scripts = (JSON.parse(text) as { "scripts"?: Record<string, unknown> }).scripts ?? {};
+			} catch { /* not JSON: no hooks to read */ }
+
+			for (const hook of INSTALL_HOOKS.filter((each) => typeof scripts[each] === "string")) {
+				for (const cap of ["exec", ...detect(scripts[hook] as string)]) {
+					caps.add(cap);
+				}
+			}
+		}
+	}
+
+	return [...caps].sort();
+}
+
 /** Drop the indeterminate marker and the coarse `fs` when a granular fs:read/write is present. */
 export function refine(caps: Iterable<string>): string[] {
 	const s = new Set(caps);
