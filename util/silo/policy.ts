@@ -4,7 +4,7 @@
  *     on. Governs what code can DO.
  *   • IMPORT policy (was `policy/import-policy.ts`) — a denylist of module specifiers (use my fs wrapper, not
  *     node:fs; never left-pad). Governs what a module may DEPEND ON. `extractImports` is a parser-free import
- *     lister (complements `./detect` `surfaceOfSource`, which is AST-based).
+ *     lister (complements `./oxc` `surfaceOfSource`, which is AST-based).
  */
 
 import { Ajv2020, type ValidateFunction } from "ajv/dist/2020.js";
@@ -512,7 +512,7 @@ export interface ImportPolicy {
 export interface Violation { "specifier": string; "use"?: string; "reason"?: string }
 
 /** Every module specifier the source imports — static, dynamic, side-effect, and require(). Parser-free
- *  (regex) so it works on any source without an AST; `./detect` `surfaceOfSource` is the AST-based analog. */
+ *  (regex) so it works on any source without an AST; `./oxc` `surfaceOfSource` is the AST-based analog. */
 export function extractImports(src: string): string[] {
 	const out = new Set<string>();
 	const add = (re: RegExp) => { for (const m of src.matchAll(re)) { out.add(m[1]); } };

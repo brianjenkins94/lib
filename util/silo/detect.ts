@@ -2,14 +2,13 @@
  * silo — the CAPABILITY axis kernel (pure, browser-portable). Extracted from the `silo` prototype
  * (dogfooded in `ok-claude`); was `detect/analysis-core.ts` + `detect/capability-detectors.ts`.
  *
- * The consumer surface of a source file — which specifiers + members it imports — and the capabilities that
- * implies (fs:read, fs:write, net, exec, env, eval). `oxc` + pure string logic ONLY: no fs, git, node:module,
- * network, or top-level side effects, so it runs unchanged in Node AND the browser (a browser build resolves
- * oxc-parser's wasm). Keep it pure, or it stops being portable. The Node orchestration around it — file
- * walking, node_modules version resolution, the `.silo/` baseline — lives in `./audit`.
+ * The capabilities code implies (fs:read, fs:write, net, exec, env, eval), and the shape of a consumer surface —
+ * which specifiers + members a file imports (read by `./oxc`'s surfaceOfSource). Pure string logic ONLY: no
+ * parser, fs, git, node:module, network, or top-level side effects, so it runs unchanged in Node AND the browser.
+ * Keep it pure, or it stops being portable. The Node orchestration around it — file walking, node_modules version
+ * resolution, the `.silo/` baseline — lives in `./audit`.
  */
 
-import { parseSync } from "oxc-parser";
 
 /**
  * PURE capability detectors. Regexes over source text (run over un-minified / deobfuscated code):
@@ -115,19 +114,9 @@ export function classifyKind(spec: string): { "kind": "builtin" | "package" | "l
 	return { "kind": "package", "pkg": pkg };
 }
 
-interface Binding { "specifier": string; "kind": "named" | "default" | "namespace"; "imported"?: string }
 export interface Use { "members": Set<string>; "dynamic": boolean }
 export type Surface = Map<string, Use>;   // specifier -> consumed members
 export interface SurfaceEntry { "members": string[]; "dynamic": boolean }
-
-/** Recursively visit every AST node (object with a string `type`). */
-// eslint-disable-next-line ts/no-explicit-any
-function walk(node: any, visit: (n: any) => void): void {
-	if (!node || typeof node !== "object") { return; }
-	if (Array.isArray(node)) { for (const c of node) { walk(c, visit); } return; }
-	if (typeof node.type === "string") { visit(node); }
-	for (const k in node) { if (k === "type") { continue; } walk(node[k], visit); }
-}
 
 export function add(s: Surface, spec: string, member: string, dynamic = false): void {
 	const u = s.get(spec) ?? { "members": new Set<string>(), "dynamic": false };
@@ -135,61 +124,6 @@ export function add(s: Surface, spec: string, member: string, dynamic = false): 
 	if (member) { u.members.add(member); }
 	if (dynamic) { u.dynamic = true; }
 	s.set(spec, u);
-}
-
-/** The consumer capability surface from SOURCE TEXT: specifier → members used (`*`/dynamic = indeterminate).
- *  Reading the file is the caller's job (fs in Node, workspace.fs / fetch in the browser). */
-export function surfaceOfSource(file: string, src: string): Surface {
-	const { program } = parseSync(file, src);
-	const surface: Surface = new Map();
-	const locals = new Map<string, Binding>();   // local name -> what it binds to
-
-	// 1. collect import bindings
-	for (const stmt of program.body as any[]) {
-		if (stmt.type !== "ImportDeclaration") { continue; }
-		const spec = stmt.source.value as string;
-
-		if (!stmt.specifiers?.length) { add(surface, spec, ""); continue; }   // side-effect import
-		for (const sp of stmt.specifiers) {
-			if (sp.type === "ImportSpecifier") {
-				const imported = sp.imported.name ?? sp.imported.value;
-
-				locals.set(sp.local.name, { "specifier": spec, "kind": "named", "imported": imported });
-				add(surface, spec, imported);
-			} else if (sp.type === "ImportDefaultSpecifier") {
-				locals.set(sp.local.name, { "specifier": spec, "kind": "default" });
-				add(surface, spec, "default");
-			} else if (sp.type === "ImportNamespaceSpecifier") {
-				locals.set(sp.local.name, { "specifier": spec, "kind": "namespace" });
-				surface.set(spec, surface.get(spec) ?? { "members": new Set(), "dynamic": false });
-			}
-		}
-	}
-
-	// 2. for namespace bindings, find member access: local.foo / local[expr] (→ "*")
-	for (const [local, b] of locals) {
-		if (b.kind !== "namespace") { continue; }
-		walk(program, (n) => {
-			if (n.type === "MemberExpression" && n.object?.type === "Identifier" && n.object.name === local) {
-				if (n.computed) { add(surface, b.specifier, "", true); } else if (n.property?.type === "Identifier") { add(surface, b.specifier, n.property.name); }
-			}
-		});
-	}
-
-	// 3. require("x") / import("x") — record specifier (members indeterminate)
-	walk(program, (n) => {
-		if (n.type === "CallExpression") {
-			const { callee } = n;
-			const isReq = callee?.type === "Identifier" && callee.name === "require";
-			const isDyn = callee?.type === "Import";
-
-			if ((isReq || isDyn) && n.arguments?.[0]?.type === "Literal" && typeof n.arguments[0].value === "string") {
-				add(surface, n.arguments[0].value, "", true);
-			}
-		}
-	});
-
-	return surface;
 }
 
 /** Builtins ARE capabilities — map (specifier, members) directly, no bundling. */

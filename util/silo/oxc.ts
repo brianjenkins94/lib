@@ -15,6 +15,7 @@ import type { WayIn } from "./features";
 import type { Analyzer, DeclarationGraph, Package } from "./graph";
 import { isEntry } from "@brianjenkins94/util/env";
 import { parseSync } from "oxc-parser";
+import { add, type Surface } from "./detect";
 import { agentTool, codeArgumentsFrom, CLI_CALL, cliCommand, CREATE, CREATE_RECEIVER, isManifest, isSource, type ObjectReader, REGISTER, waysInManifest, words } from "./features";
 import { candidates, nodeId, packageOf, reach, reachers, TOP } from "./graph";
 
@@ -732,6 +733,67 @@ export function oxcAnalyzer(): Analyzer {
 			return { "graph": new ProgramGraph(graphs, packages), "ways": ways };
 		}
 	};
+}
+
+// ── the consumer surface (silo audit's): which specifiers and members a file imports ──
+
+interface Binding { "specifier": string; "kind": "named" | "default" | "namespace"; "imported"?: string }
+
+/** The consumer capability surface from SOURCE TEXT: specifier → members used (`*`/dynamic = indeterminate).
+ *  Reading the file is the caller's job (fs in Node, workspace.fs / fetch in the browser). */
+export function surfaceOfSource(file: string, src: string): Surface {
+	const { program } = parseSync(file, src);
+	const surface: Surface = new Map();
+	const locals = new Map<string, Binding>();   // local name -> what it binds to
+
+	// 1. collect import bindings
+	for (const stmt of program.body as any[]) {
+		if (stmt.type !== "ImportDeclaration") { continue; }
+		const spec = stmt.source.value as string;
+
+		if (!stmt.specifiers?.length) { add(surface, spec, ""); continue; }   // side-effect import
+		for (const sp of stmt.specifiers) {
+			if (sp.type === "ImportSpecifier") {
+				const imported = sp.imported.name ?? sp.imported.value;
+
+				locals.set(sp.local.name, { "specifier": spec, "kind": "named", "imported": imported });
+				add(surface, spec, imported);
+			} else if (sp.type === "ImportDefaultSpecifier") {
+				locals.set(sp.local.name, { "specifier": spec, "kind": "default" });
+				add(surface, spec, "default");
+			} else if (sp.type === "ImportNamespaceSpecifier") {
+				locals.set(sp.local.name, { "specifier": spec, "kind": "namespace" });
+				surface.set(spec, surface.get(spec) ?? { "members": new Set(), "dynamic": false });
+			}
+		}
+	}
+
+	// 2. for namespace bindings, find member access: local.foo / local[expr] (→ "*")
+	for (const [local, b] of locals) {
+		if (b.kind !== "namespace") { continue; }
+		// eslint-disable-next-line ts/no-explicit-any -- oxc's ESTree, read loosely as above
+		walk(program, (n: any) => {
+			if (n.type === "MemberExpression" && n.object?.type === "Identifier" && n.object.name === local) {
+				if (n.computed) { add(surface, b.specifier, "", true); } else if (n.property?.type === "Identifier") { add(surface, b.specifier, n.property.name); }
+			}
+		});
+	}
+
+	// 3. require("x") / import("x") — record specifier (members indeterminate)
+	// eslint-disable-next-line ts/no-explicit-any -- oxc's ESTree, read loosely as above
+	walk(program, (n: any) => {
+		if (n.type === "CallExpression") {
+			const { callee } = n;
+			const isReq = callee?.type === "Identifier" && callee.name === "require";
+			const isDyn = callee?.type === "Import";
+
+			if ((isReq || isDyn) && n.arguments?.[0]?.type === "Literal" && typeof n.arguments[0].value === "string") {
+				add(surface, n.arguments[0].value, "", true);
+			}
+		}
+	});
+
+	return surface;
 }
 
 if (isEntry(import.meta)) {

@@ -21,7 +21,8 @@ import { isEntry } from "@brianjenkins94/util/env";
 import { find } from "@brianjenkins94/util/find";
 import * as fs from "@brianjenkins94/util/fs";
 
-import { type Surface, type SurfaceEntry, add, builtinCaps, classifyKind, detect, packageCaps, surfaceOfSource } from "./detect.js";
+import { type Surface, type SurfaceEntry, add, builtinCaps, classifyKind, detect, packageCaps } from "./detect.js";
+import { surfaceOfSource } from "./oxc.js";
 import { type BaselinePackages, syncPackages } from "./evidence.js";
 import { type SiloPaths, ensureSiloDir, findRoot, siloPaths } from "./paths.js";
 import { type ReviewStore, serializeStore } from "./review.js";
