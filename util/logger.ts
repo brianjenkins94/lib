@@ -13,8 +13,14 @@
  * Concurrency + the indented tree: wrap a sink with `buffered(...)`. It holds each span's records and
  * flushes the whole subtree contiguously when the span closes, so concurrent operations print as clean
  * blocks (in completion order) instead of interleaving. No cursor tricks, so it works in the browser.
- * An OTel sink can drop in later by buffering point-logs into their span's `events` — no core change.
+ *
+ * A runtime's own tracer can mirror every span: `setTracer(tracing)` with Cloudflare Workers' `tracing`, or an
+ * OpenTelemetry `Tracer`, and the same spans show up in that platform's trace view beside its own. Pass `span` a
+ * function — `log.span("request", attrs, async (span) => …)` — and the span is the runtime's active one for all of
+ * it, so whatever the function opens nests under it there too.
  */
+
+import { isEntry } from "./env";
 
 type Attrs = Record<string, unknown>;
 
@@ -49,7 +55,12 @@ export interface LogRecord {
 
 export type Sink = (record: LogRecord) => void;
 
-const isNode = typeof process !== "undefined" && Boolean(process.versions?.node);
+/** Cloudflare Workers provides enough of Node's `process` to look like Node, but its logs are console calls:
+ *  Workers Logs indexes a logged object's keys and takes the level from the console method, while a line written to
+ *  `process.stderr` arrives as one unindexed "stderr: …" string. So on Workers, records go to the console as JSON. */
+const isWorkers = globalThis.navigator?.userAgent === "Cloudflare-Workers";
+
+const isNode = !isWorkers && typeof process !== "undefined" && Boolean(process.versions?.node);
 
 /** Read config from the Node env or a `globalThis` global, so both platforms have a knob. */
 function setting(name: string): string | undefined {
@@ -69,7 +80,7 @@ function resolveFormat(): Format {
 		return process.stderr.isTTY ? "pretty" : "json";
 	}
 
-	return "pretty";
+	return isWorkers ? "json" : "pretty";
 }
 
 const threshold = LEVELS[setting("LOG_LEVEL") as Level] ?? LEVELS.trace;
@@ -100,14 +111,110 @@ function selectSink(format: Format): Sink {
 	return isNode ? ansiTreeSink : consoleGroupSink;
 }
 
+function passes(record: LogRecord): boolean {
+	return LEVELS[record.level] >= threshold;
+}
+
+/** Sinks that see every record whatever `LOG_LEVEL` says, because they track the span tree (`buffered` can't place a
+ *  span's logs without its `trace`-level open). They apply `LOG_LEVEL` themselves to what they pass on. */
+const structural = new WeakSet<Sink>();
+
 function dispatch(record: LogRecord): void {
-	if (LEVELS[record.level] < threshold) {
-		return;
-	}
+	const visible = passes(record);
 
 	for (const sink of sinks) {
-		sink(record);
+		if (visible || structural.has(sink)) {
+			sink(record);
+		}
 	}
+}
+
+// ── Runtime tracers ───────────────────────────────────────────────────────────────────────────--
+
+type TracerValue = string | number | boolean;
+
+/** A span in a runtime's own tracer. */
+export interface TracerSpan {
+	"setAttributes": (attributes: Record<string, TracerValue | undefined>) => unknown;
+	"recordException": (exception: { "message": string }) => void;
+	"end": () => void;
+}
+
+/** What a span needs from a runtime's tracer. Cloudflare Workers' `tracing` (`import { tracing } from
+ *  "cloudflare:workers"`) and an OpenTelemetry `Tracer` both have this shape as they are, so nothing here imports
+ *  either. */
+export interface Tracer {
+	"startSpan": (name: string) => TracerSpan;
+	"startActiveSpan": <T>(name: string, run: (span: TracerSpan) => T) => T;
+}
+
+let tracer: Tracer | undefined;
+
+/**
+ * Mirror every span opened from now on into a runtime's tracer (`undefined` stops). A span's attributes and bound
+ * context, its error-level logs (as exceptions) and its end go to its counterpart there, and its ids as
+ * `logger.trace_id`, `logger.span_id` and `logger.parent_span_id` — so a trace continued from another context
+ * (`continueSpan`) can be found there by the id it was given. Spans are structure, not logs: `LOG_LEVEL` doesn't
+ * apply.
+ *
+ * A runtime tracer parents a span to whatever is active in the current async context, and can't be told otherwise.
+ * A span opened with a function is active for all of it, so everything opened inside nests under it there as it does
+ * here; a span opened without one nests under whatever is active, but its own children land beside it.
+ */
+export function setTracer(runtime: Tracer | undefined): void {
+	tracer = runtime;
+}
+
+/** A tracer attribute from any value: primitives as they are, anything else as JSON. */
+function attributes(values: Attrs): Record<string, TracerValue | undefined> {
+	const out: Record<string, TracerValue | undefined> = {};
+
+	for (const [key, value] of Object.entries(values)) {
+		out[key] = value === undefined || value === null ? undefined : typeof value === "string" || typeof value === "number" || typeof value === "boolean" ? value : JSON.stringify(value);
+	}
+
+	return out;
+}
+
+/** How a span that threw ends: the error's name only, since a message can quote the input that caused it. */
+function failure(error: unknown): Attrs {
+	return { "error": (error as Error | undefined)?.name ?? "Error" };
+}
+
+/** Open a span: as a handle, or — given `run` — for exactly as long as `run`, active in the runtime's tracer. */
+function open<T>(name: string, attrs: Attrs, parent: SpanRef | undefined, context: Attrs, run?: (span: Span) => T): Span | T {
+	if (run === undefined) {
+		return new Span(name, attrs, parent, context, tracer?.startSpan(name));
+	}
+
+	const scoped = (runtime?: TracerSpan): T => {
+		const span = new Span(name, attrs, parent, context, runtime);
+		let result: T;
+
+		try {
+			result = run(span);
+		} catch (error) {
+			span.end(failure(error));
+			throw error;
+		}
+
+		if (result instanceof Promise) {
+			return result.then((value) => {
+				span.end();
+
+				return value;
+			}, (error: unknown) => {
+				span.end(failure(error));
+				throw error;
+			}) as T;
+		}
+
+		span.end();
+
+		return result;
+	};
+
+	return tracer === undefined ? scoped() : tracer.startActiveSpan(name, scoped);
 }
 
 // ── Loggers: an explicit span tree, plus context-binding sub-loggers ──────────────────────────--
@@ -126,9 +233,17 @@ export class Logger {
 		return new Logger({ ...this.context, ...context }, this.hostSpan());
 	}
 
-	/** Open a descendant span (timed, one level deeper). Inherits this logger's bound context. */
-	span(name: string, attrs: Attrs = {}): Span {
-		return new Span(name, attrs, this.hostSpan(), { ...this.context, ...attrs });
+	/**
+	 * Open a descendant span (timed, one level deeper). Inherits this logger's bound context.
+	 *
+	 * Given `run`, the span lasts exactly as long as it: `run` gets the span, the span ends when `run` returns or its
+	 * promise settles (with `{ error: <name> }` if it threw), and `span` returns what `run` did. With a runtime tracer
+	 * set (`setTracer`), it's the active span there for all of `run`.
+	 */
+	span(name: string, attrs?: Attrs): Span;
+	span<T>(name: string, attrs: Attrs, run: (span: Span) => T): T;
+	span<T>(name: string, attrs: Attrs = {}, run?: (span: Span) => T): Span | T {
+		return open(name, attrs, this.hostSpan(), { ...this.context, ...attrs }, run);
 	}
 
 	/**
@@ -138,8 +253,10 @@ export class Logger {
 	 * stitches into one trace instead of a fresh root on the far side. Inherits this logger's bound context
 	 * (e.g. its `source`), exactly like `span`, so the continued span is still attributed to this context.
 	 */
-	continueSpan(remote: { "traceId": string; "parentSpanId": string }, name: string, attrs: Attrs = {}): Span {
-		return new Span(name, attrs, { "id": remote.parentSpanId, "traceId": remote.traceId, "depth": 0 }, { ...this.context, ...attrs });
+	continueSpan(remote: { "traceId": string; "parentSpanId": string }, name: string, attrs?: Attrs): Span;
+	continueSpan<T>(remote: { "traceId": string; "parentSpanId": string }, name: string, attrs: Attrs, run: (span: Span) => T): T;
+	continueSpan<T>(remote: { "traceId": string; "parentSpanId": string }, name: string, attrs: Attrs = {}, run?: (span: Span) => T): Span | T {
+		return open(name, attrs, { "id": remote.parentSpanId, "traceId": remote.traceId, "depth": 0 }, { ...this.context, ...attrs }, run);
 	}
 
 	log(level: Level, message: string, attrs?: Attrs): void { this.emit("log", level, message, attrs); }
@@ -157,6 +274,10 @@ export class Logger {
 
 	protected emit(kind: LogRecord["kind"], level: Level, message: string, attrs: Attrs = {}, durationMs?: number): void {
 		const host = this.hostSpan();
+
+		if (kind === "log" && LEVELS[level] >= LEVELS.error) {
+			host?.runtime?.recordException({ "message": message });
+		}
 
 		dispatch({
 			"kind": kind,
@@ -189,16 +310,21 @@ export class Span extends Logger {
 	readonly parentId?: string;
 	readonly traceId: string;
 	readonly depth: number;
+	/** This span's counterpart in the runtime's tracer, when one is set (`setTracer`). */
+	readonly runtime?: TracerSpan;
 	private readonly startMs = performance.now();
 	private ended = false;
 
-	constructor(name: string, attrs: Attrs = {}, parent?: SpanRef, context: Attrs = attrs) {
+	constructor(name: string, attrs: Attrs = {}, parent?: SpanRef, context: Attrs = attrs, runtime?: TracerSpan) {
 		super(context);
 
 		this.name = name;
 		this.parentId = parent?.id;
 		this.traceId = parent?.traceId ?? randomHex(16); // W3C trace id (128-bit hex); descendants inherit the root's
 		this.depth = parent ? parent.depth + 1 : 0;
+		this.runtime = runtime;
+
+		runtime?.setAttributes({ ...attributes(context), "logger.trace_id": this.traceId, "logger.span_id": this.id, "logger.parent_span_id": this.parentId });
 
 		this.emit("span-open", "trace", "span started", attrs);
 	}
@@ -212,6 +338,9 @@ export class Span extends Logger {
 		this.ended = true;
 
 		this.emit("span-close", "info", "span finished", attrs, performance.now() - this.startMs);
+
+		this.runtime?.setAttributes(attributes(attrs));
+		this.runtime?.end();
 	}
 
 	/** `using span = log.span(...)` auto-ends on scope exit, even on throw. Needs a `using`-capable runtime. */
@@ -341,9 +470,12 @@ function consoleGroupSink(record: LogRecord): void {
 		return;
 	}
 
-	const emit = record.level === "error" || record.level === "fatal" ? console.error : record.level === "warn" ? console.warn : console.log;
+	consoleMethod(record.level)(head, ...args);
+}
 
-	emit(head, ...args);
+/** The console method for a level, so devtools and Workers Logs file each record under its severity. */
+function consoleMethod(level: Level): (...args: unknown[]) => void {
+	return level === "error" || level === "fatal" ? console.error : level === "warn" ? console.warn : console.log;
 }
 
 /** Roarr-compatible `{ time, sequence, version, message, context }`; span/domain data under `context`. */
@@ -381,7 +513,7 @@ function jsonSink(record: LogRecord): void {
 	if (isNode) {
 		process.stderr.write(`${JSON.stringify(message)}\n`);
 	} else {
-		console.log(message);
+		consoleMethod(record.level)(message);
 	}
 }
 
@@ -399,6 +531,9 @@ function incompleteClose(open: LogRecord): LogRecord {
  * Never-ended spans are handled, not lost: any span reached without a stored close flushes an
  * error-level `incomplete` close instead of vanishing, and a Node `exit` hook (also the returned
  * `.drain()`) force-flushes any root that was still open — so a forgotten `.end()` is loud, not silent.
+ *
+ * It sees every record whatever `LOG_LEVEL` says, so the tree holds together, and passes on only what `LOG_LEVEL`
+ * lets through.
  */
 export function buffered(sink: Sink): Sink & { "drain": () => void } {
 	const items = new Map<string, (LogRecord | string)[]>(); // spanId → its logs, interleaved with child spanIds
@@ -406,25 +541,31 @@ export function buffered(sink: Sink): Sink & { "drain": () => void } {
 	const closes = new Map<string, LogRecord>();
 	const pendingRoots = new Set<string>();
 
+	function pass(record: LogRecord): void {
+		if (passes(record)) {
+			sink(record);
+		}
+	}
+
 	function flush(id: string): void {
 		const open = opens.get(id);
 
 		if (open) {
-			sink(open);
+			pass(open);
 		}
 
 		for (const item of items.get(id) ?? []) {
 			if (typeof item === "string") {
 				flush(item); // a child spanId marker
 			} else {
-				sink(item);
+				pass(item);
 			}
 		}
 
 		const close = closes.get(id) ?? (open ? incompleteClose(open) : undefined);
 
 		if (close) {
-			sink(close);
+			pass(close);
 		}
 
 		items.delete(id);
@@ -445,7 +586,7 @@ export function buffered(sink: Sink): Sink & { "drain": () => void } {
 
 	const forward = (record: LogRecord): void => {
 		if (record.spanId === undefined) {
-			sink(record); // rootless point log — nothing to buffer under
+			pass(record); // rootless point log — nothing to buffer under
 
 			return;
 		}
@@ -476,5 +617,97 @@ export function buffered(sink: Sink): Sink & { "drain": () => void } {
 		items.get(record.spanId)?.push(record);
 	};
 
+	structural.add(forward);
+
 	return Object.assign(forward, { "drain": drain });
+}
+
+if (isEntry(import.meta)) {
+	void (async function() {
+		const assert: typeof import("node:assert").strict = (await import("node:assert")).strict;
+		const records: string[] = [];
+
+		sinks.splice(0, sinks.length, (record) => records.push(`${record.kind} ${record.span ?? ""}`));
+
+		// No tracer: a span given a function lasts as long as it, and hands back what it returns.
+		assert.equal(log.span("plain", {}, (span) => span.name), "plain");
+		assert.deepEqual(records, ["span-open plain", "span-close plain"]);
+
+		const calls: string[] = [];
+		let active = "root";
+
+		function fake(name: string, parentName: string): TracerSpan {
+			calls.push(`start ${name} under ${parentName}`);
+
+			return {
+				"setAttributes": (values) => calls.push(`attrs ${name} ${JSON.stringify(values)}`),
+				"recordException": (exception) => calls.push(`exception ${name} ${exception.message}`),
+				"end": () => calls.push(`end ${name}`)
+			};
+		}
+
+		setTracer({
+			"startSpan": (name) => fake(name, active),
+			"startActiveSpan": (name, run) => {
+				const outer = active;
+
+				active = name;
+
+				try {
+					return run(fake(name, outer));
+				} finally {
+					active = outer;
+				}
+			}
+		});
+
+		const value = await log.span("request", { "path": "/x", "nested": { "a": 1 } }, async (request) => {
+			const step = request.span("step");
+
+			step.error("went wrong");
+			step.end({ "status": 200 });
+
+			return 42;
+		});
+
+		assert.equal(value, 42);
+		assert.deepEqual(calls.filter((call) => !call.startsWith("attrs")), [
+			"start request under root",
+			"start step under request",
+			"exception step went wrong",
+			"end step",
+			"end request"
+		]);
+		assert.match(calls.find((call) => call.startsWith("attrs request")) as string, /"path":"\/x","nested":"\{\\"a\\":1\}","logger.trace_id":"[0-9a-f]{32}","logger.span_id":"[0-9a-f]{16}"/u);
+		assert.equal(calls.includes(`attrs step {"status":200}`), true);
+
+		calls.length = 0;
+
+		await assert.rejects(log.span("failing", {}, async () => {
+			throw new TypeError("secret input");
+		}), TypeError);
+		assert.equal(calls.includes(`attrs failing {"error":"TypeError"}`), true);
+		assert.equal(calls.some((call) => call.includes("secret input")), false);
+		assert.equal(calls.at(-1), "end failing");
+
+		setTracer(undefined);
+
+		// buffered under LOG_LEVEL=info (read once at load, so in a child process): a span's info log still reaches the
+		// sink, though the span's trace-level open — which buffered needs to place it — doesn't.
+		const { execFileSync } = await import("node:child_process");
+		const child = `
+			const { buffered, log, sinks } = await import(${JSON.stringify(import.meta.url)});
+			const seen = [];
+			sinks.splice(0, sinks.length, buffered((record) => seen.push(record.kind + " " + record.message)));
+			const job = log.span("job");
+			job.debug("hidden");
+			job.info("shown");
+			job.end();
+			console.log(JSON.stringify(seen));`;
+		const seen = execFileSync(process.execPath, [...process.execArgv, "--input-type=module", "-e", child], { "env": { ...process.env, "LOG_LEVEL": "info" }, "encoding": "utf8" });
+
+		assert.deepEqual(JSON.parse(seen), ["log shown", "span-close span finished"]);
+
+		print("logger: ok");
+	})();
 }
