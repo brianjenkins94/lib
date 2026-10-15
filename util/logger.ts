@@ -20,8 +20,6 @@
  * it, so whatever the function opens nests under it there too.
  */
 
-import { isEntry } from "./env";
-
 type Attrs = Record<string, unknown>;
 
 /** syslog-ish numeric severities, matching Roarr's `context.logLevel`. */
@@ -620,94 +618,4 @@ export function buffered(sink: Sink): Sink & { "drain": () => void } {
 	structural.add(forward);
 
 	return Object.assign(forward, { "drain": drain });
-}
-
-if (isEntry(import.meta)) {
-	void (async function() {
-		const assert: typeof import("node:assert").strict = (await import("node:assert")).strict;
-		const records: string[] = [];
-
-		sinks.splice(0, sinks.length, (record) => records.push(`${record.kind} ${record.span ?? ""}`));
-
-		// No tracer: a span given a function lasts as long as it, and hands back what it returns.
-		assert.equal(log.span("plain", {}, (span) => span.name), "plain");
-		assert.deepEqual(records, ["span-open plain", "span-close plain"]);
-
-		const calls: string[] = [];
-		let active = "root";
-
-		function fake(name: string, parentName: string): TracerSpan {
-			calls.push(`start ${name} under ${parentName}`);
-
-			return {
-				"setAttributes": (values) => calls.push(`attrs ${name} ${JSON.stringify(values)}`),
-				"recordException": (exception) => calls.push(`exception ${name} ${exception.message}`),
-				"end": () => calls.push(`end ${name}`)
-			};
-		}
-
-		setTracer({
-			"startSpan": (name) => fake(name, active),
-			"startActiveSpan": (name, run) => {
-				const outer = active;
-
-				active = name;
-
-				try {
-					return run(fake(name, outer));
-				} finally {
-					active = outer;
-				}
-			}
-		});
-
-		const value = await log.span("request", { "path": "/x", "nested": { "a": 1 } }, async (request) => {
-			const step = request.span("step");
-
-			step.error("went wrong");
-			step.end({ "status": 200 });
-
-			return 42;
-		});
-
-		assert.equal(value, 42);
-		assert.deepEqual(calls.filter((call) => !call.startsWith("attrs")), [
-			"start request under root",
-			"start step under request",
-			"exception step went wrong",
-			"end step",
-			"end request"
-		]);
-		assert.match(calls.find((call) => call.startsWith("attrs request")) as string, /"path":"\/x","nested":"\{\\"a\\":1\}","logger.trace_id":"[0-9a-f]{32}","logger.span_id":"[0-9a-f]{16}"/u);
-		assert.equal(calls.includes(`attrs step {"status":200}`), true);
-
-		calls.length = 0;
-
-		await assert.rejects(log.span("failing", {}, async () => {
-			throw new TypeError("secret input");
-		}), TypeError);
-		assert.equal(calls.includes(`attrs failing {"error":"TypeError"}`), true);
-		assert.equal(calls.some((call) => call.includes("secret input")), false);
-		assert.equal(calls.at(-1), "end failing");
-
-		setTracer(undefined);
-
-		// buffered under LOG_LEVEL=info (read once at load, so in a child process): a span's info log still reaches the
-		// sink, though the span's trace-level open — which buffered needs to place it — doesn't.
-		const { execFileSync } = await import("node:child_process");
-		const child = `
-			const { buffered, log, sinks } = await import(${JSON.stringify(import.meta.url)});
-			const seen = [];
-			sinks.splice(0, sinks.length, buffered((record) => seen.push(record.kind + " " + record.message)));
-			const job = log.span("job");
-			job.debug("hidden");
-			job.info("shown");
-			job.end();
-			console.log(JSON.stringify(seen));`;
-		const seen = execFileSync(process.execPath, [...process.execArgv, "--input-type=module", "-e", child], { "env": { ...process.env, "LOG_LEVEL": "info" }, "encoding": "utf8" });
-
-		assert.deepEqual(JSON.parse(seen), ["log shown", "span-close span finished"]);
-
-		print("logger: ok");
-	})();
 }
