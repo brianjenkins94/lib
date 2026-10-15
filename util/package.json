@@ -23,6 +23,7 @@
     "googleapis": "*",
     "http-proxy-3": "*",
     "hyperformula": "*",
+    "jose": "^6",
     "jsonc-parser": "*",
     "jsonpath-plus": "*",
     "jsx-async-runtime": "*",
