@@ -1,6 +1,6 @@
 import * as util from "node:util";
 import { Bottleneck } from "@brianjenkins94/util/bottleneck";
-import { isBrowser } from "@brianjenkins94/util/env";
+import { isBrowser, isWorkers } from "@brianjenkins94/util/env";
 import { log } from "@brianjenkins94/util/logger";
 import { attemptParse } from "./parse";
 import { poll } from "./poll";
@@ -170,7 +170,8 @@ async function fetchFactory(baseUrl?, defaultOptions = {}) {
 	defaultOptions["headers"] ??= {};
 	defaultOptions["debug"] ??= process.env["NODE_ENV"] !== "production";
 
-	if (defaultOptions["debug"] && defaultOptions["cache"] && !isBrowser) {
+	// The cache is a file, so not where there's no filesystem.
+	if (defaultOptions["debug"] && defaultOptions["cache"] && !isBrowser && !isWorkers) {
 		defaultOptions["cache"] = new (await import(/*! @external */ "@brianjenkins94/util/store")).PersistentStore();
 	}
 

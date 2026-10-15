@@ -22,10 +22,14 @@ const isDeno = ("self" in globalThis && "Deno" in globalThis.self) || "Deno" in 
 
 const isNode = !isBun && ("self" in globalThis && "process" in globalThis.self) || "process" in globalThis;
 
-export const isBrowser = !isBun && !isDeno && ("self" in globalThis && "addEventListener" in globalThis.self) || "window" in globalThis;
+/** Cloudflare Workers has `self.addEventListener` and Node's `process`, so it would otherwise pass for a browser and
+ *  for Node. It's neither: no DOM, and no filesystem. */
+export const isWorkers = globalThis.navigator?.userAgent === "Cloudflare-Workers";
+
+export const isBrowser = !isWorkers && (!isBun && !isDeno && ("self" in globalThis && "addEventListener" in globalThis.self) || "window" in globalThis);
 
 export function getRuntime() {
-	return isBrowser ? "browser" : isBun ? "bun" : isDeno ? "deno" : isNode ? "node" : "unknown";
+	return isWorkers ? "workers" : isBrowser ? "browser" : isBun ? "bun" : isDeno ? "deno" : isNode ? "node" : "unknown";
 }
 
 /**
