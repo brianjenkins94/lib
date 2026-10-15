@@ -3,7 +3,9 @@ import type { Plugin as EsbuildPlugin } from "esbuild";
 import type { Plugin as RolldownPlugin } from "rolldown";
 import { builtinModules } from "node:module";
 import * as url from "node:url";
+import { transform } from "rolldown/utils";
 import { defineEnv } from "unenv";
+import { isEntry } from "@brianjenkins94/util/env";
 import { externalSpecifiers } from "@brianjenkins94/util/vite/external";
 
 /**
@@ -67,9 +69,16 @@ export function externalOptionalDeps(): PluginOption {
 	} as PluginOption;
 }
 
-/** Node's built-ins `builtins` (default: all of them) as unenv's, for a Vite build or dev server — and unenv's globals
- *  injected into a build. */
-export function polyfillNode(builtins: readonly string[] = builtinModules): PluginOption {
+/**
+ * Node's built-ins `builtins` (default: all of them) as unenv's, for a Vite build or dev server — and unenv's globals
+ * injected into a build.
+ *
+ * `inject` scopes the globals to the modules whose id it matches; by default every module of the build gets them. A
+ * bundle that also carries code which reads `process` to tell whether it's running in Node (TypeScript, napi-rs) needs
+ * the scope: given a `process`, that code takes its Node path in a browser. The scoped modules get the globals the same
+ * way — an import of unenv's for each one they read free — one module at a time instead of build-wide.
+ */
+export function polyfillNode(builtins: readonly string[] = builtinModules, { inject }: { "inject"?: RegExp } = {}): PluginOption {
 	const listed = new Set(builtins.map(base));
 
 	return [
@@ -77,8 +86,20 @@ export function polyfillNode(builtins: readonly string[] = builtinModules): Plug
 		{
 			"name": "polyfill-node",
 			"enforce": "pre",
-			"config": () => ({ "build": { "rolldownOptions": { "transform": { "inject": GLOBALS } } } }),
-			"resolveId": (id: string, importer: string | undefined) => unenvFile(id, importer, listed)
+			"config": () => (inject === undefined ? { "build": { "rolldownOptions": { "transform": { "inject": GLOBALS } } } } : undefined),
+			"resolveId": (id: string, importer: string | undefined) => unenvFile(id, importer, listed),
+			...inject === undefined
+				? {}
+				: {
+						"transform": {
+							"filter": { "id": inject },
+							"handler": async (code: string, id: string) => {
+								const result = await transform(id, code, { "inject": GLOBALS, "sourcemap": true });
+
+								return { "code": result.code, "map": result.map };
+							}
+						}
+					}
 		} as PluginOption
 	];
 }
@@ -152,4 +173,31 @@ export function polyfillNodeRolldown(builtins: readonly string[] = builtinModule
 			return { "code": PROCESS_SHIM + code, "map": null };
 		}
 	};
+}
+
+if (isEntry(import.meta)) {
+	void (async function() {
+		const assert: typeof import("node:assert").strict = (await import("node:assert")).strict;
+		const plugins = polyfillNode([], { "inject": /[\\/]scoped[\\/]/u }) as { "name": string; "config": () => unknown; "transform"?: { "filter": { "id": RegExp }; "handler": (code: string, id: string) => Promise<{ "code": string }> } }[];
+		const plugin = plugins.find((each) => each.name === "polyfill-node");
+
+		// Scoped: no build-wide inject, and a transform only for the matching modules.
+		assert.equal(plugin?.config(), undefined);
+		assert.equal(plugin?.transform?.filter.id.test("/app/scoped/env.js"), true);
+		assert.equal(plugin?.transform?.filter.id.test("/app/node_modules/typescript/lib/typescript.js"), false);
+
+		// A free `process` gets unenv's; a module's own `process` is left alone.
+		const free = await plugin?.transform?.handler("export const isWindows = process.platform === \"win32\";\n", "/app/scoped/env.js");
+
+		assert.match(free?.code ?? "", /^import .*process.* from ".*unenv.*";$/mu);
+
+		const own = await plugin?.transform?.handler("const process = { platform: \"x\" };\nexport const platform = process.platform;\n", "/app/scoped/own.js");
+
+		assert.doesNotMatch(own?.code ?? "", /unenv/u);
+
+		// Unscoped (the default): the build-wide inject, as before.
+		const unscoped = (polyfillNode() as { "name": string; "config": () => { "build": { "rolldownOptions": { "transform": { "inject": unknown } } } } }[]).find((each) => each.name === "polyfill-node");
+
+		assert.equal(unscoped?.config().build.rolldownOptions.transform.inject, GLOBALS);
+	})();
 }
