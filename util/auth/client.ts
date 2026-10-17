@@ -4,7 +4,8 @@
  *
  * - A non-extractable ES256 key, made once and kept in IndexedDB: every request carries a proof signed with it, so a
  *   copied token is useless anywhere else.
- * - `signIn` goes to the server's authorization endpoint with a PKCE challenge, the key's thumbprint and a state;
+ * - `signIn` goes to the server's authorization endpoint with a PKCE challenge, the key's thumbprint and a state, or,
+ *   with `par`, pushes those first (RFC 9126) with a proof from the key and goes with only the `request_uri`;
  *   `completeSignIn`, on the way back, checks that state and the server's `iss` (RFC 9207), and redeems the code.
  * - `fetch` sends the access token and a proof, retries a nonce the server asks for, and refreshes the token (one refresh
  *   at a time, however many requests found it stale). A session that can't be refreshed is forgotten, and
@@ -23,6 +24,12 @@ export interface ClientOptions {
 	"redirectUri": () => string;
 	/** The authorization endpoint's path. */
 	"authorizePath"?: string;
+	/**
+	 * Push the authorization request first (RFC 9126, PAR) to `${api}/auth/par`, with a DPoP proof, and send the browser to
+	 * `${api}/auth/start` with only the `request_uri`: nothing of the request rides in the redirect, and the key is proven
+	 * at the first request. (`authorizePath` is then the start's, `/auth/start` by default.)
+	 */
+	"par"?: boolean;
 	/** localStorage key for the tokens, sessionStorage key for a sign-in in progress, IndexedDB database for the key. */
 	"tokensKey": string;
 	"pendingKey": string;
@@ -33,10 +40,11 @@ export interface ClientOptions {
 
 interface Tokens { "accessToken": string; "refreshToken": string }
 
-export function createClient({ api, clientId, redirectUri, authorizePath = "/auth/github/start", tokensKey, pendingKey, database: databaseName, signedOutEvent }: ClientOptions) {
+export function createClient({ api, clientId, redirectUri, par = false, authorizePath = par ? "/auth/start" : "/auth/github/start", tokensKey, pendingKey, database: databaseName, signedOutEvent }: ClientOptions) {
 	const as: oauth.AuthorizationServer = {
 		"issuer": api,
 		"authorization_endpoint": `${api}${authorizePath}`,
+		"pushed_authorization_request_endpoint": `${api}/auth/par`,
 		"token_endpoint": `${api}/token`,
 		"revocation_endpoint": `${api}/revoke`,
 		"authorization_response_iss_parameter_supported": true
@@ -160,11 +168,26 @@ export function createClient({ api, clientId, redirectUri, authorizePath = "/aut
 
 	// ── Signing in and out ───────────────────────────────────────────────────────────────────────────────────────
 
-	/** Off to the server's sign-in. Where we were (its query and fragment too) is restored when we're back. */
+	/** Off to the server's sign-in (pushed first, with `par`). Where we were (its query and fragment too) is restored when
+	 *  we're back. */
 	async function signIn(): Promise<void> {
 		const verifier = oauth.generateRandomCodeVerifier();
 		const state = oauth.generateRandomState();
 		const url = new URL(as.authorization_endpoint as string);
+
+		if (par) {
+			const parameters = new URLSearchParams({ "response_type": "code", "redirect_uri": redirectUri(), "state": state, "code_challenge": await oauth.calculatePKCECodeChallenge(verifier), "code_challenge_method": "S256" });
+			const pushed = await withNonce(
+				async () => oauth.pushedAuthorizationRequest(as, client, none, parameters, { "DPoP": await dpop() }),
+				async (response) => oauth.processPushedAuthorizationResponse(as, client, response)
+			);
+
+			url.search = new URLSearchParams({ "client_id": client.client_id, "request_uri": pushed.request_uri }).toString();
+			sessionStorage.setItem(pendingKey, JSON.stringify({ "verifier": verifier, "state": state, "returnTo": location.href }));
+			location.assign(url.href);
+
+			return;
+		}
 
 		url.search = new URLSearchParams({
 			"client_id": client.client_id,
