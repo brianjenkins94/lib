@@ -29,6 +29,7 @@
     "jsx-async-runtime": "*",
     "mime": "*",
     "node-schedule": "*",
+    "oauth4webapi": "^3",
     "object-scan": "*",
     "papaparse": "*",
     "playwright": "*",
