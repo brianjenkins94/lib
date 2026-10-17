@@ -119,6 +119,12 @@ export function createClient({ api, clientId, redirectUri, par = false, authoriz
 	/** One DPoP handle for the session: it remembers the server's nonce, so it's asked for once, not on every request. */
 	let handle: Promise<oauth.DPoPHandle> | undefined;
 
+	/** A local server (a dev harness on localhost) is plain HTTP; oauth4webapi refuses that unless told. Only there. */
+	const local = /^http:\/\/(?:localhost|127\.0\.0\.1)(?::\d+)?$/u.test(api);
+
+	/** Each request's options: its DPoP proof, and, for a local server only, plain HTTP allowed. */
+	const options = async (): Promise<{ "DPoP": oauth.DPoPHandle; [oauth.allowInsecureRequests]?: boolean }> => ({ "DPoP": await dpop(), ...local ? { [oauth.allowInsecureRequests]: true } : {} });
+
 	function dpop(): Promise<oauth.DPoPHandle> {
 		handle ??= key().then((pair) => oauth.DPoP(client, pair));
 
@@ -178,7 +184,7 @@ export function createClient({ api, clientId, redirectUri, par = false, authoriz
 		if (par) {
 			const parameters = new URLSearchParams({ "response_type": "code", "redirect_uri": redirectUri(), "state": state, "code_challenge": await oauth.calculatePKCECodeChallenge(verifier), "code_challenge_method": "S256" });
 			const pushed = await withNonce(
-				async () => oauth.pushedAuthorizationRequest(as, client, none, parameters, { "DPoP": await dpop() }),
+				async () => oauth.pushedAuthorizationRequest(as, client, none, parameters, await options()),
 				async (response) => oauth.processPushedAuthorizationResponse(as, client, response)
 			);
 
@@ -223,7 +229,7 @@ export function createClient({ api, clientId, redirectUri, par = false, authoriz
 
 		const parameters = oauth.validateAuthResponse(as, client, here, pending.state);
 		const tokens = await withNonce(
-			async () => oauth.authorizationCodeGrantRequest(as, client, none, parameters, redirectUri(), pending.verifier, { "DPoP": await dpop() }),
+			async () => oauth.authorizationCodeGrantRequest(as, client, none, parameters, redirectUri(), pending.verifier, await options()),
 			async (response) => oauth.processAuthorizationCodeResponse(as, client, response)
 		);
 
@@ -248,7 +254,7 @@ export function createClient({ api, clientId, redirectUri, par = false, authoriz
 
 		if (tokens !== undefined) {
 			// RFC 7009 has no DPoP, but a DPoP server's /revoke wants a proof from the sign-in's key: sent as a resource request.
-			const revoke = async (): Promise<Response> => oauth.protectedResourceRequest(tokens.accessToken, "POST", new URL(as.revocation_endpoint as string), new Headers({ "content-type": "application/x-www-form-urlencoded" }), new URLSearchParams({ "token": tokens.refreshToken }).toString(), { "DPoP": await dpop() }).catch((error: unknown) => (error instanceof oauth.WWWAuthenticateChallengeError ? error.response : Response.error()));
+			const revoke = async (): Promise<Response> => oauth.protectedResourceRequest(tokens.accessToken, "POST", new URL(as.revocation_endpoint as string), new Headers({ "content-type": "application/x-www-form-urlencoded" }), new URLSearchParams({ "token": tokens.refreshToken }).toString(), await options()).catch((error: unknown) => (error instanceof oauth.WWWAuthenticateChallengeError ? error.response : Response.error()));
 
 			if ((await revoke()).status === 400) {
 				await revoke();
@@ -272,7 +278,7 @@ export function createClient({ api, clientId, redirectUri, par = false, authoriz
 			}
 
 			store(await withNonce(
-				async () => oauth.refreshTokenGrantRequest(as, client, none, tokens.refreshToken, { "DPoP": await dpop() }),
+				async () => oauth.refreshTokenGrantRequest(as, client, none, tokens.refreshToken, await options()),
 				async (response) => oauth.processRefreshTokenResponse(as, client, response)
 			));
 
@@ -292,7 +298,7 @@ export function createClient({ api, clientId, redirectUri, par = false, authoriz
 			return new Response(JSON.stringify({ "error": "not signed in" }), { "status": 401 });
 		}
 
-		const request = async (): Promise<Response> => oauth.protectedResourceRequest(tokens.accessToken, method, url, headers, body, { "DPoP": await dpop() });
+		const request = async (): Promise<Response> => oauth.protectedResourceRequest(tokens.accessToken, method, url, headers, body, await options());
 
 		for (let attempt = 0; ; attempt += 1) {
 			try {
