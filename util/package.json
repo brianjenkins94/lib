@@ -6,6 +6,7 @@
   "type": "module",
   "dependencies": {
     "@antfu/eslint-config": "latest",
+    "@eslint/css": "^2.0.0",
     "@eslint/js": "latest",
     "eslint": "latest",
     "typescript-eslint": "latest"

@@ -1,4 +1,5 @@
 import antfu, { GLOB_SRC, GLOB_TS, GLOB_TSX } from "@antfu/eslint-config";
+import css from "@eslint/css";
 import js from "@eslint/js";
 import { builtinRules } from "eslint/use-at-your-own-risk";
 import tseslint from "typescript-eslint";
@@ -465,8 +466,27 @@ const l4For = (ts: boolean) => Object.fromEntries(Object.entries(L4).filter(([id
 // drops it to warn (temporary CI-green tech debt — see the `squelched` map). Split by ts/ like L4.
 const squelchFor = (ts: boolean) => Object.fromEntries(Object.entries(squelched).filter(([id]) => id.startsWith("ts/") === ts));
 
+// CSS, in ESLint's own CSS language (@eslint/css), so a consumer's util-lint checks its stylesheets as it does its
+// code: the plugin's recommended rules, with the severity pass's meaning (an auto-fixable rule warns, any other
+// errors). A consumer adds its own CSS rules in its config, for the same files. A value may read a variable the file
+// doesn't declare: a stylesheet on a design system's tokens reads them from the system's own.
+const CSS_FILES = ["**/*.css"];
+const cssRules = {
+	...Object.fromEntries(Object.keys(css.configs.recommended.rules).map((id) => [id, (css.rules[id.slice("css/".length) as keyof typeof css.rules]?.meta as { "fixable"?: unknown } | undefined)?.fixable === undefined ? "error" : "warn"])),
+	"css/no-invalid-properties": ["error", { "allowUnknownVariables": true }]
+};
+
+/** A config with no `files` applies to every file, a stylesheet too, where JavaScript's rules can't run: so it leaves
+ *  CSS out. (Not a global ignore — an object of `ignores` alone — which has to stay as it is.) A consumer's own
+ *  file-less objects need `files` for the same reason. */
+function leaveCssOut<T extends { "files"?: unknown; "ignores"?: string[] }>(config: T): T {
+	const globalIgnore = Object.keys(config).every((key) => key === "ignores" || key === "name");
+
+	return config.files !== undefined || globalIgnore ? config : { ...config, "ignores": [...config.ignores ?? [], ...CSS_FILES] };
+}
+
 export default [
-	...configs.map(hushFixable).map(ignoreIndentComments).map(partitionImportsByComment),
+	...configs.map(hushFixable).map(ignoreIndentComments).map(partitionImportsByComment).map(leaveCssOut),
 	hushFixable({ "files": [GLOB_SRC], "rules": srcFill }),
 	hushFixable({ "files": [GLOB_TS, GLOB_TSX], "rules": tsFill }),
 	{ "files": [GLOB_TS, GLOB_TSX], "rules": supersede },
@@ -479,5 +499,6 @@ export default [
 	{ "files": [GLOB_TS, GLOB_TSX], "rules": squelchFor(true) },
 	...disabledBlocks,
 	...(yamlFiles.length > 0 ? [{ "files": yamlFiles, "rules": yamlRules }] : []),
-	...(jsoncFiles.length > 0 ? [{ "files": jsoncFiles, "rules": { "jsonc/indent": ["warn", 2] } }] : [])
+	...(jsoncFiles.length > 0 ? [{ "files": jsoncFiles, "rules": { "jsonc/indent": ["warn", 2] } }] : []),
+	{ "files": CSS_FILES, "plugins": { "css": css }, "language": "css/css", "rules": cssRules }
 ];
