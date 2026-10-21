@@ -186,7 +186,23 @@ if (isEntry(import.meta)) {
 			await exec("npx", ["tsc", "-p", configPath], { "cwd": __root }).catch(() => {});
 
 			// Repo-relative in outDir → workspace-relative; outside the workspace (a sibling's), its `../` dropped.
-			const declared = await find(outDir).name("*.d.ts").exec(async (absolute): Promise<[string, Buffer]> => [path.relative(path.join(outDir, workspace), absolute).replace(/\\/gu, "/"), await fs.readFile(absolute, { "encoding": null })], { "concurrency": 16 });
+			const keyOf = (repoRelative: string) => path.posix.relative(workspace, repoRelative).replace(/^(?:\.\.\/)+/u, "");
+
+			// tsc keeps a relative import as its source wrote it, aimed from the source's place in the repo; in the
+			// tarball a sibling's declaration sits at its key instead, so each is re-aimed from this declaration's key
+			// to its target's (`../../../packages/theme/src/component` → `../packages/theme/src/component`). Within
+			// the workspace the keys are the sources' own places, so those come out as they were.
+			const relocate = (text: string, repoRelative: string) => text.replaceAll(/(\bfrom\s*|\bimport\s*\(\s*|\bimport\s+)(["'])(\.\.?\/[^"']*)\2/gu, (whole, lead: string, quote: string, specifier: string) => {
+				const relocated = path.posix.relative(path.posix.dirname(keyOf(repoRelative)), keyOf(path.posix.join(path.posix.dirname(repoRelative), specifier)));
+
+				return lead + quote + (relocated.startsWith(".") ? relocated : "./" + relocated) + quote;
+			});
+
+			const declared = await find(outDir).name("*.d.ts").exec(async (absolute): Promise<[string, Buffer]> => {
+				const repoRelative = path.relative(outDir, absolute).replace(/\\/gu, "/");
+
+				return [path.posix.relative(workspace, repoRelative), Buffer.from(relocate(await fs.readFile(absolute), repoRelative))];
+			}, { "concurrency": 16 });
 
 			return {
 				"inside": Object.fromEntries(declared.filter(([key]) => !key.startsWith("../"))),
@@ -380,6 +396,27 @@ if (isEntry(import.meta)) {
 					files[key] = content;
 				}
 			}
+
+		// …and one a shipped declaration imports, transitively: a type-only import leaves no module in the build.
+			const imported = (key: string) => [...files[key].toString().matchAll(/(?:\bfrom\s*|\bimport\s*\(\s*|\bimport\s+)["'](\.\.?\/[^"']*)["']/gu)].map((match) => path.posix.join(path.posix.dirname(key), match[1]).replace(/\.js$/u, "") + ".d.ts");
+
+			for (let found = Object.keys(files).filter((key) => key.endsWith(".d.ts")); found.length > 0;) {
+				found = [...new Set(found.flatMap(imported))].filter((key) => files[key] === undefined && declarations.outside[key] !== undefined);
+
+				for (const key of found) {
+					files[key] = declarations.outside[key];
+				}
+			}
+		}
+
+		// A Custom Elements Manifest the package names (`customElements`, the field tools find it by) ships beside its
+		// code: it's no module, so a source package's build wouldn't otherwise carry it.
+		const elementsManifest = packageJson["customElements"];
+
+		if (typeof elementsManifest === "string" && typeof directory !== "string") {
+			const key = path.posix.normalize(elementsManifest.replace(/\\/gu, "/"));
+
+			files[key] = await fs.readFile(path.join(__root, workspace, key), { "encoding": null });
 		}
 
 		const binFiles = Object.keys(files).filter(isBin);
@@ -421,6 +458,11 @@ if (isEntry(import.meta)) {
 			...publishable,
 			"name": scopeName(packageJson["name"]),
 			"exports": Object.fromEntries(Object.keys(files).filter((key) => key !== "package.json" && !key.endsWith(".d.ts")).flatMap((key) => {
+				// Data (a manifest) is exported at its own path, as tools and imports name it.
+				if (!/\.[cm]?js$/u.test(key)) {
+					return [["./" + key, "./" + key]];
+				}
+
 			// Pair each entry with its emitted declaration (if any) so TypeScript consumers get types — its sibling, or
 			// for an `exports` entry built under another name, its source's; hand-written .mjs/.cjs have no .d.ts and
 			// stay a bare target string.
