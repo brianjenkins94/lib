@@ -6,9 +6,11 @@
  *   .silo/local/traces/<file>.jsonl          every run kept on this machine: its values as they were, and the text it ran
  *   .silo/traces/<user>/<file>.jsonl         SHARED · the runs of the file as it's saved now (by its blob oid), one person's
  *
- * A value can hold a secret, so what's shared is only what can't: a run that read no inputs (no file read, request,
- * environment variable, command, argument or stdin — its `inputs` empty) is determined by its code, which is in git
- * already, so its values are shared as they were; a run that read any shares each value's type alone (`committable`),
+ * A value can hold a secret, so what's shared is only what can't: a run that read no inputs is determined by its code,
+ * which is in git already, so its values are shared as they were. "Read no inputs" is decided on the safe side: none in
+ * its `inputs` (what the runtime saw it read — not every runtime tells every read), no argument read, and code that
+ * can't read from outside at all (`mayRead`: no import or require, nothing of `process`, `fetch`, sockets, storage or the
+ * page). Any other run shares each value's type alone (`committable`),
  * the inputs it read by capability and resource (a URL without its query or fragment), and how it ended without the
  * message (an error's text can quote a value). The values stay on this machine.
  *
@@ -50,6 +52,13 @@ export interface RunTrace {
 	"calls": TraceCall[];
 	/** The text that ran: kept locally, for placing its values; never shared (the oid names it in git). */
 	"source"?: string;
+}
+
+/** Whether `source` could read from outside — so its values may hold what it read: any import or require (a module can
+ *  read), anything of `process` (env, argv, stdin), the network, storage, the page. A heuristic on the safe side: code
+ *  that can't, can't; code that could is treated as if it did. */
+export function mayRead(source: string): boolean {
+	return /\b(?:import|require|process|fetch|XMLHttpRequest|WebSocket|EventSource|navigator|localStorage|sessionStorage|indexedDB|caches|document|location|Deno|Bun|globalThis|self|window|eval|Function)\b/u.test(source);
 }
 
 /** A value's type, from its preview: what a run that read inputs shares in place of it. */
@@ -116,12 +125,13 @@ export function withRun(traces: RunTrace[], run: RunTrace, keep = 8): RunTrace[]
 	return [...others, kept].slice(-keep);
 }
 
-/** A run as it's shared in git: never its text; and when it read inputs, its values' types alone and its end without
- *  what it said. */
+/** A run as it's shared in git: never its text; and unless it surely read nothing (`inputs` none, no argument read, and
+ *  its text unable to read — `mayRead`), its values' types alone and its end without what it said. */
 export function committable(trace: RunTrace): RunTrace {
 	const { "source": _source, ...shared } = trace;
 
-	if (trace.inputs.length === 0 && !trace.values.some((each) => each.kind === "input")) {
+	// (its text decides it: without it, as if it read)
+	if (trace.inputs.length === 0 && !trace.values.some((each) => each.kind === "input") && trace.source !== undefined && !mayRead(trace.source)) {
 		return shared;
 	}
 
@@ -199,6 +209,13 @@ if (isEntry(import.meta)) {
 		assert.equal(read.values[0].type, "string");
 		assert.deepEqual(read.end, { "kind": "crashed", "line": 0 });
 		assert.ok(!JSON.stringify(read).includes("sk-live"), "nothing of the value left");
+		// Its code could read (a require, process.env…) though the runtime told no input: as if it read. No text: likewise.
+		const reads = committable({ ...run("q", [x("'sk-live-123'")]), "source": "const key = require('fs').readFileSync('.env', 'utf8');" });
+
+		assert.equal(reads.values[0].value, undefined);
+		assert.equal(committable({ ...run("e", [x("'abc'")]), "source": "const key = process.env.KEY;" }).values[0].value, undefined);
+		assert.equal(committable({ ...run("n", [x("1")]), "source": undefined }).values[0].value, undefined);
+		assert.equal(mayRead("const items = [1, 2, 3];\nlet total = 0;\nfor (const item of items) total += item;\nconsole.log(total);\n"), false);
 		// process.argv read: an input too.
 		assert.equal(committable(run("v", [{ ...x("'--token=abc'"), "kind": "input" }])).values[0].value, undefined);
 
