@@ -51,6 +51,10 @@ export type Schema = boolean | Record<string, unknown>;
 /** What a rule's rows are matched against: the facts where the program is — `capability` and `resource` at a call. */
 export type Subject = Record<string, unknown>;
 
+/** Who started a run (a subject's `trigger`): a person (`you`), the editor because the code changed (`edit`: on a save,
+ *  or on its interval while the text differs from the last run's — nobody is asked), or CI. */
+export type Trigger = "you" | "edit" | "ci";
+
 /** One row: a target (a key of the subject; dots reach into it), an operator, and the operator's argument. */
 export interface Comparison {
 	"target_id": string;
@@ -178,6 +182,9 @@ export const TARGETS: Record<string, Target> = {
 	"capability": { "label": "capability", "type_id": "string", "schema": { "type": "string", "examples": ["fs:read", "fs:write", "net", "net.ws", "exec", "eval", "env"] }, "description": "What a call can do" },
 	"resource": { "label": "resource", "type_id": "string", "schema": { "type": "string" }, "description": "What it reaches: a path, a URL, a command" },
 	"program": { "label": "program", "type_id": "string", "schema": { "type": "string" }, "description": "The file run, from the workspace root" },
+	// Who's watching: a rule about `edit` runs says what a call does when nobody can be asked (RUNNING.md, unattended
+	// runs); one without the row applies to every run.
+	"trigger": { "label": "trigger", "type_id": "string", "schema": { "type": "string", "enum": ["you", "edit", "ci"] }, "description": "Who started the run: you, the editor after an edit (on a save, or on its interval), or CI" },
 	// A package whose code runs: an org's contract trusts one (allow: its calls aren't asked about) or bans one (deny: it
 	// doesn't run at all) — packageDisposition — and a call's rows can name the package making it.
 	"package": { "label": "package", "type_id": "string", "schema": { "type": "string", "examples": ["lodash", "@scope/name"] }, "description": "The package whose code runs, by name" },
@@ -694,5 +701,15 @@ if (isEntry(import.meta)) {
 		assert.equal(actionSchema("give", "result"), true);
 		assert.deepEqual(checkPolicy({ "rules": [fakeRates] }), []);
 		assert.equal(effectiveDisposition({ "version": 1, "rules": [fakeRates] }, "net", "https://api.example.com/rates", true), "review", "giving a result decides nothing for a real call");
+
+		// Who's watching: a rule about edit runs decides only theirs; one without the row decides every run's.
+		const unattended: Rule = { "when": { "logicalType_id": "all", "predicates": [{ "target_id": "trigger", "operator_id": "is", "argument": "edit" }, { "target_id": "capability", "operator_id": "is", "argument": "net" }] }, "then": [{ "action_id": "skip" }] };
+		const both: Policy = { "version": 1, "rules": [unattended, fakeRates] };
+
+		assert.equal(effectiveDisposition(both, "net", "https://api.example.com/rates", true, { "trigger": "edit" }), "skip");
+		assert.equal(effectiveDisposition(both, "net", "https://api.example.com/rates", true, { "trigger": "you" }), "review");
+		assert.equal(givenResult(both, { "trigger": "edit", "capability": "net", "resource": "https://api.example.com/rates" })?.rule, fakeRates);
+		assert.deepEqual(argumentSchema("trigger", "is"), { "type": "string", "enum": ["you", "edit", "ci"] });
+		assert.deepEqual(checkPolicy({ "rules": [unattended] }), []);
 	})();
 }
