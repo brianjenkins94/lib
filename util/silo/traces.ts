@@ -14,18 +14,23 @@
  * the inputs it read by capability and resource (a URL without its query or fragment), and how it ended without the
  * message (an error's text can quote a value). The values stay on this machine.
  *
- * A run is the same run as another (`traceKey`) when it ran the same text (`oid`) to the same values, inputs and end:
- * kept once (`withRun`), counted. A file's shared runs are the ones of its text as it's saved (`current`): when the file
- * changes, the runs of the text before it leave the file — git keeps them, in the commit whose code they match.
+ * A run is identified by its code: the BABLR span ids of the top-level declarations it executed (`declarations`) — content
+ * hashes, so a reformat, a comment or an edit to code it didn't run leaves them as they were, and an edit inside one
+ * changes it — and each value by the span around it. It's the same run as another (`traceKey`) when those, its inputs,
+ * values and end are the same: kept once (`withRun`), counted. And it's current for a text (`currentIn`) while every
+ * declaration it executed is in the text unchanged: a file's shared runs are those, when it's committed — the others
+ * leave the file, and git keeps them in the commit whose code they match. (A run without its declarations — its text
+ * couldn't be parsed — is identified by its text's blob oid and lines, as before: current only for that very text.)
  */
 
 import { isEntry } from "@brianjenkins94/util/env";
 import type { Trigger } from "./policy.js";
 
-/** A value a run put on a line (the editor's live values): where (`line`, its offsets in the text that ran `at`), whose
+/** A value a run put on a line (the editor's live values): where (`line`, its offsets in the text that ran `at`, and
+ *  `span`, the id of the BABLR span around it — the same through a reformat, an edit elsewhere or a move), whose
  *  (`name`), what kind (bound, returned, a branch, a call skipped or given…), in which call and loop turns — and the
  *  value as previewed, or, shared from a run that read inputs, its type alone. */
-export interface TraceValue { "line": number; "name": string; "kind": string; "call": number; "turns": number[]; "at"?: [number, number]; "value"?: string; "type"?: string }
+export interface TraceValue { "line": number; "name": string; "kind": string; "call": number; "turns": number[]; "at"?: [number, number]; "span"?: string; "value"?: string; "type"?: string }
 
 /** A call a run made of one of its functions (its first line, and offsets). */
 export interface TraceCall { "id": number; "name": string; "line": number; "at"?: [number, number] }
@@ -37,9 +42,14 @@ export interface TraceEnd { "kind": "crashed" | "stopped"; "line": number; "at"?
 export interface RunTrace {
 	/** The run's id (its first, of the runs it stands for). */
 	"id": string;
-	/** The file, from the workspace root, and the git blob oid of the text that ran. */
+	/** The file, from the workspace root, and the git blob oid of the text that ran (where it came from: the run is
+	 *  identified by `declarations`, when it has them). */
 	"file": string;
 	"oid": string;
+	/** The BABLR span ids of the file's top-level declarations the run executed (sorted): its code. Content hashes — a
+	 *  reformat or a comment doesn't change one, an edit inside it does — so the run is the same run, and still current,
+	 *  for as long as each of them is in the text. */
+	"declarations"?: string[];
 	/** Who started it. */
 	"trigger": Trigger;
 	/** When it (last) ran, ISO; how many runs it stands for. */
@@ -52,6 +62,53 @@ export interface RunTrace {
 	"calls": TraceCall[];
 	/** The text that ran: kept locally, for placing its values; never shared (the oid names it in git). */
 	"source"?: string;
+}
+
+/** A span of a text (BABLR's, as the editor's `annotations.spans` gives them): its content-addressed id and range. */
+export interface Span { "id": string; "start": number; "end": number }
+
+/** The text's top-level declarations: the spans nothing but the whole program contains. */
+export function topLevel(spans: Span[]): Span[] {
+	const sorted = spans.toSorted((left, right) => left.start - right.start || right.end - left.end);
+	const root = sorted.find((span) => sorted.every((other) => other.start >= span.start && other.end <= span.end));
+	const tops: Span[] = [];
+
+	for (const span of sorted) {
+		if (span !== root && (tops.length === 0 || span.start >= tops[tops.length - 1].end)) {
+			tops.push(span);
+		}
+	}
+
+	return tops;
+}
+
+/** The smallest span around `[start, end)`, if one is (what a value keeps, to be found through edits elsewhere). */
+export function spanAround(spans: Span[], start: number, end: number): Span | undefined {
+	let best: Span | undefined;
+
+	for (const span of spans) {
+		if (span.start <= start && end <= span.end && (best === undefined || span.end - span.start < best.end - best.start)) {
+			best = span;
+		}
+	}
+
+	return best;
+}
+
+/** The top-level declarations (ids, sorted) holding any of `ranges` — what a run's executed statements were in. */
+export function declarationsHolding(spans: Span[], ranges: [number, number][]): string[] {
+	const tops = topLevel(spans);
+	const ids = new Set<string>();
+
+	for (const [start] of ranges) {
+		const top = tops.find((span) => span.start <= start && start < span.end);
+
+		if (top !== undefined) {
+			ids.add(top.id);
+		}
+	}
+
+	return [...ids].toSorted();
 }
 
 /** Whether `source` could read from outside — so its values may hold what it read: any import or require (a module can
@@ -111,6 +168,12 @@ function hash(text: string): string {
 
 /** What makes a run the same run as another: the text it ran, its inputs, its values (or their types) and its end. */
 export function traceKey(trace: RunTrace): string {
+	// By its code's spans when it has them — a reformat, a comment or an edit to code it didn't run leaves it the same
+	// run — else by the exact text and lines.
+	if (trace.declarations !== undefined && trace.declarations.length > 0) {
+		return hash(JSON.stringify([trace.declarations, trace.inputs, trace.values.map((each) => [each.span ?? each.line, each.name, each.kind, each.call, each.turns, each.value ?? null, each.type ?? null]), trace.end === undefined ? null : [trace.end.kind]]));
+	}
+
 	return hash(JSON.stringify([trace.oid, trace.inputs, trace.values.map((each) => [each.line, each.name, each.kind, each.call, each.turns, each.value ?? null, each.type ?? null]), trace.end === undefined ? null : [trace.end.kind, trace.end.line]]));
 }
 
@@ -145,6 +208,12 @@ export function committable(trace: RunTrace): RunTrace {
 /** The runs of the text `oid` names — the file as it is. */
 export function current(traces: RunTrace[], oid: string): RunTrace[] {
 	return traces.filter((each) => each.oid === oid);
+}
+
+/** The runs still current for a text — its blob `oid`, and its spans' ids (`ids`, when they're known): a run of that very
+ *  text, or one whose every executed declaration is in it unchanged (only code it didn't run, comments or layout changed). */
+export function currentIn(traces: RunTrace[], oid: string, ids?: ReadonlySet<string>): RunTrace[] {
+	return traces.filter((each) => each.oid === oid || (ids !== undefined && each.declarations !== undefined && each.declarations.length > 0 && each.declarations.every((id) => ids.has(id))));
 }
 
 /** A traces file's runs (one a line; a line that isn't one is skipped), the same run twice — two branches' — kept once. */
@@ -218,6 +287,24 @@ if (isEntry(import.meta)) {
 		assert.equal(mayRead("const items = [1, 2, 3];\nlet total = 0;\nfor (const item of items) total += item;\nconsole.log(total);\n"), false);
 		// process.argv read: an input too.
 		assert.equal(committable(run("v", [{ ...x("'--token=abc'"), "kind": "input" }])).values[0].value, undefined);
+
+		// Spans: a program [0,40) of two declarations, [0,15) (with a statement [2,10) and a value [4,6) in it) and [20,38).
+		const spans: Span[] = [{ "id": "prog", "start": 0, "end": 40 }, { "id": "fnA", "start": 0, "end": 15 }, { "id": "stmt", "start": 2, "end": 10 }, { "id": "val", "start": 4, "end": 6 }, { "id": "fnB", "start": 20, "end": 38 }];
+
+		assert.deepEqual(topLevel(spans).map((span) => span.id), ["fnA", "fnB"]);
+		assert.equal(spanAround(spans, 4, 6)?.id, "val");
+		assert.equal(spanAround(spans, 3, 9)?.id, "stmt");
+		assert.deepEqual(declarationsHolding(spans, [[3, 9], [25, 30], [16, 18]]), ["fnA", "fnB"], "what's between declarations holds nothing");
+
+		// Identified by its code: its lines moved (an edit above, a reformat) — the same run; a declaration it ran changed —
+		// another; current for a text while each declaration it ran is there.
+		const placed = (line: number, declarations = ["fnA"]): RunTrace => ({ ...run("s", [{ ...x("1"), "line": line, "span": "val" }]), "declarations": declarations });
+
+		assert.equal(traceKey(placed(0)), traceKey({ ...placed(7), "oid": "moved" }));
+		assert.notEqual(traceKey(placed(0)), traceKey(placed(0, ["fnA2"])));
+		assert.notEqual(traceKey(run("a", [x("1")])), traceKey({ ...run("a", [x("1")]), "oid": "other" }), "no declarations: by its text");
+		assert.deepEqual(currentIn([placed(0), { ...placed(0, ["fnA", "gone"]), "id": "t" }, { ...run("o", [x("1")]), "oid": "now" }], "now", new Set(["fnA", "fnB"])).map((each) => each.id), ["s", "o"]);
+		assert.deepEqual(currentIn([placed(0)], "now").map((each) => each.id), [], "no spans known: only that very text's");
 
 		// The file as it is: its text's runs; a file's lines read back, a merge's duplicate folded.
 		assert.deepEqual(current([run("1", [x("1")]), { ...run("2", [x("2")]), "oid": "def" }], "def").map((each) => each.id), ["2"]);
