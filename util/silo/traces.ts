@@ -38,6 +38,11 @@ export interface TraceCall { "id": number; "name": string; "line": number; "at"?
 /** How a run ended short: crashed or stopped, on a line — and, kept locally, what it said. */
 export interface TraceEnd { "kind": "crashed" | "stopped"; "line": number; "at"?: [number, number]; "message"?: string }
 
+/** The test a run was (a test file's `node --test`): its id — the test file, and its suites' and its own titles, by
+ *  ` › ` — and how it came out. A test's trace is kept on each file it executed, so a file's traces say which tests
+ *  reach it, by the same declarations a run's do. */
+export interface TraceTest { "id": string; "outcome": "pass" | "fail" | "skip" | "todo" }
+
 /** One run of a file. */
 export interface RunTrace {
 	/** The run's id (its first, of the runs it stands for). */
@@ -52,6 +57,8 @@ export interface RunTrace {
 	"declarations"?: string[];
 	/** Who started it. */
 	"trigger": Trigger;
+	/** The test it was, when it was one: what of this file one test executed. */
+	"test"?: TraceTest;
 	/** When it (last) ran, ISO; how many runs it stands for. */
 	"at": string;
 	"count": number;
@@ -171,21 +178,28 @@ export function traceKey(trace: RunTrace): string {
 	// By its code's spans when it has them — a reformat, a comment or an edit to code it didn't run leaves it the same
 	// run — else by the exact text and lines.
 	if (trace.declarations !== undefined && trace.declarations.length > 0) {
-		return hash(JSON.stringify([trace.declarations, trace.inputs, trace.values.map((each) => [each.span ?? each.line, each.name, each.kind, each.call, each.turns, each.value ?? null, each.type ?? null]), trace.end === undefined ? null : [trace.end.kind]]));
+		return hash(JSON.stringify([trace.test === undefined ? null : [trace.test.id, trace.test.outcome], trace.declarations, trace.inputs, trace.values.map((each) => [each.span ?? each.line, each.name, each.kind, each.call, each.turns, each.value ?? null, each.type ?? null]), trace.end === undefined ? null : [trace.end.kind]]));
 	}
 
-	return hash(JSON.stringify([trace.oid, trace.inputs, trace.values.map((each) => [each.line, each.name, each.kind, each.call, each.turns, each.value ?? null, each.type ?? null]), trace.end === undefined ? null : [trace.end.kind, trace.end.line]]));
+	return hash(JSON.stringify([trace.test === undefined ? null : [trace.test.id, trace.test.outcome], trace.oid, trace.inputs, trace.values.map((each) => [each.line, each.name, each.kind, each.call, each.turns, each.value ?? null, each.type ?? null]), trace.end === undefined ? null : [trace.end.kind, trace.end.line]]));
 }
 
 /** `traces` with `run` kept: the same run as one kept counts there (and is the latest), else it's added; the oldest past
- *  `keep` go. */
+ *  `keep` go. A test's run is that test's latest, whatever came before (its `keep` is one), and doesn't count toward
+ *  the others' — a file many tests reach keeps each test's, and its own runs. */
 export function withRun(traces: RunTrace[], run: RunTrace, keep = 8): RunTrace[] {
 	const key = traceKey(run);
 	const same = traces.find((each) => traceKey(each) === key);
-	const others = traces.filter((each) => each !== same);
 	const kept = same === undefined ? run : { ...same, "at": same.at > run.at ? same.at : run.at, "count": same.count + run.count, ...run.source === undefined ? {} : { "source": run.source } };
 
-	return [...others, kept].slice(-keep);
+	if (run.test !== undefined) {
+		return [...traces.filter((each) => each !== same && each.test?.id !== run.test?.id), kept];
+	}
+
+	const tests = traces.filter((each) => each.test !== undefined);
+	const runs = traces.filter((each) => each.test === undefined && each !== same);
+
+	return [...tests, ...[...runs, kept].slice(-keep)];
 }
 
 /** A run as it's shared in git: never its text; and unless it surely read nothing (`inputs` none, no argument read, and
@@ -265,6 +279,15 @@ if (isEntry(import.meta)) {
 		// Another value is another run; the oldest past `keep` go.
 		assert.equal(withRun(twice, run("3", [x("2")])).length, 2);
 		assert.deepEqual(withRun(withRun(withRun([], run("a", [x("1")])), run("b", [x("2")]), 2), run("c", [x("3")]), 2).map((each) => each.id), ["b", "c"]);
+
+		// A test's run: that test's latest on the file, apart from the runs (another test's, or a run, doesn't displace it).
+		const tested = (id: string, test: string, outcome: TraceTest["outcome"] = "pass"): RunTrace => ({ ...run(id, []), "declarations": ["fnA"], "test": { "id": test, "outcome": outcome } });
+		const withTests = withRun(withRun(withRun(withRun([], tested("t1", "a.test.js › adds")), tested("t2", "a.test.js › subtracts")), run("r1", [x("1")]), 1), run("r2", [x("2")]), 1);
+
+		assert.deepEqual(withTests.map((each) => each.id), ["t1", "t2", "r2"]);
+		assert.deepEqual(withRun(withTests, tested("t3", "a.test.js › adds", "fail")).map((each) => each.id), ["t2", "r2", "t3"], "a test's newer run replaces its older");
+		assert.equal(withRun(withTests, tested("t4", "a.test.js › adds")).find((each) => each.test?.id === "a.test.js › adds")?.count, 2, "the same again: counted");
+		assert.notEqual(traceKey(tested("a", "x › one")), traceKey(tested("a", "x › two")), "two tests that ran the same code are two");
 
 		// Shared: never the text; a run with no inputs as it was, one with inputs by types alone and its end without its message.
 		const pure = committable(run("p", [x("1")]));
