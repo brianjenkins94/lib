@@ -15,6 +15,7 @@
  *     traces/<user>/<file>.jsonl          SHARED · one person's runs of the file as it's saved now: values only where
  *                                                  they can't hold a secret, types otherwise (./traces)
  *     baseline.json                       SHARED · the dependency-capability baseline (derived, regenerated: ./audit)
+ *     features.json                       SHARED · the feature ledger: what's been decided about features (./ledger)
  *     versions.json                       SHARED · the exact version each dependency loads at, when no lockfile says
  *                                                  (the editor's: each range resolved a week old, kept until it changes)
  *     local/                              LOCAL  · this machine's alone, never committed:
@@ -118,6 +119,9 @@ export const annotationsPath = (collection: string, user: string, file: string):
 
 /** The dependency-capability baseline (./audit). */
 export const baselinePath = (): string => `${SILO_DIR}/baseline.json`;
+
+/** The feature ledger (./ledger): decisions about features — shared, one entry a few sorted lines. */
+export const ledgerPath = (): string => `${SILO_DIR}/features.json`;
 
 /** Where `user`'s runs of `file` as it's saved now are shared (./traces). */
 export const tracesPath = (user: string, file: string): string => `${SILO_DIR}/traces/${userFile(user)}/${file}.jsonl`;
