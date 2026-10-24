@@ -84,7 +84,7 @@ export function ledgerText(ledger: Ledger): string {
 	const order: (keyof LedgerEntry)[] = ["status", "why", "since", "until", "key", "paths", "in", "restore"];
 	const sorted = Object.fromEntries(Object.keys(ledger).toSorted().map((name) => [name, Object.fromEntries(order.flatMap((field) => (ledger[name][field] === undefined ? [] : [[field, ledger[name][field]]])))]));
 
-	return JSON.stringify(sorted, undefined, "\t") + "\n";
+	return JSON.stringify(sorted, undefined, 2) + "\n";
 }
 
 /** `ledger` with `name` set to `status` for `why` — `since` today when its status changes, kept when it doesn't — and any
