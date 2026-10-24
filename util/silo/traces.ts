@@ -29,8 +29,9 @@ import type { Trigger } from "./policy.js";
 /** A value a run put on a line (the editor's live values): where (`line`, its offsets in the text that ran `at`, and
  *  `span`, the id of the BABLR span around it — the same through a reformat, an edit elsewhere or a move), whose
  *  (`name`), what kind (bound, returned, a branch, a call skipped or given…), in which call and loop turns — and the
- *  value as previewed, or, shared from a run that read inputs, its type alone. */
-export interface TraceValue { "line": number; "name": string; "kind": string; "call": number; "turns": number[]; "at"?: [number, number]; "span"?: string; "value"?: string; "type"?: string }
+ *  value as previewed, or, shared from a run that read inputs, its type alone, unless it's `determined`: built only from
+ *  the file's own literals (purity.ts `determinedValues`), so shared as it was whatever the run read. */
+export interface TraceValue { "line": number; "name": string; "kind": string; "call": number; "turns": number[]; "at"?: [number, number]; "span"?: string; "value"?: string; "type"?: string; "determined"?: true }
 
 /** A call a run made of one of its functions (its first line, and offsets). */
 export interface TraceCall { "id": number; "name": string; "line": number; "at"?: [number, number] }
@@ -203,7 +204,8 @@ export function withRun(traces: RunTrace[], run: RunTrace, keep = 8): RunTrace[]
 }
 
 /** A run as it's shared in git: never its text; and unless it surely read nothing (`inputs` none, no argument read, and
- *  its text unable to read — `mayRead`), its values' types alone and its end without what it said. */
+ *  its text unable to read — `mayRead`), its values' types alone — a `determined` one's as it was — and its end without
+ *  what it said. */
 export function committable(trace: RunTrace): RunTrace {
 	const { "source": _source, ...shared } = trace;
 
@@ -214,7 +216,8 @@ export function committable(trace: RunTrace): RunTrace {
 
 	return {
 		...shared,
-		"values": trace.values.map(({ value, ...rest }) => ({ ...rest, "type": rest.type ?? typeOf(value) })),
+		// (a value bound or returned, built from the file's literals alone: not what the run read)
+		"values": trace.values.map(({ value, ...rest }) => (rest.determined === true && (rest.kind === "bind" || rest.kind === "return") && value !== undefined ? { ...rest, "value": value } : { ...rest, "type": rest.type ?? typeOf(value) })),
 		...trace.end === undefined ? {} : { "end": { "kind": trace.end.kind, "line": trace.end.line, ...trace.end.at === undefined ? {} : { "at": trace.end.at } } }
 	};
 }
@@ -310,6 +313,10 @@ if (isEntry(import.meta)) {
 		assert.equal(mayRead("const items = [1, 2, 3];\nlet total = 0;\nfor (const item of items) total += item;\nconsole.log(total);\n"), false);
 		// process.argv read: an input too.
 		assert.equal(committable(run("v", [{ ...x("'--token=abc'"), "kind": "input" }])).values[0].value, undefined);
+		// A run that read: a determined value (bound or returned) is shared as it was; any other kind never.
+		const mixed = committable({ ...run("m", [{ ...x("6"), "determined": true }, x("'sk-live-123'"), { ...x("'net https://x?k=1'"), "kind": "skip", "determined": true }], ["fs:read /workspace/.env"]), "source": "const key = require('fs').readFileSync('.env', 'utf8');" });
+
+		assert.deepEqual(mixed.values.map((each) => each.value ?? `‹${each.type}›`), ["6", "‹string›", "‹string›"]);
 
 		// Spans: a program [0,40) of two declarations, [0,15) (with a statement [2,10) and a value [4,6) in it) and [20,38).
 		const spans: Span[] = [{ "id": "prog", "start": 0, "end": 40 }, { "id": "fnA", "start": 0, "end": 15 }, { "id": "stmt", "start": 2, "end": 10 }, { "id": "val", "start": 4, "end": 6 }, { "id": "fnB", "start": 20, "end": 38 }];
