@@ -121,9 +121,9 @@ export interface Effect {
 	 *  default — (`policy`); or, asked at the call, the person's answer: allowed this once (`once`), allowed always
 	 *  (`always`: a rule in their policy now, too), or refused (`refused`). The answers are the policy's exceptions —
 	 *  here, so they're on record whether or not the policy that grew from them is committed. Or, in a run nobody was
-	 *  watching, what the call returned when it last ran for real, given back (`recorded`). Absent when nothing decided
-	 *  it (a call that wasn't gated). */
-	"decided"?: "baseline" | "policy" | "once" | "always" | "refused" | "recorded";
+	 *  watching, what the call returned when it last ran for real, given back (`recorded`), or a file it wrote into its
+	 *  own layer, thrown away when it ends (`layer`). Absent when nothing decided it (a call that wasn't gated). */
+	"decided"?: "baseline" | "policy" | "once" | "always" | "refused" | "recorded" | "layer";
 }
 
 /** The user a git config names, as a slug: its `[user]` section's email local part, else its name. */
