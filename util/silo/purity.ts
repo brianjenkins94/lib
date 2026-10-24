@@ -101,9 +101,16 @@ export function purityReader(ts: Ts, program: Program, ours: (fileName: string) 
 			return undefined;
 		}
 
+		// (a destructured name is its parameter's, or its declaration's)
+		let root = declaration;
+
+		while (ts.isBindingElement(root) || ts.isObjectBindingPattern(root) || ts.isArrayBindingPattern(root)) {
+			root = root.parent;
+		}
+
 		for (let at = declaration; at !== undefined; at = at.parent) {
 			if (at === unit.node) {
-				return ts.isParameter(declaration) && declaration.parent === unit.node ? "param" : "local";
+				return ts.isParameter(root) && root.parent === unit.node ? "param" : "local";
 			}
 		}
 
@@ -181,7 +188,8 @@ export function purityReader(ts: Ts, program: Program, ours: (fileName: string) 
 
 		if (where === "local") {
 			const declaration = checker.getSymbolAtLocation(base)?.valueDeclaration;
-			const made = declaration === undefined || !ts.isVariableDeclaration(declaration) || declaration.initializer === undefined || fresh(declaration.initializer);
+			// (a destructured local holds a part of something it was handed: never its own)
+			const made = declaration === undefined || (!ts.isVariableDeclaration(declaration) && !ts.isBindingElement(declaration)) || (ts.isVariableDeclaration(declaration) && (declaration.initializer === undefined || fresh(declaration.initializer)));
 
 			if (intoIt && !made) {
 				note(unit, "effectful", `writes through a reference it was handed (${why})`);
@@ -459,6 +467,8 @@ if (isEntry(import.meta)) {
 			"export function log(message: string) { console.log(message); }",
 			"export function apply(f: (n: number) => number) { return f(1); }",
 			"export function anyCall(x: any) { return x.go(); }",
+			"export function pushAll({ list }: { list: number[] }) { list.push(1); }",
+			"export function viaParts(holder: { list: number[] }) { const { list } = holder; list.push(1); }",
 			"export function even(n: number): boolean { return n === 0 ? true : odd(n - 1); }",
 			"export function odd(n: number): boolean { return n === 0 ? false : even(n - 1); }"
 		].join("\n");
@@ -485,6 +495,8 @@ if (isEntry(import.meta)) {
 			"log": "effectful",
 			"apply": "pure-if",
 			"anyCall": "unknown",
+			"pushAll": "mutates-args", // a destructured parameter is an argument
+			"viaParts": "effectful", // a destructured local holds a part of what it was handed
 			"even": "pure", // a cycle settles
 			"odd": "pure"
 		});
