@@ -203,6 +203,57 @@ export function waysInManifest(text: string): WayIn[] {
 	return ways;
 }
 
+/** `text` (a manifest) without what declares the way in `facet` `id` — a command with its menus and keybindings, a
+ *  view, a setting, a debugger — indented as it was; undefined when it declares none of it (or isn't JSON). What
+ *  `silo remove` takes out of a manifest. */
+export function withoutWayIn(text: string, facet: string, id: string): string | undefined {
+	let manifest: Record<string, any>;
+
+	try {
+		manifest = JSON.parse(text);
+	} catch {
+		return undefined;
+	}
+
+	const contributes = manifest["contributes"];
+
+	if (contributes === undefined || contributes === null) {
+		return undefined;
+	}
+
+	const before = JSON.stringify(contributes);
+	const keep = (items: any[] | undefined, drop: (item: any) => boolean): any[] | undefined => items?.filter((item) => !drop(item));
+
+	if (facet === "command") {
+		contributes["commands"] = keep(contributes["commands"], (command) => command.command === id);
+		contributes["keybindings"] = keep(contributes["keybindings"], (keybinding) => keybinding.command === id);
+
+		for (const where of Object.keys(contributes["menus"] ?? {})) {
+			contributes["menus"][where] = keep(contributes["menus"][where], (item) => item.command === id);
+		}
+	} else if (facet === "view") {
+		for (const where of Object.keys(contributes["views"] ?? {})) {
+			contributes["views"][where] = keep(contributes["views"][where], (view) => view.id === id);
+		}
+	} else if (facet === "setting") {
+		for (const configuration of [contributes["configuration"] ?? []].flat()) {
+			if (configuration?.properties !== undefined) {
+				delete configuration.properties[id];
+			}
+		}
+	} else if (facet === "debugger") {
+		contributes["debuggers"] = keep(contributes["debuggers"], (debuggerContribution) => debuggerContribution.type === id);
+	}
+
+	if (JSON.stringify(contributes) === before) {
+		return undefined;
+	}
+
+	const indent = /\n\t/u.test(text) ? "\t" : /\n( +)/u.exec(text)?.[1] ?? "\t";
+
+	return JSON.stringify(manifest, undefined, indent) + (text.endsWith("\n") ? "\n" : "");
+}
+
 /** A way in's key: what it is, never where it lives (but a way in with no name is keyed by its file's name). */
 export function keyOf(way: WayIn, file: string): string {
 	const weak = way.weak === true || way.id === "" || way.id === "*";
@@ -294,5 +345,14 @@ if (isEntry(import.meta)) {
 
 		assert.deepEqual([...featuresOf([before]).keys()], [...featuresOf([after]).keys()]);
 		assert.deepEqual([...featuresOf([after]).keys()], ["agent tool|files_read"]);
+
+		// A way in taken out of a manifest: the command, its menu item and keybinding; a setting; nothing else.
+		const declared = JSON.stringify({ "name": "notes", "contributes": { "commands": [{ "command": "notes.add", "title": "Add" }, { "command": "notes.export", "title": "Export" }], "menus": { "commandPalette": [{ "command": "notes.export" }] }, "keybindings": [{ "command": "notes.export", "key": "ctrl+e" }], "configuration": { "properties": { "notes.size": { "type": "number" } } } } }, undefined, "\t") + "\n";
+		const without = withoutWayIn(declared, "command", "notes.export");
+
+		assert.deepEqual(waysInManifest(without ?? "").map((way) => way.facet + " " + way.id + " " + (way.side ?? "")), ["command notes.add declared", "setting notes.size "]);
+		assert.ok(without?.includes("\n\t\"name\"") === true && without.endsWith("\n"), "indented as it was");
+		assert.deepEqual(waysInManifest(withoutWayIn(declared, "setting", "notes.size") ?? "").filter((way) => way.facet === "setting"), []);
+		assert.equal(withoutWayIn(declared, "command", "notes.nothing"), undefined, "nothing of it: undefined");
 	})();
 }
