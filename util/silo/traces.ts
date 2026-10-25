@@ -60,6 +60,10 @@ export interface RunTrace {
 	"trigger": Trigger;
 	/** The test it was, when it was one: what of this file one test executed. */
 	"test"?: TraceTest;
+	/** The program it was a run of, from the workspace root, when that's another file: what of this file the run executed
+	 *  (its values are on the runs of the files they're in) — kept as a test's is, that program's latest, so an edit here
+	 *  can select it. */
+	"program"?: string;
 	/** When it (last) ran, ISO; how many runs it stands for. */
 	"at": string;
 	"count": number;
@@ -179,28 +183,39 @@ export function traceKey(trace: RunTrace): string {
 	// By its code's spans when it has them — a reformat, a comment or an edit to code it didn't run leaves it the same
 	// run — else by the exact text and lines.
 	if (trace.declarations !== undefined && trace.declarations.length > 0) {
-		return hash(JSON.stringify([trace.test === undefined ? null : [trace.test.id, trace.test.outcome], trace.declarations, trace.inputs, trace.values.map((each) => [each.span ?? each.line, each.name, each.kind, each.call, each.turns, each.value ?? null, each.type ?? null]), trace.end === undefined ? null : [trace.end.kind]]));
+		return hash(JSON.stringify([trace.test === undefined ? null : [trace.test.id, trace.test.outcome], ...trace.program === undefined ? [] : [trace.program], trace.declarations, trace.inputs, trace.values.map((each) => [each.span ?? each.line, each.name, each.kind, each.call, each.turns, each.value ?? null, each.type ?? null]), trace.end === undefined ? null : [trace.end.kind]]));
 	}
 
-	return hash(JSON.stringify([trace.test === undefined ? null : [trace.test.id, trace.test.outcome], trace.oid, trace.inputs, trace.values.map((each) => [each.line, each.name, each.kind, each.call, each.turns, each.value ?? null, each.type ?? null]), trace.end === undefined ? null : [trace.end.kind, trace.end.line]]));
+	return hash(JSON.stringify([trace.test === undefined ? null : [trace.test.id, trace.test.outcome], ...trace.program === undefined ? [] : [trace.program], trace.oid, trace.inputs, trace.values.map((each) => [each.line, each.name, each.kind, each.call, each.turns, each.value ?? null, each.type ?? null]), trace.end === undefined ? null : [trace.end.kind, trace.end.line]]));
+}
+
+/** What reached a file, when a trace is only that: a test, or a run of another program — undefined for the file's own runs. */
+function reachOf(trace: RunTrace): string | undefined {
+	if (trace.test !== undefined) {
+		return `test ${trace.test.id}`;
+	}
+
+	return trace.program === undefined ? undefined : `program ${trace.program}`;
 }
 
 /** `traces` with `run` kept: the same run as one kept counts there (and is the latest), else it's added; the oldest past
- *  `keep` go. A test's run is that test's latest, whatever came before (its `keep` is one), and doesn't count toward
- *  the others' — a file many tests reach keeps each test's, and its own runs. */
+ *  `keep` go. A test's run — or another program's, on a file it imported — is that test's (that program's) latest,
+ *  whatever came before (its `keep` is one), and doesn't count toward the others' — a file many tests reach keeps each
+ *  test's, and its own runs. */
 export function withRun(traces: RunTrace[], run: RunTrace, keep = 8): RunTrace[] {
 	const key = traceKey(run);
 	const same = traces.find((each) => traceKey(each) === key);
 	const kept = same === undefined ? run : { ...same, "at": same.at > run.at ? same.at : run.at, "count": same.count + run.count, ...run.source === undefined ? {} : { "source": run.source } };
+	const reach = reachOf(run);
 
-	if (run.test !== undefined) {
-		return [...traces.filter((each) => each !== same && each.test?.id !== run.test?.id), kept];
+	if (reach !== undefined) {
+		return [...traces.filter((each) => each !== same && reachOf(each) !== reach), kept];
 	}
 
-	const tests = traces.filter((each) => each.test !== undefined);
-	const runs = traces.filter((each) => each.test === undefined && each !== same);
+	const reached = traces.filter((each) => reachOf(each) !== undefined);
+	const runs = traces.filter((each) => reachOf(each) === undefined && each !== same);
 
-	return [...tests, ...[...runs, kept].slice(-keep)];
+	return [...reached, ...[...runs, kept].slice(-keep)];
 }
 
 /** A run as it's shared in git: never its text; and unless it surely read nothing (`inputs` none, no argument read, and
@@ -290,6 +305,14 @@ if (isEntry(import.meta)) {
 		assert.deepEqual(withTests.map((each) => each.id), ["t1", "t2", "r2"]);
 		assert.deepEqual(withRun(withTests, tested("t3", "a.test.js › adds", "fail")).map((each) => each.id), ["t2", "r2", "t3"], "a test's newer run replaces its older");
 		assert.equal(withRun(withTests, tested("t4", "a.test.js › adds")).find((each) => each.test?.id === "a.test.js › adds")?.count, 2, "the same again: counted");
+
+		// Another program's run on a file it imported: that program's latest, as a test's — not counted among the file's own.
+		const reached = (id: string, program: string, declarations = ["fnA"]): RunTrace => ({ ...run(id, []), "declarations": declarations, "program": program });
+		const withPrograms = withRun(withRun(withRun(withTests, reached("p1", "main.js")), reached("p2", "other.js")), reached("p3", "main.js", ["fnA", "fnB"]), 1);
+
+		assert.deepEqual(withPrograms.map((each) => each.id), ["t1", "t2", "r2", "p2", "p3"], "main.js's newer reach replaces its older; the file's own runs keep their own count");
+		assert.notEqual(traceKey(reached("p4", "main.js")), traceKey(reached("p4", "other.js")), "two programs' reach of the same code: two traces");
+		assert.equal(traceKey(run("same", [x("1")])), traceKey({ ...run("same", [x("1")]) }), "a trace with no program keeps its key");
 		assert.notEqual(traceKey(tested("a", "x › one")), traceKey(tested("a", "x › two")), "two tests that ran the same code are two");
 
 		// Shared: never the text; a run with no inputs as it was, one with inputs by types alone and its end without its message.
