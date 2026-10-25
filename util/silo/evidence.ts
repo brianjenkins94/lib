@@ -549,10 +549,26 @@ export interface BranchObservation extends Observed {
 	"arms": number[];
 }
 
-export type Observation = ReachedObservation | ValueObservation | BranchObservation;
+/** What made a function's calls impure, as a run counts them (tsval's `escapes`): wrote outside it, made an effect, read
+ *  the clock or random numbers — and calls into code the run can't see into (`unwatched`: a package's), which could have
+ *  been any of them. */
+export interface PurityCounts { "write": number; "effect": number; "nondeterministic": number; "unwatched": number }
+
+/** How a function's calls went (silo README, *Purity*): strict counts of its calls, and of those impure each way, since
+ *  its span last changed; the first impurity seen (what, and of which kind); and the first code it called that runs
+ *  can't see into. The faded weight is its calls. A function judged unknown and run often, never impure and never
+ *  unwatched, is "seen 4,000 times, never impure"; one judged pure and seen impure, an assumption broken. */
+export interface PurityObservation extends Observed, PurityCounts {
+	"kind": "purity";
+	"calls": number;
+	"first"?: { "kind": "write" | "effect" | "nondeterministic"; "what": string };
+	"unseen"?: string;
+}
+
+export type Observation = ReachedObservation | ValueObservation | BranchObservation | PurityObservation;
 
 /** The kinds an evidence file holds. */
-const KINDS = new Set<string>(["reached", "value", "branch"]);
+const KINDS = new Set<string>(["reached", "value", "branch", "purity"]);
 
 /** At most this many type tags a value observation keeps; the rest count as `other`. */
 export const MAX_TAGS = 8;
@@ -691,6 +707,30 @@ export function foldBranches(known: Observation[], branches: { "span": string; "
 	}));
 }
 
+/** One function's run, as a run reports it: its calls, how many were impure each way, and the first impurity. */
+export interface PurityReport extends PurityCounts { "span": string; "calls": number; "first"?: PurityObservation["first"]; "unseen"?: string }
+
+/** One run's functions of a file, folded in: each that ran adds its calls and impure calls to its strict counts, and
+ *  keeps the first impurity and the first unwatched call ever seen; its faded weight is its calls. A function that
+ *  didn't run this time only fades. */
+export function foldPurity(known: Observation[], reports: PurityReport[], run: { "id": string; "at": string }, halfLife = HALF_LIFE_RUNS): Observation[] {
+	const add = (a: PurityCounts, b: PurityCounts): PurityCounts => ({ "write": a.write + b.write, "effect": a.effect + b.effect, "nondeterministic": a.nondeterministic + b.nondeterministic, "unwatched": a.unwatched + b.unwatched });
+
+	return fold<PurityObservation, PurityReport>("purity", known, reports, run, halfLife, (a, b) => ({ ...a, ...add(a, b), "calls": a.calls + b.calls, ...a.first ?? b.first ? { "first": a.first ?? b.first } : {}, ...a.unseen ?? b.unseen ? { "unseen": a.unseen ?? b.unseen } : {} }), (before, report, fade) => {
+		const first = before?.first ?? report.first;
+		const unseen = before?.unseen ?? report.unseen;
+
+		return {
+			"w": (before?.w ?? 0) * fade + report.calls,
+			"ever": (before?.ever ?? 0) + 1,
+			"calls": (before?.calls ?? 0) + report.calls,
+			...add(before ?? { "write": 0, "effect": 0, "nondeterministic": 0, "unwatched": 0 }, report),
+			...first === undefined ? {} : { "first": first },
+			...unseen === undefined ? {} : { "unseen": unseen }
+		};
+	});
+}
+
 // ── samples: the values themselves, on this machine only ──
 
 /** A few distinct primitives seen at a value site — "only ever `"left"` or `"right"`" — kept in `.silo/local/` on the
@@ -751,6 +791,16 @@ if (isEntry(import.meta)) {
 		assert.deepEqual(all.runs.map((each) => each.id), ["b", "c", "a"]);
 		assert.equal(all.total, 3);
 		assert.deepEqual(all.effects[0], { "capability": "fs:read", "resource": "/workspace/rates.json", "how": "made", "calls": 3, "runs": 2, "first": "2026-10-01T00:00:00.000Z", "last": "2026-10-03T00:00:00.000Z" });
+
+		// A function's runs, folded: calls and impure calls add up, the first impurity stays the first, and it fades.
+		const purity = (calls: number, extra: Partial<PurityReport> = {}): PurityReport => ({ "span": "f", "calls": calls, "write": 0, "effect": 0, "nondeterministic": 0, "unwatched": 0, ...extra });
+		const once = foldPurity([], [purity(3)], { "id": "r1", "at": "2026-10-01T00:00:00.000Z" });
+		const twice = foldPurity(once, [purity(2, { "write": 1, "first": { "kind": "write", "what": "total" } }), purity(1, { "write": 1, "first": { "kind": "write", "what": "other" } })], { "id": "r2", "at": "2026-10-02T00:00:00.000Z" }) as PurityObservation[];
+
+		assert.deepEqual([twice[0]!.calls, twice[0]!.write, twice[0]!.first?.what, twice[0]!.ever], [6, 2, "total", 2]);
+		assert.ok(Math.abs(twice[0]!.w - (3 * 2 ** (-1 / HALF_LIFE_RUNS) + 3)) < 1e-9);
+		assert.deepEqual(parseEvidence(evidenceText(twice)), twice, "a purity line reads back");
+		assert.equal((foldPurity(twice, [], { "id": "r3", "at": "2026-10-03T00:00:00.000Z" })[0] as PurityObservation).calls, 6, "a function that didn't run keeps its counts, fading");
 
 		// The packages a run ran: by name@version, the lockfile's integrity where it names the same install.
 		const lock = JSON.stringify({ "packages": { "node_modules/greet": { "version": "1.2.3", "integrity": "sha512-a" }, "node_modules/greet/node_modules/@scope/inner": { "version": "0.0.9", "integrity": "sha512-b" } } });
