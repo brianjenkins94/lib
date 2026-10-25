@@ -16,6 +16,12 @@
  *   dead end                 a way in that leads nowhere: a command or view declared and never registered, a setting
  *                            its code never reads (its name nowhere in the code)
  *   stale entry              an entry that names nothing that's there
+ *   lease expired            an active entry kept `until` a date that's passed (a dormant feature kept for a while:
+ *                            decide again)
+ *
+ * And the leases (`dormant`): a way in nobody decided about keeps its place while the runs reach its code; one whose
+ * files the runs loaded and whose own code none of them ran is dormant — a suggestion, with its price, to remove it or
+ * to keep it a while (active, `until` 90 days on).
  * Each is an error once it's quiet on its repository (the editor's since 2026-10-25: its `silo check` fails on any), and
  * what deleting an entry's feature would free is its price (`./cost`).
  */
@@ -57,7 +63,7 @@ export interface DriftFacts {
 	"code": { "file": string; "text": string }[];
 }
 
-export type DriftCheck = "stopped but present" | "removed but documented" | "experiment expired" | "dead end" | "stale entry";
+export type DriftCheck = "stopped but present" | "removed but documented" | "experiment expired" | "dead end" | "stale entry" | "lease expired";
 
 export interface Drift {
 	"check": DriftCheck;
@@ -161,6 +167,10 @@ export function drift(ledger: Ledger, facts: DriftFacts): Drift[] {
 			found.push({ "check": "experiment expired", "entry": name, "message": entry.until === undefined ? `"${name}" is an experiment with no end` : `"${name}" was an experiment until ${entry.until}`, "code": "remove it", "decision": "make it active (why it stays), or give it a later `until`" });
 		}
 
+		if (entry.status === "active" && entry.until !== undefined && entry.until < facts.today) {
+			found.push({ "check": "lease expired", "entry": name, "message": `"${name}" was kept until ${entry.until} (${entry.why})`, "code": "remove it (`silo remove`)", "decision": "keep it a while longer (a later `until`), or for good (no `until`), with why" });
+		}
+
 		if (entry.status !== "removed" && there.length === 0 && (entry.key !== undefined || (entry.paths ?? []).length > 0)) {
 			found.push({ "check": "stale entry", "entry": name, "message": `"${name}" names ${[entry.key, ...entry.paths ?? []].filter((each) => each !== undefined).join(", ")}, and none of it is there`, "code": "nothing: the code went or moved", "decision": "set it removed (it went), or name where it is now" });
 		}
@@ -181,6 +191,23 @@ export function drift(ledger: Ledger, facts: DriftFacts): Drift[] {
 	}
 
 	return found;
+}
+
+/** What the runs reached: the files they loaded, and the declarations they ran (node ids, `file#name`). */
+export interface Reached { "files": ReadonlySet<string>; "declarations": ReadonlySet<string> }
+
+/** A way in, and its own code: the declarations its way in names (node ids, `file#name`). */
+export interface WayCode { "key": string; "facet": string; "id": string; "declarations": string[] }
+
+/** The leases run out: the ways in nobody decided about (no entry names their key, nor paths holding their code) whose
+ *  files the runs loaded — so they could have run them — and whose own code none of them ran. */
+export function dormant(ways: WayCode[], ledger: Ledger, reached: Reached): WayCode[] {
+	const keys = new Set(Object.values(ledger).flatMap((entry) => (entry.key === undefined ? [] : [entry.key])));
+	const paths = Object.values(ledger).flatMap((entry) => entry.paths ?? []).map((path) => path.replace(/\/+$/u, ""));
+	const fileOf = (id: string): string => id.slice(0, id.indexOf("#"));
+	const decided = (file: string): boolean => paths.some((path) => file === path || file.startsWith(path + "/"));
+
+	return ways.filter((way) => way.declarations.length > 0 && !keys.has(way.key) && !way.declarations.some((id) => decided(fileOf(id))) && way.declarations.some((id) => reached.files.has(fileOf(id))) && !way.declarations.some((id) => reached.declarations.has(id))).toSorted((left, right) => left.key.localeCompare(right.key));
 }
 
 if (isEntry(import.meta)) {
@@ -226,5 +253,18 @@ if (isEntry(import.meta)) {
 		assert.throws(() => withStatus({}, "x", "experiment", "try", today), /until/u);
 		assert.throws(() => withStatus({}, "x", "maybe" as LedgerStatus, "?", today), /isn't a status/u);
 		assert.deepEqual(parseLedger("not json"), {});
+		// A lease: kept until a date — once it's passed, decide again.
+		assert.deepEqual(drift(withStatus({}, "export", "active", "kept a while", today, { "paths": ["src/old.ts"], "until": "2026-10-01" }), facts).map((each) => each.check), ["lease expired", "dead end", "dead end"]);
+		assert.deepEqual(drift(withStatus({}, "export", "active", "kept a while", today, { "paths": ["src/old.ts"], "until": "2027-01-01" }), facts).map((each) => each.check), ["dead end", "dead end"]);
+		// Dormant: its file loaded, its code never ran — not one decided about, nor one whose files never loaded.
+		const ways: WayCode[] = [
+			{ "key": "command|a.export", "facet": "command", "id": "a.export", "declarations": ["src/a.ts#exportAll"] },
+			{ "key": "command|a.open", "facet": "command", "id": "a.open", "declarations": ["src/a.ts#open"] },
+			{ "key": "command|b.never", "facet": "command", "id": "b.never", "declarations": ["src/b.ts#never"] },
+			{ "key": "command|a.kept", "facet": "command", "id": "a.kept", "declarations": ["src/kept/c.ts#run"] }
+		];
+		const reached: Reached = { "files": new Set(["src/a.ts", "src/kept/c.ts"]), "declarations": new Set(["src/a.ts#open"]) };
+
+		assert.deepEqual(dormant(ways, withStatus({}, "kept", "active", "for agents", today, { "paths": ["src/kept"] }), reached).map((each) => each.key), ["command|a.export"]);
 	})();
 }
