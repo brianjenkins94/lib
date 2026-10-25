@@ -16,7 +16,8 @@
  *   dead end                 a way in that leads nowhere: a command or view declared and never registered, a setting
  *                            its code never reads (its name nowhere in the code)
  *   stale entry              an entry that names nothing that's there
- * Warnings for now: the design makes each an error once it's quiet on its repository.
+ * Each is an error once it's quiet on its repository (the editor's since 2026-10-25: its `silo check` fails on any), and
+ * what deleting an entry's feature would free is its price (`./cost`).
  */
 
 import { isEntry } from "@brianjenkins94/util/env";
