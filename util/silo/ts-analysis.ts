@@ -368,6 +368,8 @@ export function analyzeFile(host: TsHost, path: string, file: TsNode, text: stri
 	const objects: ObjectReader<TsNode> = { "property": property, "literal": literal, "isObject": (node) => is(node, "ObjectLiteralExpression"), "left": (node) => (is(node, "BinaryExpression") && is(node["operatorToken"], "PlusToken") ? node["left"] : undefined) };
 	// The objects `command(…)` was given: CLI commands, not agent tools.
 	const commands = new Set<TsNode>();
+	// Each way in's own code (its handler), as offsets: its way's, not the declaration's it's written in (below).
+	const handlers: [number, number][] = [];
 
 	function waysAt(node: TsNode, statement: TsNode): WayIn[] {
 		const ways: WayIn[] = [];
@@ -436,7 +438,10 @@ export function analyzeFile(host: TsHost, path: string, file: TsNode, text: stri
 			const code = fingerprint(node);
 			// A registering call's own code is what follows its name (codeArgumentsFrom): not the API that registers it.
 			const from = is(node, "CallExpression") ? codeArgumentsFrom(ways[0]!.facet) : undefined;
-			const roots = rootsOf(from === undefined ? [node] : [...node["arguments"]].slice(from), statement);
+			const own = from === undefined ? [node] : [...node["arguments"]].slice(from) as TsNode[];
+			const roots = rootsOf(own, statement);
+
+			handlers.push(...own.map((each): [number, number] => [each.pos, each.end]));
 
 			for (const way of ways) {
 				way.code = code;
@@ -503,10 +508,13 @@ export function analyzeFile(host: TsHost, path: string, file: TsNode, text: stri
 		}
 	}
 
-	// Every name each declaration's code uses (and the body's), resolved in one batch.
+	// Every name each declaration's code uses (and the body's), resolved in one batch — but not a way in's own code in it:
+	// what a handler uses is its way's (its roots). So the function that registers many handlers (an `install…`, an
+	// `activate`) leads to what its setup uses, not to every handler's code.
+	const inHandler = (identifier: TsNode): boolean => handlers.some(([start, end]) => start <= identifier.pos && identifier.end <= end);
 	const owners: [string, TsNode][] = [
-		...code.flatMap(([name, node]) => identifiers(node, node["name"]).map((identifier): [string, TsNode] => [name, identifier])),
-		...body.flatMap((statement) => identifiers(statement).map((identifier): [string, TsNode] => [TOP, identifier]))
+		...code.flatMap(([name, node]) => identifiers(node, node["name"]).filter((identifier) => !inHandler(identifier)).map((identifier): [string, TsNode] => [name, identifier])),
+		...body.flatMap((statement) => identifiers(statement).filter((identifier) => !inHandler(identifier)).map((identifier): [string, TsNode] => [TOP, identifier]))
 	];
 	const symbols = owners.length === 0 ? [] : host.symbols(owners.map(([, node]) => node));
 	const importSymbols = importNames.length === 0 ? [] : host.symbols(importNames.map(([, node]) => node));
@@ -770,5 +778,7 @@ if (isEntry(import.meta)) {
 		assert.ok(reach(analysis.graph, features.get("command|run.go")!.roots).has("x/shouter.ts#Shouter"), [...reach(analysis.graph, features.get("command|run.go")!.roots)].join(", "));
 		assert.ok(reach(analysis.graph, features.get("hub request|" + DEBUG)!.roots).has("x/shout.ts#shout"), "through a namespace import and a barrel's re-export");
 		assert.ok(!reach(analysis.graph, features.get("command|run.go")!.roots).has("x/shout.ts#shout"), "run.go doesn't reach what only the hub request uses");
+		// The function that registers them leads to its setup (`makeRunner()`), not into its handlers (`text.shout`).
+		assert.deepEqual(analysis.graph.edges("x/extension.ts#activate"), ["x/extension.ts#makeRunner"]);
 	})();
 }

@@ -16,8 +16,11 @@
  * A repository without a manifest has none of them.
  */
 
+import type { Feature } from "./features";
+import type { DeclarationGraph } from "./graph";
 import type { Drift, FoundWay } from "./ledger";
 import { isEntry } from "@brianjenkins94/util/env";
+import { nodeId, reach, TOP } from "./graph";
 
 /** One feature. */
 export interface ManifestFeature {
@@ -207,6 +210,43 @@ export function scoreGrouping(manifest: Manifest, grouping: ReadonlyMap<string, 
 	return score;
 }
 
+/**
+ * The code each of the manifest's features owns, by node id; a feature by `area\u0000name`, as `scoreGrouping` keys
+ * them. A feature owns what its ways in reach, and what registers them: the declaration each registration is written in
+ * (an `install…`, an `activate`, a module's body) and what its own code reaches. A handler's code is its way's, not that
+ * declaration's (./ts-analysis), so a declaration that registers many features leads to its setup, not into theirs. A
+ * declaration several features reach is each one's.
+ */
+export function codeOwners(manifest: Manifest, features: ReadonlyMap<string, Feature>, graph: DeclarationGraph): Map<string, Set<string>> {
+	const declarations = new Map<string, { "id": string; "start": number; "end": number }[]>();
+
+	for (const id of graph.fingerprints.keys()) {
+		const range = graph.range?.(id);
+
+		if (range !== undefined) {
+			declarations.set(range.file, [...declarations.get(range.file) ?? [], { "id": id, "start": range.start, "end": range.end }]);
+		}
+	}
+
+	/** The declaration a registration is written in: the narrowest that holds it, else its module's body. */
+	const holder = ({ file, start, end }: { "file": string; "start": number; "end": number }): string[] => {
+		const held = (declarations.get(file) ?? []).filter((each) => each.start <= start && end <= each.end).toSorted((left, right) => (left.end - left.start) - (right.end - right.start))[0];
+
+		return held !== undefined ? [held.id] : graph.fingerprints.has(nodeId(file, TOP)) ? [nodeId(file, TOP)] : [];
+	};
+	const owners = new Map<string, Set<string>>();
+
+	for (const [area, name, feature] of featuresOfManifest(manifest)) {
+		const ways = (feature.ways ?? []).flatMap((key) => (features.has(key) ? [features.get(key)!] : []));
+
+		for (const id of reach(graph, ways.flatMap((way) => [...way.roots, ...way.ranges.flatMap(holder)]))) {
+			owners.set(id, (owners.get(id) ?? new Set()).add(`${area}\u0000${name}`));
+		}
+	}
+
+	return owners;
+}
+
 if (isEntry(import.meta)) {
 	void (async function() {
 		const assert: typeof import("node:assert").strict = (await import("node:assert")).strict;
@@ -258,5 +298,14 @@ if (isEntry(import.meta)) {
 		assert.deepEqual([scoreGrouping(truth, new Map([["n1", "g1"], ["n2", "g1"], ["c1", "g2"], ["c2", "g3"], ["p1", "g4"], ["l1", "g4"]]), { "areas": true })].map((each) => [each.features, each.split, each.partly]), [[2, 1, 1]]);
 		// The manifest grouped as itself is whole.
 		assert.equal(scoreGrouping(truth, new Map([["n1", "n"], ["n2", "n"], ["c1", "c"], ["c2", "c"], ["p1", "p"], ["l1", "l"], ["t1", "t"]])).f, 1);
+		// Owners: activate registers both commands (offsets 10–40 and 50–80 inside it) and sets up with `connect`; each
+		// handler uses its own helper. Each feature owns its helper; both own activate and connect; `unused` is no one's.
+		const edges: Record<string, string[]> = { "a.ts#activate": ["a.ts#connect"], "a.ts#connect": [], "a.ts#open": [], "a.ts#save": [], "a.ts#unused": [] };
+		const ranges: Record<string, [number, number]> = { "a.ts#activate": [0, 100], "a.ts#connect": [100, 120], "a.ts#open": [120, 140], "a.ts#save": [140, 160], "a.ts#unused": [160, 180] };
+		const graph: DeclarationGraph = { "fingerprints": new Map(Object.keys(edges).map((id) => [id, id])), "nodes": () => Object.keys(edges), "edges": (id) => edges[id] ?? [], "range": (id) => (ranges[id] === undefined ? undefined : { "file": "a.ts", "start": ranges[id]![0], "end": ranges[id]![1] }) };
+		const command = (id: string, root: string, start: number): [string, Feature] => [`command|${id}`, { "key": `command|${id}`, "facet": "command", "id": id, "label": "", "files": ["a.ts"], "sides": ["registered"], "code": [], "roots": [root], "ranges": [{ "file": "a.ts", "start": start, "end": start + 30 }] }];
+		const owned = codeOwners({ "A": { "open": { "what": "O.", "ways": ["command|open"] }, "save": { "what": "S.", "ways": ["command|save"] } } }, new Map([command("open", "a.ts#open", 10), command("save", "a.ts#save", 50)]), graph);
+
+		assert.deepEqual(Object.fromEntries([...owned].map(([id, of]) => [id, [...of].toSorted()])), { "a.ts#open": ["A\u0000open"], "a.ts#activate": ["A\u0000open", "A\u0000save"], "a.ts#connect": ["A\u0000open", "A\u0000save"], "a.ts#save": ["A\u0000save"] });
 	})();
 }
