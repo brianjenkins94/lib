@@ -86,39 +86,7 @@ export function featuresFromTests(traces: RunTrace[]): { "features": TestFeature
 
 	const ambient = new Set(tests.length < AMBIENT_MIN ? [] : [...counts].filter(([, { "tests": many }]) => many >= AMBIENT_SHARE * tests.length).map(([name]) => name));
 	const own = new Map(tests.map((test) => [test, new Set([...reach.get(test)!.keys()].filter((name) => !ambient.has(name)))]));
-	const similarity = (left: string, right: string): number => {
-		const a = own.get(left)!;
-		const b = own.get(right)!;
-		const shared = [...a].filter((name) => b.has(name)).length;
-		const all = a.size + b.size - shared;
-
-		return all === 0 ? 0 : shared / all;
-	};
-	// Groups, joined most similar first while any two are alike enough (average linkage).
-	let groups = tests.filter((test) => own.get(test)!.size > 0).map((test) => [test]);
-	const linkage = (left: string[], right: string[]): number => left.reduce((sum, a) => sum + right.reduce((inner, b) => inner + similarity(a, b), 0), 0) / (left.length * right.length);
-
-	for (;;) {
-		let best: { "i": number; "j": number; "score": number } | undefined;
-
-		for (let i = 0; i < groups.length; i += 1) {
-			for (let j = i + 1; j < groups.length; j += 1) {
-				const score = linkage(groups[i], groups[j]);
-
-				if (score >= JOIN && (best === undefined || score > best.score)) {
-					best = { "i": i, "j": j, "score": score };
-				}
-			}
-		}
-
-		if (best === undefined) {
-			break;
-		}
-
-		const { i, j } = best;
-
-		groups = [...groups.filter((_, index) => index !== i && index !== j), [...groups[i], ...groups[j]].toSorted()];
-	}
+	const groups = joinAlike(new Map(tests.map((test) => [test, own.get(test)!])), JOIN);
 
 	const features = groups.map((group): TestFeature => {
 		const declarations = new Map<string, Declaration>();
@@ -140,6 +108,53 @@ export function featuresFromTests(traces: RunTrace[]): { "features": TestFeature
 		"features": features.toSorted((left, right) => right.tests.length - left.tests.length || left.name.localeCompare(right.name)),
 		"ambient": [...ambient].map((name) => counts.get(name)!.declaration)
 	};
+}
+
+/** Items grouped by how much their sets overlap: each item alone at first (one with an empty set in no group), then the
+ *  two groups most alike joined while any two are at least `join` alike — average linkage over the items' Jaccard
+ *  similarity. Features from tests are tests joined this way; `./derive` joins ways in by their reach. */
+export function joinAlike(sets: ReadonlyMap<string, ReadonlySet<string>>, join: number): string[][] {
+	const similarities = new Map<string, number>();
+	const similarity = (left: string, right: string): number => {
+		const pair = left < right ? `${left}\u0000${right}` : `${right}\u0000${left}`;
+		let known = similarities.get(pair);
+
+		if (known === undefined) {
+			const a = sets.get(left)!;
+			const b = sets.get(right)!;
+			const shared = [...a].filter((name) => b.has(name)).length;
+			const all = a.size + b.size - shared;
+
+			known = all === 0 ? 0 : shared / all;
+			similarities.set(pair, known);
+		}
+
+		return known;
+	};
+	let groups = [...sets.keys()].filter((item) => sets.get(item)!.size > 0).map((item) => [item]);
+	const linkage = (left: string[], right: string[]): number => left.reduce((sum, a) => sum + right.reduce((inner, b) => inner + similarity(a, b), 0), 0) / (left.length * right.length);
+
+	for (;;) {
+		let best: { "i": number; "j": number; "score": number } | undefined;
+
+		for (let i = 0; i < groups.length; i += 1) {
+			for (let j = i + 1; j < groups.length; j += 1) {
+				const score = linkage(groups[i], groups[j]);
+
+				if (score >= join && (best === undefined || score > best.score)) {
+					best = { "i": i, "j": j, "score": score };
+				}
+			}
+		}
+
+		if (best === undefined) {
+			return groups;
+		}
+
+		const { i, j } = best;
+
+		groups = [...groups.filter((_, index) => index !== i && index !== j), [...groups[i], ...groups[j]].toSorted()];
+	}
 }
 
 /** A lone test's own titles; a group's: the suites its tests all share, else their most common own title (the first,

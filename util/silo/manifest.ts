@@ -127,6 +127,86 @@ export function manifestWithout(text: string, keys: string[], paths: string[]): 
 	return changed ? manifestText(kept) : undefined;
 }
 
+/** How near a grouping of the ways in (./derive) is to the manifest's features. Of the features that own ways in: `whole`
+ *  ones are one group with nothing else in it; `split` ones are in more than one group, `merged` ones share a group with
+ *  another feature (`splitAndMerged`, both); `partly` ones are whole but for ways in the grouping placed nowhere;
+ *  `unseen` ones have none placed. `precision` and `recall` are B-cubed, each way in's: how much of its group is its
+ *  feature, and how much of its feature is in its group (a way in placed nowhere has none) — and `f`, their harmonic
+ *  mean. */
+export interface GroupingScore {
+	"features": number;
+	"ways": number;
+	"placed": number;
+	"groups": number;
+	"whole": number;
+	"split": number;
+	"merged": number;
+	"splitAndMerged": number;
+	"partly": number;
+	"unseen": number;
+	"precision": number;
+	"recall": number;
+	"f": number;
+}
+
+/** `grouping` (each way in's group, by its key) scored against `manifest`'s features — or its areas', with `areas`. */
+export function scoreGrouping(manifest: Manifest, grouping: ReadonlyMap<string, string>, options: { "areas"?: boolean } = {}): GroupingScore {
+	const truth = new Map(featuresOfManifest(manifest).flatMap(([area, name, feature]) => (feature.ways ?? []).map((key): [string, string] => [key, options.areas === true ? area : `${area}\u0000${name}`])));
+	const members = (of: Iterable<[string, string]>): Map<string, string[]> => {
+		const by = new Map<string, string[]>();
+
+		for (const [key, group] of of) {
+			by.set(group, [...by.get(group) ?? [], key]);
+		}
+
+		return by;
+	};
+	const byFeature = members([...truth].map(([key, feature]): [string, string] => [key, feature]));
+	const byGroup = members([...grouping].filter(([key]) => truth.has(key)));
+	const score: GroupingScore = { "features": byFeature.size, "ways": truth.size, "placed": 0, "groups": byGroup.size, "whole": 0, "split": 0, "merged": 0, "splitAndMerged": 0, "partly": 0, "unseen": 0, "precision": 0, "recall": 0, "f": 0 };
+
+	for (const [feature, keys] of byFeature) {
+		const groups = new Set(keys.flatMap((key) => (grouping.has(key) ? [grouping.get(key)!] : [])));
+		const split = groups.size > 1;
+		const merged = [...groups].some((group) => byGroup.get(group)!.some((key) => truth.get(key) !== feature));
+
+		if (groups.size === 0) {
+			score.unseen += 1;
+		} else if (split && merged) {
+			score.splitAndMerged += 1;
+		} else if (split) {
+			score.split += 1;
+		} else if (merged) {
+			score.merged += 1;
+		} else if (keys.some((key) => !grouping.has(key))) {
+			score.partly += 1;
+		} else {
+			score.whole += 1;
+		}
+	}
+
+	let precision = 0;
+	let recall = 0;
+
+	for (const [key, feature] of truth) {
+		const group = grouping.has(key) ? byGroup.get(grouping.get(key)!)! : undefined;
+
+		if (group !== undefined) {
+			const same = group.filter((each) => truth.get(each) === feature).length;
+
+			score.placed += 1;
+			precision += same / group.length;
+			recall += same / byFeature.get(feature)!.length;
+		}
+	}
+
+	score.precision = score.placed === 0 ? 0 : precision / score.placed;
+	score.recall = truth.size === 0 ? 0 : recall / truth.size;
+	score.f = score.precision + score.recall === 0 ? 0 : 2 * score.precision * score.recall / (score.precision + score.recall);
+
+	return score;
+}
+
 if (isEntry(import.meta)) {
 	void (async function() {
 		const assert: typeof import("node:assert").strict = (await import("node:assert")).strict;
@@ -166,5 +246,17 @@ if (isEntry(import.meta)) {
 
 		assert.deepEqual(JSON.parse(manifestWithout(before, ["view|a.monitor", "view|a.only"], ["src/y.ts", "src/z/index.ts"]) ?? "{}"), { "A": { "x": { "what": "X.", "ways": ["command|a.open"] } }, "B": { "z": { "what": "Z.", "paths": ["src/z"] } } });
 		assert.equal(manifestWithout(before, ["view|elsewhere"], ["src/other.ts"]), undefined);
+		// Scoring a grouping: notes whole; commit split over two groups; push merged with pull; tags unseen.
+		const truth: Manifest = { "A": { "notes": { "what": "N.", "ways": ["n1", "n2"] }, "commit": { "what": "C.", "ways": ["c1", "c2"] } }, "B": { "push": { "what": "P.", "ways": ["p1"] }, "pull": { "what": "L.", "ways": ["l1"] }, "tags": { "what": "T.", "ways": ["t1"] } } };
+		const scored = scoreGrouping(truth, new Map([["n1", "g1"], ["n2", "g1"], ["c1", "g2"], ["c2", "g3"], ["p1", "g4"], ["l1", "g4"], ["elsewhere", "g5"]]));
+
+		assert.deepEqual({ ...scored, "precision": undefined, "recall": undefined, "f": undefined }, { "features": 5, "ways": 7, "placed": 6, "groups": 4, "whole": 1, "split": 1, "merged": 2, "splitAndMerged": 0, "partly": 0, "unseen": 1, "precision": undefined, "recall": undefined, "f": undefined });
+		// (precision: n1 n2 c1 c2 1 each, p1 l1 ½ each → 5/6; recall: n 1+1, c ½+½, p 1, l 1, t 0 → 5/7)
+		assert.equal(scored.precision.toFixed(4), (5 / 6).toFixed(4));
+		assert.equal(scored.recall.toFixed(4), (5 / 7).toFixed(4));
+		// By areas: A's ways in are three groups (split); B's push and pull one group, tags nowhere (partly).
+		assert.deepEqual([scoreGrouping(truth, new Map([["n1", "g1"], ["n2", "g1"], ["c1", "g2"], ["c2", "g3"], ["p1", "g4"], ["l1", "g4"]]), { "areas": true })].map((each) => [each.features, each.split, each.partly]), [[2, 1, 1]]);
+		// The manifest grouped as itself is whole.
+		assert.equal(scoreGrouping(truth, new Map([["n1", "n"], ["n2", "n"], ["c1", "c"], ["c2", "c"], ["p1", "p"], ["l1", "l"], ["t1", "t"]])).f, 1);
 	})();
 }
