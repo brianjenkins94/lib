@@ -12,8 +12,6 @@
  *     runs/<user>.jsonl                   SHARED · one person's runs, an envelope a line (./evidence)
  *     evidence/<user>/<env>/<file>.jsonl  SHARED · what one person's runs observed of a file (./evidence)
  *     <collection>/<user>/<file>.jsonl    SHARED · one person's annotations of a file: notes, … (./annotations)
- *     traces/<user>/<file>.jsonl          SHARED · one person's runs of the file as it's saved now: values only where
- *                                                  they can't hold a secret, types otherwise (./traces)
  *     baseline.json                       SHARED · the dependency-capability baseline (derived, regenerated: ./audit)
  *     features.json                       SHARED · the feature ledger: what's been decided about features (./ledger)
  *     versions.json                       SHARED · the exact version each dependency loads at, when no lockfile says
@@ -22,6 +20,7 @@
  *       runs/<user>.jsonl                   runs too frequent or personal to share (an MCP server's tool calls)
  *       samples/<file>.jsonl                value samples (a real value can hold secrets)
  *       traces/<file>.jsonl                 every run of a file kept here: its values as they were, the text it ran
+ *                                             (never shared: a value can hold anything a run read — ./traces)
  *       …                                   caches and raw detail (CPU profiles, recorded results, parse caches)
  *
  * Designed for collaborators. Anything a person writes goes in a file only they write, named for them (`<kind>/<user>`),
@@ -123,9 +122,6 @@ export const baselinePath = (): string => `${SILO_DIR}/baseline.json`;
 /** The feature ledger (./ledger): decisions about features — shared, one entry a few sorted lines. */
 export const ledgerPath = (): string => `${SILO_DIR}/features.json`;
 
-/** Where `user`'s runs of `file` as it's saved now are shared (./traces). */
-export const tracesPath = (user: string, file: string): string => `${SILO_DIR}/traces/${userFile(user)}/${file}.jsonl`;
-
 /** Where this machine keeps every run of `file` it has, values and all (./traces). */
 export const localTracesPath = (file: string): string => `${LOCAL_DIR}/traces/${file}.jsonl`;
 
@@ -146,7 +142,6 @@ if (isEntry(import.meta)) {
 		assert.equal(runsPath("ada", "local"), ".silo/local/runs/ada.jsonl");
 		assert.equal(evidencePathFor("ada", "laptop.tsval.chromium-140.macos", "src/a.ts"), ".silo/evidence/ada/laptop.tsval.chromium-140.macos/src/a.ts.jsonl");
 		assert.equal(annotationsPath("Notes", "ada", "src/a.ts"), ".silo/notes/ada/src/a.ts.jsonl");
-		assert.equal(tracesPath("Ada", "src/a.ts"), ".silo/traces/ada/src/a.ts.jsonl");
 		assert.equal(localTracesPath("src/a.ts"), ".silo/local/traces/src/a.ts.jsonl");
 		assert.equal(POLICY_GLOB, "**/.silo/{policy.json,policy/*.json}");
 		assert.ok(GITIGNORE.split("\n").filter(Boolean).every((line) => line === "/local/"), "/local/ is all .gitignore names");

@@ -1,26 +1,16 @@
 /**
  * silo — a run's trace (pure, zero-dep): what one run of a file did, line by line — the values things were, the calls it
- * made, how it ended — kept so the runs of a file stay (the editor's balls: editor LIVE-VALUES.md, *Runs kept, as
- * balls*), deduped, and the ones that match the file as it is shared in git.
+ * made, how it ended — kept so the runs of a file stay (the editor's balls: editor RUNTIME-EVIDENCE.md, *Runs kept, as
+ * balls*), deduped. On this machine only: a run's values can hold anything it read, so they never go in git (decided
+ * 2026-10-26) — what runs observed is shared as evidence, summed (evidence.ts).
  *
  *   .silo/local/traces/<file>.jsonl          every run kept on this machine: its values as they were, and the text it ran
- *   .silo/traces/<user>/<file>.jsonl         SHARED · the runs of the file as it's saved now (by its blob oid), one person's
- *
- * A value can hold a secret, so what's shared is only what can't: a run that read no inputs is determined by its code,
- * which is in git already, so its values are shared as they were. "Read no inputs" is decided on the safe side: none in
- * its `inputs` (what the runtime saw it read — not every runtime tells every read), no argument read, and code that
- * can't read from outside at all (`mayRead`: no import or require, nothing of `process`, `fetch`, sockets, storage or the
- * page). Any other run shares each value's type alone (`committable`),
- * the inputs it read by capability and resource (a URL without its query or fragment), and how it ended without the
- * message (an error's text can quote a value). The values stay on this machine.
  *
  * A run is identified by its code: the BABLR span ids of the top-level declarations it executed (`declarations`) — content
  * hashes, so a reformat, a comment or an edit to code it didn't run leaves them as they were, and an edit inside one
  * changes it — and each value by the span around it. It's the same run as another (`traceKey`) when those, its inputs,
- * values and end are the same: kept once (`withRun`), counted. And it's current for a text (`currentIn`) while every
- * declaration it executed is in the text unchanged: a file's shared runs are those, when it's committed — the others
- * leave the file, and git keeps them in the commit whose code they match. (A run without its declarations — its text
- * couldn't be parsed — is identified by its text's blob oid and lines, as before: current only for that very text.)
+ * values and end are the same: kept once (`withRun`), counted. (A run without its declarations — its text couldn't be
+ * parsed — is identified by its text's blob oid and lines.)
  */
 
 import { isEntry } from "@brianjenkins94/util/env";
@@ -29,9 +19,8 @@ import type { Trigger } from "./policy.js";
 /** A value a run put on a line (the editor's live values): where (`line`, its offsets in the text that ran `at`, and
  *  `span`, the id of the BABLR span around it — the same through a reformat, an edit elsewhere or a move), whose
  *  (`name`), what kind (bound, returned, a branch, a call skipped or given…), in which call and loop turns — and the
- *  value as previewed, or, shared from a run that read inputs, its type alone, unless it's `determined`: built only from
- *  the file's own literals (purity.ts `determinedValues`), so shared as it was whatever the run read. */
-export interface TraceValue { "line": number; "name": string; "kind": string; "call": number; "turns": number[]; "at"?: [number, number]; "span"?: string; "value"?: string; "type"?: string; "determined"?: true }
+ *  value as previewed. */
+export interface TraceValue { "line": number; "name": string; "kind": string; "call": number; "turns": number[]; "at"?: [number, number]; "span"?: string; "value"?: string }
 
 /** A call a run made of one of its functions (its first line, and offsets). */
 export interface TraceCall { "id": number; "name": string; "line": number; "at"?: [number, number] }
@@ -72,7 +61,7 @@ export interface RunTrace {
 	"inputs": string[];
 	"values": TraceValue[];
 	"calls": TraceCall[];
-	/** The text that ran: kept locally, for placing its values; never shared (the oid names it in git). */
+	/** The text that ran, for placing its values. */
 	"source"?: string;
 }
 
@@ -123,43 +112,7 @@ export function declarationsHolding(spans: Span[], ranges: [number, number][]): 
 	return [...ids].toSorted();
 }
 
-/** Whether `source` could read from outside — so its values may hold what it read: any import or require (a module can
- *  read), anything of `process` (env, argv, stdin), the network, storage, the page. A heuristic on the safe side: code
- *  that can't, can't; code that could is treated as if it did. */
-export function mayRead(source: string): boolean {
-	return /\b(?:import|require|process|fetch|XMLHttpRequest|WebSocket|EventSource|navigator|localStorage|sessionStorage|indexedDB|caches|document|location|Deno|Bun|globalThis|self|window|eval|Function)\b/u.test(source);
-}
-
-/** A value's type, from its preview: what a run that read inputs shares in place of it. */
-export function typeOf(preview: string | undefined): string {
-	if (preview === undefined) {
-		return "undefined";
-	}
-
-	if (/^['"`]/u.test(preview)) {
-		return "string";
-	}
-
-	if (/^(?:-?\d|NaN$|-?Infinity$)/u.test(preview)) {
-		return "number";
-	}
-
-	if (preview === "true" || preview === "false") {
-		return "boolean";
-	}
-
-	if (preview === "null" || preview === "undefined") {
-		return preview;
-	}
-
-	if (preview.startsWith("ƒ")) {
-		return "function";
-	}
-
-	return preview.startsWith("[") ? "array" : "object";
-}
-
-/** An input as shared: a URL without its query and fragment (a token rides there), anything else as it is. */
+/** An input as a run lists it: a URL without its query and fragment (a token rides there), anything else as it is. */
 export function inputOf(capability: string, resource: string): string {
 	const shown = capability.startsWith("net") ? resource.replace(/[?#].*$/u, "") : resource;
 
@@ -178,15 +131,15 @@ function hash(text: string): string {
 	return value.toString(16).padStart(16, "0");
 }
 
-/** What makes a run the same run as another: the text it ran, its inputs, its values (or their types) and its end. */
+/** What makes a run the same run as another: the text it ran, its inputs, its values and its end. */
 export function traceKey(trace: RunTrace): string {
 	// By its code's spans when it has them — a reformat, a comment or an edit to code it didn't run leaves it the same
 	// run — else by the exact text and lines.
 	if (trace.declarations !== undefined && trace.declarations.length > 0) {
-		return hash(JSON.stringify([trace.test === undefined ? null : [trace.test.id, trace.test.outcome], ...trace.program === undefined ? [] : [trace.program], trace.declarations, trace.inputs, trace.values.map((each) => [each.span ?? each.line, each.name, each.kind, each.call, each.turns, each.value ?? null, each.type ?? null]), trace.end === undefined ? null : [trace.end.kind]]));
+		return hash(JSON.stringify([trace.test === undefined ? null : [trace.test.id, trace.test.outcome], ...trace.program === undefined ? [] : [trace.program], trace.declarations, trace.inputs, trace.values.map((each) => [each.span ?? each.line, each.name, each.kind, each.call, each.turns, each.value ?? null]), trace.end === undefined ? null : [trace.end.kind]]));
 	}
 
-	return hash(JSON.stringify([trace.test === undefined ? null : [trace.test.id, trace.test.outcome], ...trace.program === undefined ? [] : [trace.program], trace.oid, trace.inputs, trace.values.map((each) => [each.line, each.name, each.kind, each.call, each.turns, each.value ?? null, each.type ?? null]), trace.end === undefined ? null : [trace.end.kind, trace.end.line]]));
+	return hash(JSON.stringify([trace.test === undefined ? null : [trace.test.id, trace.test.outcome], ...trace.program === undefined ? [] : [trace.program], trace.oid, trace.inputs, trace.values.map((each) => [each.line, each.name, each.kind, each.call, each.turns, each.value ?? null]), trace.end === undefined ? null : [trace.end.kind, trace.end.line]]));
 }
 
 /** What reached a file, when a trace is only that: a test, or a run of another program — undefined for the file's own runs. */
@@ -216,36 +169,6 @@ export function withRun(traces: RunTrace[], run: RunTrace, keep = 8): RunTrace[]
 	const runs = traces.filter((each) => reachOf(each) === undefined && each !== same);
 
 	return [...reached, ...[...runs, kept].slice(-keep)];
-}
-
-/** A run as it's shared in git: never its text; and unless it surely read nothing (`inputs` none, no argument read, and
- *  its text unable to read — `mayRead`), its values' types alone — a `determined` one's as it was — and its end without
- *  what it said. */
-export function committable(trace: RunTrace): RunTrace {
-	const { "source": _source, ...shared } = trace;
-
-	// (its text decides it: without it, as if it read)
-	if (trace.inputs.length === 0 && !trace.values.some((each) => each.kind === "input") && trace.source !== undefined && !mayRead(trace.source)) {
-		return shared;
-	}
-
-	return {
-		...shared,
-		// (a value bound or returned, built from the file's literals alone: not what the run read)
-		"values": trace.values.map(({ value, ...rest }) => (rest.determined === true && (rest.kind === "bind" || rest.kind === "return") && value !== undefined ? { ...rest, "value": value } : { ...rest, "type": rest.type ?? typeOf(value) })),
-		...trace.end === undefined ? {} : { "end": { "kind": trace.end.kind, "line": trace.end.line, ...trace.end.at === undefined ? {} : { "at": trace.end.at } } }
-	};
-}
-
-/** The runs of the text `oid` names — the file as it is. */
-export function current(traces: RunTrace[], oid: string): RunTrace[] {
-	return traces.filter((each) => each.oid === oid);
-}
-
-/** The runs still current for a text — its blob `oid`, and its spans' ids (`ids`, when they're known): a run of that very
- *  text, or one whose every executed declaration is in it unchanged (only code it didn't run, comments or layout changed). */
-export function currentIn(traces: RunTrace[], oid: string, ids?: ReadonlySet<string>): RunTrace[] {
-	return traces.filter((each) => each.oid === oid || (ids !== undefined && each.declarations !== undefined && each.declarations.length > 0 && each.declarations.every((id) => ids.has(id))));
 }
 
 /** A traces file's runs (one a line; a line that isn't one is skipped), the same run twice — two branches' — kept once. */
@@ -282,8 +205,6 @@ if (isEntry(import.meta)) {
 		const run = (id: string, values: TraceValue[], inputs: string[] = [], at = "2026-10-22T10:00:00.000Z"): RunTrace => ({ "id": id, "file": "src/a.js", "oid": "abc", "trigger": "edit", "at": at, "count": 1, "inputs": inputs, "values": values, "calls": [], "source": "const x = 1;" });
 		const x = (value: string): TraceValue => ({ "line": 0, "name": "x", "kind": "bind", "call": 0, "turns": [], "value": value });
 
-		// Types from previews.
-		assert.deepEqual(["'a'", "12", "-1.5", "true", "null", "undefined", "ƒ sum", "[1, 2]", "{ a: 1 }", "Map(1) { … }"].map(typeOf), ["string", "number", "number", "boolean", "null", "undefined", "function", "array", "object", "object"]);
 		assert.equal(inputOf("net", "https://api.example.com/rates?key=SECRET#x"), "net https://api.example.com/rates");
 		assert.equal(inputOf("fs:read", "/workspace/.env"), "fs:read /workspace/.env");
 
@@ -315,32 +236,6 @@ if (isEntry(import.meta)) {
 		assert.equal(traceKey(run("same", [x("1")])), traceKey({ ...run("same", [x("1")]) }), "a trace with no program keeps its key");
 		assert.notEqual(traceKey(tested("a", "x › one")), traceKey(tested("a", "x › two")), "two tests that ran the same code are two");
 
-		// Shared: never the text; a run with no inputs as it was, one with inputs by types alone and its end without its message.
-		const pure = committable(run("p", [x("1")]));
-
-		assert.equal(pure.source, undefined);
-		assert.equal(pure.values[0].value, "1");
-
-		const read = committable({ ...run("r", [x("'sk-live-123'")], ["net https://api.example.com/rates"]), "end": { "kind": "crashed", "line": 0, "message": "bad key sk-live-123" } });
-
-		assert.equal(read.values[0].value, undefined);
-		assert.equal(read.values[0].type, "string");
-		assert.deepEqual(read.end, { "kind": "crashed", "line": 0 });
-		assert.ok(!JSON.stringify(read).includes("sk-live"), "nothing of the value left");
-		// Its code could read (a require, process.env…) though the runtime told no input: as if it read. No text: likewise.
-		const reads = committable({ ...run("q", [x("'sk-live-123'")]), "source": "const key = require('fs').readFileSync('.env', 'utf8');" });
-
-		assert.equal(reads.values[0].value, undefined);
-		assert.equal(committable({ ...run("e", [x("'abc'")]), "source": "const key = process.env.KEY;" }).values[0].value, undefined);
-		assert.equal(committable({ ...run("n", [x("1")]), "source": undefined }).values[0].value, undefined);
-		assert.equal(mayRead("const items = [1, 2, 3];\nlet total = 0;\nfor (const item of items) total += item;\nconsole.log(total);\n"), false);
-		// process.argv read: an input too.
-		assert.equal(committable(run("v", [{ ...x("'--token=abc'"), "kind": "input" }])).values[0].value, undefined);
-		// A run that read: a determined value (bound or returned) is shared as it was; any other kind never.
-		const mixed = committable({ ...run("m", [{ ...x("6"), "determined": true }, x("'sk-live-123'"), { ...x("'net https://x?k=1'"), "kind": "skip", "determined": true }], ["fs:read /workspace/.env"]), "source": "const key = require('fs').readFileSync('.env', 'utf8');" });
-
-		assert.deepEqual(mixed.values.map((each) => each.value ?? `‹${each.type}›`), ["6", "‹string›", "‹string›"]);
-
 		// Spans: a program [0,40) of two declarations, [0,15) (with a statement [2,10) and a value [4,6) in it) and [20,38).
 		const spans: Span[] = [{ "id": "prog", "start": 0, "end": 40 }, { "id": "fnA", "start": 0, "end": 15 }, { "id": "stmt", "start": 2, "end": 10 }, { "id": "val", "start": 4, "end": 6 }, { "id": "fnB", "start": 20, "end": 38 }];
 
@@ -350,19 +245,15 @@ if (isEntry(import.meta)) {
 		assert.deepEqual(declarationsHolding(spans, [[3, 9], [25, 30], [16, 18]]), ["fnA", "fnB"], "what's between declarations holds nothing");
 
 		// Identified by its code: its lines moved (an edit above, a reformat) — the same run; a declaration it ran changed —
-		// another; current for a text while each declaration it ran is there.
+		// another.
 		const placed = (line: number, declarations = ["fnA"]): RunTrace => ({ ...run("s", [{ ...x("1"), "line": line, "span": "val" }]), "declarations": declarations });
 
 		assert.equal(traceKey(placed(0)), traceKey({ ...placed(7), "oid": "moved" }));
 		assert.notEqual(traceKey(placed(0)), traceKey(placed(0, ["fnA2"])));
 		assert.notEqual(traceKey(run("a", [x("1")])), traceKey({ ...run("a", [x("1")]), "oid": "other" }), "no declarations: by its text");
-		assert.deepEqual(currentIn([placed(0), { ...placed(0, ["fnA", "gone"]), "id": "t" }, { ...run("o", [x("1")]), "oid": "now" }], "now", new Set(["fnA", "fnB"])).map((each) => each.id), ["s", "o"]);
-		assert.deepEqual(currentIn([placed(0)], "now").map((each) => each.id), [], "no spans known: only that very text's");
 
-		// The file as it is: its text's runs; a file's lines read back, a merge's duplicate folded.
-		assert.deepEqual(current([run("1", [x("1")]), { ...run("2", [x("2")]), "oid": "def" }], "def").map((each) => each.id), ["2"]);
-
-		const text = tracesText([pure, read]);
+		// A file's lines read back, a merge's duplicate folded.
+		const text = tracesText([run("1", [x("1")]), run("2", [x("2")])]);
 
 		assert.equal(parseTraces(text + text).length, 2);
 		assert.equal(parseTraces(text + text)[0].count, 2);
