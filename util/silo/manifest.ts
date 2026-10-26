@@ -213,7 +213,8 @@ export function scoreGrouping(manifest: Manifest, grouping: ReadonlyMap<string, 
 /**
  * The code each of the manifest's features owns, by node id; a feature by `area\u0000name`, as `scoreGrouping` keys
  * them. A feature owns what its ways in reach, and what registers them: the declaration each registration is written in
- * (an `install…`, an `activate`, a module's body) and what its own code reaches. A handler's code is its way's, not that
+ * (an `install…`, an `activate`, a module's body) and what its own code reaches; and every declaration in its `paths`,
+ * with what they reach (code no way in leads to: a route, a library's export). A handler's code is its way's, not that
  * declaration's (./ts-analysis), so a declaration that registers many features leads to its setup, not into theirs. A
  * declaration several features reach is each one's.
  */
@@ -235,11 +236,18 @@ export function codeOwners(manifest: Manifest, features: ReadonlyMap<string, Fea
 		return held !== undefined ? [held.id] : graph.fingerprints.has(nodeId(file, TOP)) ? [nodeId(file, TOP)] : [];
 	};
 	const owners = new Map<string, Set<string>>();
+	const ids = [...graph.fingerprints.keys()];
 
 	for (const [area, name, feature] of featuresOfManifest(manifest)) {
 		const ways = (feature.ways ?? []).flatMap((key) => (features.has(key) ? [features.get(key)!] : []));
+		const under = (id: string): boolean => (feature.paths ?? []).some((path) => {
+			const file = id.slice(0, id.lastIndexOf("#"));
+			const at = path.replace(/\/+$/u, "");
 
-		for (const id of reach(graph, ways.flatMap((way) => [...way.roots, ...way.ranges.flatMap(holder)]))) {
+			return file === at || file.startsWith(at + "/");
+		});
+
+		for (const id of reach(graph, [...ways.flatMap((way) => [...way.roots, ...way.ranges.flatMap(holder)]), ...ids.filter(under)])) {
 			owners.set(id, (owners.get(id) ?? new Set()).add(`${area}\u0000${name}`));
 		}
 	}
@@ -307,5 +315,8 @@ if (isEntry(import.meta)) {
 		const owned = codeOwners({ "A": { "open": { "what": "O.", "ways": ["command|open"] }, "save": { "what": "S.", "ways": ["command|save"] } } }, new Map([command("open", "a.ts#open", 10), command("save", "a.ts#save", 50)]), graph);
 
 		assert.deepEqual(Object.fromEntries([...owned].map(([id, of]) => [id, [...of].toSorted()])), { "a.ts#open": ["A\u0000open"], "a.ts#activate": ["A\u0000open", "A\u0000save"], "a.ts#connect": ["A\u0000open", "A\u0000save"], "a.ts#save": ["A\u0000save"] });
+		// A feature's paths own what's in them, a file or a folder: `unused` by its file, and nothing in a file that only
+		// starts with the path's name.
+		assert.deepEqual([...codeOwners({ "B": { "by file": { "what": "F.", "paths": ["a.ts"] }, "by folder": { "what": "D.", "paths": ["a"] } } }, new Map(), graph).keys()].toSorted(), ["a.ts#activate", "a.ts#connect", "a.ts#open", "a.ts#save", "a.ts#unused"]);
 	})();
 }
