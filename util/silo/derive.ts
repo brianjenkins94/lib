@@ -11,6 +11,11 @@
  *              written inline, where it's registered) by its file
  *   byTests    the tests' clusters (features from tests), from CI's records of what each test ran (./ledger
  *              CI_RECORDS); each way in in the cluster its own reach overlaps most, none when it overlaps none
+ *
+ * And a join over any of them, `linkedBySubjects`: a hub request or subscription is joined to a way in whose
+ * registration quotes its subject — the edge between realms the declaration graph doesn't have (an agent tool and the
+ * request it makes, served elsewhere). Only a registration's own code: a subject quoted further off (in what it calls)
+ * is as often a catalog of subjects or a composition root, which joins features that aren't one.
  */
 
 import type { Feature } from "./features";
@@ -76,6 +81,35 @@ export function byReach(features: Iterable<Feature>, graph: DeclarationGraph): G
 	}
 
 	return grouping;
+}
+
+/** `grouping` with each hub way in's group joined to the groups of the ways in whose registration quotes its subject (a
+ *  literal one: `"files.read"`); `textOf` reads a file. */
+export function linkedBySubjects(grouping: Grouping, features: Iterable<Feature>, textOf: (file: string) => string | undefined): Grouping {
+	const all = [...features];
+	const served = all.filter((feature) => (feature.facet === "hub request" || feature.facet === "hub subscription") && /^[\w.-]+$/u.test(feature.id)).map((feature) => ({ "feature": feature, "quoted": new RegExp(`["'\`]${feature.id.replaceAll(".", "\\.")}["'\`]`, "u") }));
+	const parent = new Map<string, string>();
+	const find = (group: string): string => {
+		const up = parent.get(group);
+
+		return up === undefined || up === group ? group : find(up);
+	};
+
+	for (const feature of all) {
+		const registration = feature.ranges.map((range) => textOf(range.file)?.slice(range.start, range.end) ?? "").join("\n");
+
+		for (const { "feature": server, quoted } of served) {
+			if (server.key !== feature.key && grouping.has(server.key) && grouping.has(feature.key) && quoted.test(registration)) {
+				const [left, right] = [find(grouping.get(feature.key)!), find(grouping.get(server.key)!)];
+
+				if (left !== right) {
+					parent.set(left, right);
+				}
+			}
+		}
+	}
+
+	return new Map([...grouping].map(([key, group]) => [key, find(group)]));
 }
 
 /** What each test ran, in CI's records (`{ tests, reach: { file: { "name, name": [test…] } } }`): its declarations as
@@ -160,5 +194,13 @@ if (isEntry(import.meta)) {
 		assert.notEqual(tested.get("open"), tested.get("draw"));
 		assert.equal(tested.has("inline"), false);
 		assert.equal(testsFromRecords("not json").size, 0);
+		// Subjects: the agent tool in tools.ts quotes "files.read", served in workspace.ts — joined; "files.write", quoted
+		// only by what the tool calls, isn't.
+		const hub = (key: string, id: string, file: string, start: number, end: number): Feature => ({ ...way(key, file, []), "facet": key.startsWith("hub") ? "hub request" : "agent tool", "id": id, "ranges": [{ "file": file, "start": start, "end": end }] });
+		const texts: Record<string, string> = { "tools.ts": `tool("files_read", () => request("files.read")); helper();`, "workspace.ts": `serve("files.read", read); serve("files.write", write);` };
+		const linked = linkedBySubjects(new Map([["tool", "tools.ts"], ["read", "workspace.ts#read"], ["write", "workspace.ts#write"]]), [hub("tool", "files_read", "tools.ts", 0, 45), hub("hub read", "files.read", "workspace.ts", 0, 26), hub("hub write", "files.write", "workspace.ts", 27, 55)].map((each, index) => ({ ...each, "key": ["tool", "read", "write"][index] })), (file) => texts[file]);
+
+		assert.equal(linked.get("tool"), linked.get("read"));
+		assert.notEqual(linked.get("write"), linked.get("read"));
 	})();
 }
