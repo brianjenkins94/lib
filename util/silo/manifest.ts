@@ -100,6 +100,33 @@ export function manifestDrift(manifest: Manifest, facts: { "ways": FoundWay[]; "
 	return found;
 }
 
+/** The manifest in `text` with a removal taken out (./ledger `removalOf`): the `keys` it took, the `paths` it deleted (and
+ *  any inside them), and a feature it left owning nothing; undefined when it named none of them, or isn't a manifest. */
+export function manifestWithout(text: string, keys: string[], paths: string[]): string | undefined {
+	const manifest = parseManifest(text);
+
+	if (manifest === undefined) {
+		return undefined;
+	}
+
+	const gone = (path: string): boolean => paths.some((each) => path === each || path.startsWith(each.replace(/\/+$/u, "") + "/"));
+	let changed = false;
+	const kept = Object.fromEntries(Object.entries(manifest).map(([area, features]) => [area, Object.fromEntries(Object.entries(features).flatMap(([name, feature]) => {
+		const ways = (feature.ways ?? []).filter((key) => !keys.includes(key));
+		const owned = (feature.paths ?? []).filter((path) => !gone(path));
+
+		if (ways.length === (feature.ways ?? []).length && owned.length === (feature.paths ?? []).length) {
+			return [[name, feature]];
+		}
+
+		changed = true;
+
+		return ways.length === 0 && owned.length === 0 ? [] : [[name, { ...feature, ...feature.ways === undefined ? {} : { "ways": ways }, ...feature.paths === undefined ? {} : { "paths": owned } }]];
+	}))]).filter(([, features]) => Object.keys(features).length > 0));
+
+	return changed ? manifestText(kept) : undefined;
+}
+
 if (isEntry(import.meta)) {
 	void (async function() {
 		const assert: typeof import("node:assert").strict = (await import("node:assert")).strict;
@@ -134,5 +161,10 @@ if (isEntry(import.meta)) {
 		assert.deepEqual(parseManifest(written), JSON.parse(written));
 		assert.equal(parseManifest("not json"), undefined);
 		assert.equal(parseManifest(JSON.stringify({ "A": { "y": { "ways": [] } } })), undefined);
+		// A removal: its key out of its feature, its files out of their feature, a feature left with nothing gone too.
+		const before = manifestText({ "A": { "x": { "what": "X.", "ways": ["view|a.monitor", "command|a.open"] }, "y": { "what": "Y.", "ways": ["view|a.only"], "paths": ["src/y.ts"] } }, "B": { "z": { "what": "Z.", "paths": ["src/z"] } } });
+
+		assert.deepEqual(JSON.parse(manifestWithout(before, ["view|a.monitor", "view|a.only"], ["src/y.ts", "src/z/index.ts"]) ?? "{}"), { "A": { "x": { "what": "X.", "ways": ["command|a.open"] } }, "B": { "z": { "what": "Z.", "paths": ["src/z"] } } });
+		assert.equal(manifestWithout(before, ["view|elsewhere"], ["src/other.ts"]), undefined);
 	})();
 }

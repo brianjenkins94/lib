@@ -34,6 +34,8 @@ import { priceOf, priceText } from "./cost";
 import { INTERNAL_FACETS, withoutWayIn } from "./features";
 import { TOP } from "./graph";
 import { includeByDefault } from "./history";
+import { manifestPath } from "./layout";
+import { manifestWithout } from "./manifest";
 
 export type LedgerStatus = "active" | "experiment" | "parked" | "stopped" | "removed";
 
@@ -312,6 +314,14 @@ export function removalOf(input: { "name": string; "why": string; "key"?: string
 		return without === undefined ? [] : [{ "file": file, "text": without }];
 	});
 	const nothing = price.files.length === 0 && manifests.length === 0;
+	// (and the feature manifest, so the change passes its own `silo check`: its key and files out of their feature)
+	const manifest = nothing ? undefined : textOf(manifestPath());
+	const without = manifest === undefined ? undefined : manifestWithout(manifest, key === undefined ? [] : [key], [...paths, ...price.files]);
+
+	if (without !== undefined) {
+		manifests.push({ "file": manifestPath(), "text": without });
+	}
+
 	const restore = price.files.length === 0 ? undefined : `git checkout ${input.head} -- ${price.files.join(" ")}`;
 	const named = [key?.slice(key.indexOf("|") + 1), ...paths, ...price.files].filter((each): each is string => each !== undefined && each !== "");
 	const docs = tracked.filter((file) => file.endsWith(".md") && named.some((each) => textOf(file)?.includes(each) === true));
