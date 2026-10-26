@@ -122,6 +122,9 @@ export const baselinePath = (): string => `${SILO_DIR}/baseline.json`;
 /** The feature ledger (./ledger): decisions about features — shared, one entry a few sorted lines. */
 export const ledgerPath = (): string => `${SILO_DIR}/features.json`;
 
+/** The feature manifest (./manifest): every feature, by area and name, and the ways in and files it owns — shared. */
+export const manifestPath = (): string => `${SILO_DIR}/manifest.json`;
+
 /** Where this machine keeps every run of `file` it has, values and all (./traces). */
 export const localTracesPath = (file: string): string => `${LOCAL_DIR}/traces/${file}.jsonl`;
 

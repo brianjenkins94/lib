@@ -70,7 +70,9 @@ export interface DriftFacts {
 	"code": { "file": string; "text": string }[];
 }
 
-export type DriftCheck = "stopped but present" | "removed but documented" | "experiment expired" | "dead end" | "stale entry" | "lease expired";
+export type DriftCheck = "stopped but present" | "removed but documented" | "experiment expired" | "dead end" | "stale entry" | "lease expired"
+	// (the feature manifest's: ./manifest)
+	| "unplaced way in" | "gone way in" | "placed twice" | "missing path" | "empty feature";
 
 export interface Drift {
 	"check": DriftCheck;
