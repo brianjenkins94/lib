@@ -11,9 +11,8 @@
  * names into, changed. The program's own packages (a workspace's, by their package.json) resolve to their sources — not
  * to an installed copy under node_modules.
  *
- * Needs TypeScript ≥ 7.1 (its API: `typescript/sync`, under `typescript/unstable/` in the nightlies before it was
- * promoted) — the caller's (silo bundles one), else the analyzed repository's own: `typescriptAnalyzer` answers undefined
- * without one. Node ids are a file's own names, `file#name`, so a feature's roots (`./features`) name nodes in the graph.
+ * Needs TypeScript ≥ 7.1 (its API: `typescript/sync`) — the caller's (silo bundles one), else the analyzed repository's
+ * own: `typescriptAnalyzer` answers undefined without one. Node ids are a file's own names, `file#name`, so a feature's roots (`./features`) name nodes in the graph.
  * Types are left out: a type changes no behavior.
  *
  * And the same TypeScript as a reader of single files (`readSources`): each file's SourceFile, for `./reach`'s readings
@@ -41,21 +40,18 @@ export interface TypeScriptModules {
 
 /**
  * TypeScript ≥ 7.1's modules as installed beside `from` (a folder; default package name `typescript`), or undefined when
- * there's none that new. Its API at `typescript/sync`, or at `typescript/unstable/sync` in the 7.1 nightlies before it
- * was promoted.
+ * there's none that new.
  */
 export async function typescriptModules(from: string, name = "typescript"): Promise<TypeScriptModules | undefined> {
 	const resolve = createRequire(from.replace(/\/$/u, "") + "/package.json").resolve;
 
-	for (const prefix of ["", "unstable/"]) {
-		try {
-			const load = async (subpath: string): Promise<any> => import(/*! @external */ url.pathToFileURL(resolve(`${name}/${prefix}${subpath}`)).href);
+	try {
+		const load = async (subpath: string): Promise<any> => import(/*! @external */ url.pathToFileURL(resolve(`${name}/${subpath}`)).href);
 
-			return { "sync": await load("sync"), "ast": await load("ast"), "is": await load("ast/is") } as TypeScriptModules;
-		} catch { /* not at this path */ }
+		return { "sync": await load("sync"), "ast": await load("ast"), "is": await load("ast/is") } as TypeScriptModules;
+	} catch {
+		return undefined;
 	}
-
-	return undefined;
 }
 
 /** TypeScript 7.1's AST module as `./reach`'s readings take a `ts`: its node predicates and SyntaxKind — and
