@@ -28,7 +28,7 @@
     "ts-morph": "latest",
     "ts2esm": "latest",
     "tsx": "latest",
-    "typescript": "latest",
+    "typescript": "^6",
     "typescript-eslint": "latest",
     "vite": "latest",
     "zod-from-json-schema": "latest"
