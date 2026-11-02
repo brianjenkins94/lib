@@ -273,7 +273,7 @@ if (isEntry(import.meta)) {
 		}
 
 	// One span per published workspace: times its build/version/tar work and nests the steps below.
-		using span = log.span("publish", { "workspace": workspace });
+		using span = log.span("util.scripts.publish.publish", { "workspace": workspace });
 
 	// Directories of workspaces nested UNDER this one — excluded from the source build so a parent
 	// (especially the repo root `.`) never ships a nested package's files. Absolute, for the .mjs/.cjs

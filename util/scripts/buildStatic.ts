@@ -66,7 +66,7 @@ export async function buildStatic(options: BuildStaticOptions): Promise<void> {
 	const root = options.root ?? process.cwd();
 	const outDir = options.outDir ?? path.join(root, "docs");
 
-	using span = log.span("build-static", { "pages": options.pages.length });
+	using span = log.span("util.scripts.buildStatic.build-static", { "pages": options.pages.length });
 
 	// --- 1. SSR-render every view to clean HTML, written as temp inputs under `root` ---
 	const vite = await getViteDevServer(root);

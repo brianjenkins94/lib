@@ -38,7 +38,7 @@ export async function buildApp(appRoot: string, repoRoot: string, options: Build
 	const name = path.basename(appRoot);
 
 	// Span the build so its duration is reported; the outcome is a nested line.
-	using span = log.span("build", { "name": name });
+	using span = log.span("util.vite.build.build", { "name": name });
 
 	const files = await fs.readdir(appRoot);
 	const input = files.filter((file) => file.endsWith(".html")).map((file) => path.resolve(appRoot, file));

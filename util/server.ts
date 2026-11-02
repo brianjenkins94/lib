@@ -16,7 +16,7 @@ export function createServer(router = {}) {
 		const originalUrl = request.url;
 
 		// One span per request: it times the exchange and any logging during the request nests under it.
-		const span = log.span(request.method + " " + originalUrl);
+		const span = log.span("util.server." + request.method + " " + originalUrl);
 
 		response.on("finish", function() {
 			span.end({ "status": response.statusCode });

@@ -1,3 +1,6 @@
+import type { Rule } from "eslint";
+import { existsSync } from "node:fs";
+import * as path from "node:path";
 import antfu, { GLOB_SRC, GLOB_TS, GLOB_TSX } from "@antfu/eslint-config";
 import css from "@eslint/css";
 import js from "@eslint/js";
@@ -205,6 +208,141 @@ const stupid = {
 	"style/multiline-comment-style": "off", // reflow //-runs into /* */
 	"jsdoc/multiline-blocks": "off", // /** and */ onto their own lines
 	"style/newline-per-chained-call": "off" // force method chains onto separate lines
+};
+
+// --- logger/span-names: a span's name is where it is, then one word for what it does, so a move can't leave it
+//     stale. `--fix` writes the place; the word, the name's last part, is kept. ---
+
+const roots = new Map<string, string>();
+
+/** The repository holding `directory`: the nearest folder at or above it with `.git`, else `cwd`. Not the nearest
+ *  package.json: a VS Code extension's folder has one of its own. */
+function repositoryRoot(directory: string, cwd: string): string {
+	const known = roots.get(directory);
+
+	if (known !== undefined) {
+		return known;
+	}
+
+	const parent = path.dirname(directory);
+	let root = directory;
+
+	if (!existsSync(path.join(directory, ".git"))) {
+		root = parent === directory ? cwd : repositoryRoot(parent, cwd);
+	}
+
+	roots.set(directory, root);
+
+	return root;
+}
+
+/** `packages/editor/extensions/history/ledger.ts` → `editor.extensions.history.ledger`: the path from the
+ *  repository's root, without a leading `packages/`, any `src/` or the extension; a file named `index`, `extension`
+ *  or after its folder drops out. */
+function spanPrefix(file: string, cwd: string): string {
+	const folders = path.relative(repositoryRoot(path.dirname(file), cwd), path.dirname(file)).split(path.sep).filter((folder) => folder !== "" && folder !== "src");
+	const name = path.basename(file, path.extname(file));
+
+	if (folders[0] === "packages") {
+		folders.shift();
+	}
+
+	return [...folders, ...name === "index" || name === "extension" || name === folders.at(-1) ? [] : [name]].join(".");
+}
+
+/** A span name's last part: what it does. */
+function operationOf(name: string): string {
+	return name.slice(name.lastIndexOf(".") + 1);
+}
+
+/** Whether `text` starts a span's name in its place: a whole name is the place and a word; a name built on (`+`, or a
+ *  template's `${…}`) is the place and the start of its word. */
+function fitsPlace(text: string, head: string, whole: boolean): boolean {
+	return text.startsWith(head) && !text.slice(head.length).includes(".") && (!whole || text.length > head.length);
+}
+
+type Expression = Rule.Node & { "type": string };
+
+/** A logger call's name — `span`'s first argument, `continueSpan`'s second — and its first piece, the left end of a
+ *  `+` chain. Undefined for any other call. */
+function nameOf(call: Rule.Node): { "name": Expression; "first": Expression } | undefined {
+	if (call.type !== "CallExpression" || call.callee.type !== "MemberExpression" || call.callee.computed || call.callee.property.type !== "Identifier") {
+		return undefined;
+	}
+
+	const name = call.arguments[({ "span": 0, "continueSpan": 1 } as Record<string, number>)[call.callee.property.name] ?? -1] as Expression | undefined;
+	let first = name;
+
+	while (first?.type === "BinaryExpression" && first.operator === "+") {
+		first = first.left as Expression;
+	}
+
+	return name === undefined || first === undefined ? undefined : { "name": name, "first": first };
+}
+
+/** The text a name opens with: a string's, or a template's up to its first `${`. Undefined for a value. */
+function openingText(first: Expression): string | undefined {
+	if (first.type === "Literal") {
+		return typeof first.value === "string" ? first.value : undefined;
+	}
+
+	return first.type === "TemplateLiteral" ? first.quasis[0]?.value.raw ?? "" : undefined;
+}
+
+const spanNames: Rule.RuleModule = {
+	"meta": {
+		"type": "suggestion",
+		"fixable": "code",
+		"schema": [],
+		"messages": { "place": "A span's name is where it is, then one word for what it does: \"{{head}}…\"." }
+	},
+	"create": function(context) {
+		const prefix = spanPrefix(context.physicalFilename, context.cwd);
+		const head = prefix === "" ? "" : prefix + ".";
+
+		return {
+			"CallExpression": function(call) {
+				const found = nameOf(call);
+
+				if (found === undefined) {
+					return;
+				}
+
+				const { name, first } = found;
+				const text = openingText(first);
+				// Fixed when the word can be kept; a whole name with no word after its last dot is only reported.
+				const report = (fix: Rule.ReportFixer | null): void => {
+					context.report({ "node": name, "messageId": "place", "data": { "head": head }, "fix": fix });
+				};
+
+				if (text === undefined) {
+					// A name read from a value: the place goes in front of it.
+					if (first.type === "Identifier" || first.type === "MemberExpression" || first.type === "CallExpression") {
+						report((fixer) => fixer.insertTextBefore(name, JSON.stringify(head) + " + "));
+					}
+
+					return;
+				}
+
+				const whole = first === name && (first.type === "Literal" || (first.type === "TemplateLiteral" && first.expressions.length === 0));
+
+				if (fitsPlace(text, head, whole)) {
+					return;
+				}
+
+				const word = head + operationOf(text);
+				const start = (first.range?.[0] ?? 0) + 1;
+
+				if (whole && operationOf(text) === "") {
+					report(null);
+				} else if (first.type === "Literal") {
+					report((fixer) => fixer.replaceText(first, JSON.stringify(word)));
+				} else {
+					report((fixer) => fixer.replaceTextRange([start, start + text.length], word));
+				}
+			}
+		};
+	}
 };
 
 /**
@@ -500,5 +638,46 @@ export default [
 	...disabledBlocks,
 	...(yamlFiles.length > 0 ? [{ "files": yamlFiles, "rules": yamlRules }] : []),
 	...(jsoncFiles.length > 0 ? [{ "files": jsoncFiles, "rules": { "jsonc/indent": ["warn", 2] } }] : []),
-	{ "files": CSS_FILES, "plugins": { "css": css }, "language": "css/css", "rules": cssRules }
+	{ "files": CSS_FILES, "plugins": { "css": css }, "language": "css/css", "rules": cssRules },
+	// An error though it fixes itself: a moved file's names are wrong until fixed, and only an error stops CI.
+	{ "files": [GLOB_SRC], "plugins": { "logger": { "rules": { "span-names": spanNames } } }, "rules": { "logger/span-names": "error" } }
 ];
+
+// Run as itself (`npx tsx util/eslint.ts`): not isEntry, since ESLint's config loader can't resolve util's alias.
+if (process.argv[1] !== undefined && path.resolve(process.argv[1]) === import.meta.filename) {
+	void (async function() {
+		const assert: typeof import("node:assert").strict = (await import("node:assert")).strict;
+		const { Linter } = await import("eslint");
+		const root = repositoryRoot(import.meta.dirname, process.cwd());
+		const linter = new Linter({ "cwd": root });
+		const fixed = (file: string, code: string): string => linter.verifyAndFix(code, [{ "files": ["**/*.ts", "**/*.tsx"], "plugins": { "logger": { "rules": { "span-names": spanNames } } }, "rules": { "logger/span-names": "error" } }], path.join(root, file)).output;
+
+		// The place from the path: a leading packages/ and any src/ out; index, extension and a folder's namesake drop.
+		assert.equal(spanPrefix(path.join(root, "packages/editor/extensions/history/ledger.ts"), root), "editor.extensions.history.ledger");
+		assert.equal(spanPrefix(path.join(root, "packages/editor/extensions/history/extension.ts"), root), "editor.extensions.history");
+		assert.equal(spanPrefix(path.join(root, "packages/api/src/index.ts"), root), "api");
+		assert.equal(spanPrefix(path.join(root, "packages/editor/shell/shell.tsx"), root), "editor.shell");
+
+		// A bare word gets its place; a moved file's old place is replaced, its word kept; a fitting name stays.
+		assert.equal(fixed("packages/editor/extensions/history/ledger.ts", "log.span(\"reach\");"), "log.span(\"editor.extensions.history.ledger.reach\");");
+		assert.equal(fixed("packages/editor/extensions/history/ledger.ts", "log.span(\"editor.old.place.reach\", {});"), "log.span(\"editor.extensions.history.ledger.reach\", {});");
+		assert.equal(fixed("packages/api/src/index.ts", "log.span(\"api.request\");"), "log.span(\"api.request\");");
+
+		// continueSpan's name is its second argument.
+		assert.equal(fixed("packages/editor/extensions/tsval/debug-worker.ts", "log.continueSpan(trace, \"step\");"), "log.continueSpan(trace, \"editor.extensions.tsval.debug-worker.step\");");
+
+		// A built name keeps what follows its first piece; a template's head is fixed in place.
+		assert.equal(fixed("packages/editor/extensions/tsval/debug-adapter.ts", "log.span(\"debug.\" + kind);"), "log.span(\"editor.extensions.tsval.debug-adapter.\" + kind);");
+		// eslint-disable-next-line no-template-curly-in-string -- a template's source, as a string
+		assert.equal(fixed("util/server.ts", "log.span(`${method} ${url}`);"), "log.span(`util.server.${method} ${url}`);");
+
+		// A name read from a value gets its place in front.
+		assert.equal(fixed("util/fido/index.ts", "log.span(summary);"), "log.span(\"util.fido.\" + summary);");
+		assert.equal(fixed("util/server.ts", "log.span(request.method + \" \" + url);"), "log.span(\"util.server.\" + request.method + \" \" + url);");
+
+		// Other calls named span, without a name, or with a number, are left alone.
+		assert.equal(fixed("util/server.ts", "node.span(3); log.span(); span(\"x\");"), "node.span(3); log.span(); span(\"x\");");
+
+		console.log("span-names: ok");
+	})();
+}

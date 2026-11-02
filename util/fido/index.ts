@@ -61,7 +61,7 @@ function extendedFetch(url, { cache, cacheKey, debug, fetch, limiter, retry, ...
 			limiter.schedule(async function() {
 				const responseBuffer = [];
 
-				using span = debug ? log.span(summary) : undefined;
+				using span = debug ? log.span("util.fido." + summary) : undefined;
 
 				if (debug) {
 					for (const line of requestBuffer) {
