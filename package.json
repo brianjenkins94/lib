@@ -12,14 +12,14 @@
     "test": "npx tsx test/runtime/node.ts # && deno --allow-all test/runtime/deno.ts"
   },
   "devDependencies": {
-    "@antfu/eslint-config": "^9.1.0",
-    "@eslint/js": "^10.0.1",
-    "@stylistic/eslint-plugin": "^5.10.0",
+    "@antfu/eslint-config": "latest",
+    "@eslint/js": "latest",
+    "@stylistic/eslint-plugin": "latest",
     "@tsconfig/node-lts": "latest",
     "@types/node": "latest",
     "cmd-ts": "latest",
-    "eslint": "^10.6.0",
-    "jiti": "^2.7.0",
+    "eslint": "latest",
+    "jiti": "latest",
     "json5": "latest",
     "module-from-string": "latest",
     "react-dom": "latest",
@@ -28,10 +28,10 @@
     "ts-morph": "latest",
     "ts2esm": "latest",
     "tsx": "latest",
-    "typescript": "6.0.3",
-    "typescript-eslint": "^8.62.1",
+    "typescript": "latest",
+    "typescript-eslint": "latest",
     "vite": "latest",
-    "zod-from-json-schema": "^0.5.3"
+    "zod-from-json-schema": "latest"
   },
   "engines": {
     "node": ">=24.0.0",
