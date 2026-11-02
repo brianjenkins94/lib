@@ -8,7 +8,7 @@
       "default": "lts/*"
     },
     "release-age": {
-      "description": "pnpm minimumReleaseAge in minutes — the supply-chain quarantine window (default 7 days).",
+      "description": "pnpm minimumReleaseAge in minutes — the supply-chain quarantine window (default 7 days): `latest`, a range or a tag takes the newest version that old, but a version a package.json pins exactly is taken however young (install.mjs, util/silo/install.ts).",
       "required": false,
       "default": "10080"
     },
@@ -60,7 +60,7 @@
       },
       {
         "shell": "bash",
-        "run": "pnpm install ${{ inputs.install-flags }} --config.minimumReleaseAge=${{ inputs.release-age }}"
+        "run": "node \"$GITHUB_ACTION_PATH/install.mjs\" --manager pnpm --min-age ${{ inputs.release-age }} -- ${{ inputs.install-flags }}"
       }
     ]
   }

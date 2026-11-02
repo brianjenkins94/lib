@@ -13,6 +13,9 @@ export default defineConfig([
 	// The config itself is loaded by ESLint's config loader (jiti), which doesn't resolve the util alias the wrapper
 	// is imported by: so it takes node's fs (existsSync, for the span-name rule's repository root).
 	{ "files": ["util/eslint.ts"], "rules": { "ts/no-restricted-imports": "off" } },
+	// The setup action runs silo install's rule from its checkout, before anything is installed (install.mjs): only
+	// node's own modules resolve then, so it takes node's fs.
+	{ "files": ["util/silo/install.ts"], "rules": { "ts/no-restricted-imports": "off" } },
 	// Lib-only: force the @brianjenkins94/util/* alias over relative CROSS-directory imports (../ and deeper) — the
 	// alias reads clearer and survives file moves. Same-dir ./siblings stay relative (the alias only adds verbosity
 	// there), EXCEPT ./fs: the fs wrapper is alias-only everywhere so import-style's single-key namespace check
