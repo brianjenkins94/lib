@@ -179,6 +179,13 @@ function failure(error: unknown): Attrs {
 	return { "error": (error as Error | undefined)?.name ?? "Error" };
 }
 
+/** A span whose `run` threw ends saying so — and first says it at error level inside the span, so whatever counts a
+ *  span's errors (by its records' levels: a monitor, a collector) counts this one; its end alone is info. */
+function fail(span: Span, error: unknown): void {
+	span.error("threw", { ...failure(error), "message": String((error as Error | undefined)?.message ?? error).slice(0, 200) });
+	span.end(failure(error));
+}
+
 /** Open a span: as a handle, or — given `run` — for exactly as long as `run`, active in the runtime's tracer. */
 function open<T>(name: string, attrs: Attrs, parent: SpanRef | undefined, context: Attrs, run?: (span: Span) => T): Span | T {
 	if (run === undefined) {
@@ -192,7 +199,7 @@ function open<T>(name: string, attrs: Attrs, parent: SpanRef | undefined, contex
 		try {
 			result = run(span);
 		} catch (error) {
-			span.end(failure(error));
+			fail(span, error);
 			throw error;
 		}
 
@@ -202,7 +209,7 @@ function open<T>(name: string, attrs: Attrs, parent: SpanRef | undefined, contex
 
 				return value;
 			}, (error: unknown) => {
-				span.end(failure(error));
+				fail(span, error);
 				throw error;
 			}) as T;
 		}
