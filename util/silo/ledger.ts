@@ -18,6 +18,9 @@
  *   stale entry              an entry that names nothing that's there
  *   lease expired            an active entry kept `until` a date that's passed (a dormant feature kept for a while:
  *                            decide again)
+ *   unowned file             a code file in an owned folder (`.silo/owned.json`) no entry owns: none's `paths` hold it,
+ *                            and it isn't a test one names (decision 22: owned by declaration, not inferred)
+ *   owned twice              a code file two entries' `paths` hold: one feature owns a file (a test may be named by more)
  *
  * And the leases (`dormant`): a way in nobody decided about keeps its place while the runs reach its code; one whose
  * files the runs loaded and whose own code none of them ran is dormant — a suggestion, with its price, to remove it or
@@ -76,11 +79,16 @@ export interface DriftFacts {
 	/** Its docs (`.md`) and its code, with their text. */
 	"docs": { "file": string; "text": string }[];
 	"code": { "file": string; "text": string }[];
+	/** Where every code file must be owned (`.silo/owned.json`'s folders, parseOwned), and the repository's code files,
+	 *  from the root. None: no file is held to an owner. */
+	"owned"?: { "scope": string[]; "files": string[] };
 }
 
 export type DriftCheck = "stopped but present" | "removed but documented" | "experiment expired" | "dead end" | "stale entry" | "lease expired"
 	// (the feature manifest's: ./manifest)
-	| "unplaced way in" | "gone way in" | "placed twice" | "missing path" | "empty feature";
+	| "unplaced way in" | "gone way in" | "placed twice" | "missing path" | "empty feature"
+	// (decision 22)
+	| "unowned file" | "owned twice";
 
 export interface Drift {
 	"check": DriftCheck;
@@ -90,6 +98,45 @@ export interface Drift {
 	/** The two ways out: change the code, or change the decision. */
 	"code": string;
 	"decision": string;
+}
+
+/** The folders `.silo/owned.json`'s `text` holds every code file of to an owner (a list of folders from the root); none
+ *  when there's no file or it isn't one. */
+export function parseOwned(text: string | undefined): string[] {
+	try {
+		const parsed: unknown = JSON.parse(text ?? "[]");
+
+		return Array.isArray(parsed) ? parsed.filter((each): each is string => typeof each === "string" && each !== "").map((each) => each.replace(/\/+$/u, "")) : [];
+	} catch {
+		return [];
+	}
+}
+
+/** Whether `file` is `path` or under it (a folder: `path` with or without its `/`). */
+function holds(path: string, file: string): boolean {
+	const bare = path.replace(/\/+$/u, "");
+
+	return file === bare || file.startsWith(bare + "/");
+}
+
+/** The code files under `facts.owned`'s folders no live entry owns (by `paths`, or naming it a test), and those two
+ *  entries' `paths` both hold: by file. */
+function ownership(ledger: Ledger, owned: NonNullable<DriftFacts["owned"]>): Drift[] {
+	const live = Object.entries(ledger).filter(([, entry]) => entry.status !== "removed");
+	const found: Drift[] = [];
+
+	for (const file of owned.files.filter((each) => owned.scope.some((folder) => holds(folder, each))).toSorted()) {
+		const owners = live.filter(([, entry]) => (entry.paths ?? []).some((path) => holds(path, file))).map(([name]) => name).toSorted();
+		const tested = live.some(([, entry]) => (entry.tests ?? []).some((path) => holds(path, file)));
+
+		if (owners.length === 0 && !tested) {
+			found.push({ "check": "unowned file", "message": `${file} is owned by no feature`, "code": "delete it, if nothing needs it", "decision": "name it in the `paths` of the feature it's part of (or the `tests` of the one it tests), or declare a feature for it" });
+		} else if (owners.length > 1) {
+			found.push({ "check": "owned twice", "entry": owners[0], "message": `${file} is owned by ${owners.map((name) => `"${name}"`).join(" and ")}`, "code": "split it, so each part is one feature's", "decision": "take it out of all but one of their `paths`" });
+		}
+	}
+
+	return found;
 }
 
 /** The ledger in `text` (`.silo/features.json`); empty when there's none or it isn't JSON. */
@@ -208,7 +255,7 @@ export function drift(ledger: Ledger, facts: DriftFacts): Drift[] {
 		}
 	}
 
-	return found;
+	return facts.owned === undefined ? found : [...found, ...ownership(ledger, facts.owned)];
 }
 
 /** What the runs reached: the files they loaded, and the declarations they ran (node ids, `file#name`). */
@@ -403,6 +450,19 @@ if (isEntry(import.meta)) {
 		// A lease: kept until a date — once it's passed, decide again.
 		assert.deepEqual(drift(withStatus({}, "export", "active", "kept a while", today, { "paths": ["src/old.ts"], "until": "2026-10-01" }), facts).map((each) => each.check), ["lease expired", "dead end", "dead end"]);
 		assert.deepEqual(drift(withStatus({}, "export", "active", "kept a while", today, { "paths": ["src/old.ts"], "until": "2027-01-01" }), facts).map((each) => each.check), ["dead end", "dead end"]);
+		// Ownership (decision 22): every code file in an owned folder is one feature's, or a test one names.
+		const owning = withStatus(withStatus(withStatus({}, "engine", "active", "core", today, { "paths": ["src/engine"] }), "both", "active", "core", today, { "paths": ["src/engine/index.ts"] }), "gone", "removed", "out", today, { "paths": ["src/old.ts"] });
+		const tested: Ledger = { ...owning, "engine": { ...owning["engine"], "tests": ["test/engine.test.ts"] } };
+		const owned = { "scope": parseOwned("[\"src/\", \"test\"]"), "files": ["src/engine/index.ts", "src/engine/run.ts", "src/old.ts", "test/engine.test.ts", "tools/x.ts"] };
+
+		assert.deepEqual(drift(tested, { ...facts, "ways": [], "owned": owned }).filter((each) => each.check === "unowned file" || each.check === "owned twice").map((each) => [each.check, each.message]), [
+			["owned twice", "src/engine/index.ts is owned by \"both\" and \"engine\""],
+			["unowned file", "src/old.ts is owned by no feature"]
+		]);
+		// (a removed entry owns nothing; a file outside the owned folders isn't held to one; a test named is owned)
+		assert.deepEqual(drift(owning, { ...facts, "ways": [], "owned": { ...owned, "files": ["test/engine.test.ts"] } }).map((each) => each.message), ["test/engine.test.ts is owned by no feature"]);
+		assert.deepEqual(parseOwned("not json"), []);
+		assert.deepEqual(parseOwned(undefined), []);
 		// Dormant: its file loaded, its code never ran — not one decided about, nor one whose files never loaded.
 		const ways: WayCode[] = [
 			{ "key": "command|a.export", "facet": "command", "id": "a.export", "declarations": ["src/a.ts#exportAll"] },
