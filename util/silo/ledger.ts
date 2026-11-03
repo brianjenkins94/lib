@@ -47,6 +47,12 @@ export interface LedgerEntry {
 	"why": string;
 	"since": string;
 	"key"?: string;
+	/** A declared feature's (decision 21; ./manifest `DeclaredFeature`): what it's for, where it's told, its ways in, and
+	 *  the tests it owns, beside the paths it owns. */
+	"what"?: string;
+	"docs"?: string;
+	"ways"?: string[];
+	"tests"?: string[];
 	"paths"?: string[];
 	"until"?: string;
 	"in"?: string;
@@ -99,7 +105,8 @@ export function parseLedger(text: string | undefined): Ledger {
 
 /** The ledger as it's written: entries sorted by name, each field in one order, so unrelated changes touch other lines. */
 export function ledgerText(ledger: Ledger): string {
-	const order: (keyof LedgerEntry)[] = ["status", "why", "since", "until", "key", "paths", "in", "restore"];
+	// (a declared feature's fields too — what, docs, ways, tests: a field not listed here is dropped when it's written)
+	const order: (keyof LedgerEntry)[] = ["status", "why", "since", "until", "what", "docs", "key", "ways", "paths", "tests", "in", "restore"];
 	const sorted = Object.fromEntries(Object.keys(ledger).toSorted().map((name) => [name, Object.fromEntries(order.flatMap((field) => (ledger[name][field] === undefined ? [] : [[field, ledger[name][field]]])))]));
 
 	return JSON.stringify(sorted, undefined, 2) + "\n";

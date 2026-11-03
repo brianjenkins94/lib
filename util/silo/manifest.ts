@@ -60,13 +60,25 @@ export function featuresOfManifest(manifest: Manifest): [string, string, Manifes
 	return Object.entries(manifest).flatMap(([area, features]) => Object.entries(features).map(([name, feature]): [string, string, ManifestFeature] => [area, name, feature]));
 }
 
-/** The manifest's drift from the code: features first, in the manifest's order, then the ways in no feature owns, by key. */
-export function manifestDrift(manifest: Manifest, facts: { "ways": FoundWay[]; "exists": (path: string) => boolean }): Drift[] {
+/** A feature the ledger declares (`.silo/features.json`, decision 21): an entry with what the manifest held for one —
+ *  what it's for, its ways in, its paths, its docs — and the tests it owns. The ledger is the source of truth for the
+ *  features it declares; the manifest's go as they move there. An entry with none of `what`, `ways` and `tests` is a
+ *  decision about code, not a feature's declaration. */
+export interface DeclaredFeature { "status": string; "what"?: string; "docs"?: string; "ways"?: string[]; "paths"?: string[]; "tests"?: string[] }
+
+/** The ledger's declared features that own code now (not removed or stopped), as the manifest's are read: area `ledger`. */
+export function featuresOfLedger(ledger: Record<string, DeclaredFeature>): [string, string, ManifestFeature & { "tests"?: string[] }][] {
+	return Object.entries(ledger).filter(([, entry]) => (entry.what !== undefined || entry.ways !== undefined || entry.tests !== undefined) && entry.status !== "removed" && entry.status !== "stopped").map(([name, entry]) => ["ledger", name, { "what": entry.what ?? "", ...entry.docs === undefined ? {} : { "docs": entry.docs }, ...entry.ways === undefined ? {} : { "ways": entry.ways }, ...entry.paths === undefined ? {} : { "paths": entry.paths }, ...entry.tests === undefined ? {} : { "tests": entry.tests } }]);
+}
+
+/** The features' drift from the code — the manifest's and the ledger's declared ones (each feature in one or the other
+ *  while they move): features first, the manifest's in its order then the ledger's, then the ways in no feature owns. */
+export function manifestDrift(manifest: Manifest, facts: { "ways": FoundWay[]; "exists": (path: string) => boolean }, ledger: Record<string, DeclaredFeature> = {}): Drift[] {
 	const found: Drift[] = [];
 	const keys = new Set(facts.ways.map((way) => way.key));
 	const owners = new Map<string, string[]>();
 
-	for (const [area, name, feature] of featuresOfManifest(manifest)) {
+	for (const [area, name, feature] of [...featuresOfManifest(manifest), ...featuresOfLedger(ledger)]) {
 		const where = `"${name}" (${area})`;
 
 		for (const key of feature.ways ?? []) {
@@ -77,7 +89,7 @@ export function manifestDrift(manifest: Manifest, facts: { "ways": FoundWay[]; "
 			}
 		}
 
-		for (const path of feature.paths ?? []) {
+		for (const path of [...feature.paths ?? [], ...(feature as { "tests"?: string[] }).tests ?? []]) {
 			if (!facts.exists(path)) {
 				found.push({ "check": "missing path", "entry": name, "message": `${where} names ${path}, and it isn't there`, "code": "nothing: it went or moved", "decision": "take it out of the feature, or name where it is now" });
 			}
@@ -96,7 +108,7 @@ export function manifestDrift(manifest: Manifest, facts: { "ways": FoundWay[]; "
 
 	for (const way of facts.ways.toSorted((left, right) => left.key.localeCompare(right.key))) {
 		if (!owners.has(way.key)) {
-			found.push({ "check": "unplaced way in", "message": `${way.facet} ${way.id || way.key} is in no feature of the manifest (key ${way.key})`, "code": "take it out, if nothing needs it", "decision": "put its key in the feature it serves (.silo/manifest.json), or in a new one" });
+			found.push({ "check": "unplaced way in", "message": `${way.facet} ${way.id || way.key} is in no feature of the ledger or the manifest (key ${way.key})`, "code": "take it out, if nothing needs it", "decision": "put its key in the feature it serves (.silo/features.json's `ways`, or .silo/manifest.json while it's there), or in a new one" });
 		}
 	}
 
@@ -278,7 +290,18 @@ if (isEntry(import.meta)) {
 			["missing path", "Push"],
 			["empty feature", "Pull"],
 			["placed twice", "hub request|git.commit is owned by \"Commit\" (Source control) and \"Push\" (Source control)"],
-			["unplaced way in", "command fresh is in no feature of the manifest (key command|fresh)"]
+			["unplaced way in", "command fresh is in no feature of the ledger or the manifest (key command|fresh)"]
+		]);
+		// The ledger declares features too: their ways placed, their paths and tests checked, a key in both placed twice;
+		// a removed one owns nothing, and an entry that's only a decision isn't a feature.
+		assert.deepEqual(manifestDrift({ "Source control": { "Commit": { "what": "Commit.", "ways": ["hub request|git.commit"] } } }, { "ways": ways, "exists": exists }, {
+			"Notes on code": { "status": "active", "what": "Notes.", "ways": ["command|notes.add", "hub request|git.commit"], "paths": ["src/git"], "tests": ["test/notes.test.ts"] },
+			"Old notes": { "status": "removed", "ways": ["command|fresh"] },
+			"a decision": { "status": "parked", "paths": ["src/elsewhere"] }
+		}).map((each) => [each.check, each.entry ?? each.message]), [
+			["missing path", "Notes on code"],
+			["placed twice", "hub request|git.commit is owned by \"Commit\" (Source control) and \"Notes on code\" (ledger)"],
+			["unplaced way in", "command fresh is in no feature of the ledger or the manifest (key command|fresh)"]
 		]);
 		// Placed, the way in is quiet; a manifest that agrees has no drift.
 		assert.deepEqual(manifestDrift({ "Notes": { "Notes on code": { "what": "Notes.", "ways": ["command|notes.add", "command|fresh", "hub request|git.commit"] } } }, { "ways": ways, "exists": exists }), []);
