@@ -254,11 +254,13 @@ export function withoutWayIn(text: string, facet: string, id: string): string | 
 	return JSON.stringify(manifest, undefined, indent) + (text.endsWith("\n") ? "\n" : "");
 }
 
-/** A way in's key: what it is, never where it lives (but a way in with no name is keyed by its file's name). */
+/** A way in's key: what it is, never where it lives — but a way in with no name is keyed by its file: its folder and its
+ *  name (`cosmetic/extension.ts`), which a move of the folder keeps. Its name alone matched every file of that name: every
+ *  extension's `extension.ts` was one key, so each nameless registration in one was every extension's. */
 export function keyOf(way: WayIn, file: string): string {
 	const weak = way.weak === true || way.id === "" || way.id === "*";
 
-	return way.facet + "|" + way.id + (weak ? "|" + file.slice(file.lastIndexOf("/") + 1) : "");
+	return way.facet + "|" + way.id + (weak ? "|" + file.split("/").slice(-2).join("/") : "");
 }
 
 /** Every file's ways in, merged into features. */
