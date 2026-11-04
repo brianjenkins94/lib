@@ -1,5 +1,5 @@
 import type { Decision } from "./release";
-import { builtinModules } from "node:module";
+import { builtinModules, createRequire } from "node:module";
 import * as os from "node:os";
 import * as path from "node:path";
 import { createGzip } from "node:zlib";
@@ -168,7 +168,7 @@ if (isEntry(import.meta)) {
  * sibling's declaration is keyed as the build names its module (`observability/src/arch.d.ts`, the leading `../`
  * dropped, beside `observability/src/arch.js`). Tests aren't shipped, so they aren't declared.
  */
-	async function emitDeclarations(workspace: string, nestedDirs: string[]): Promise<{ "inside": Record<string, Buffer>; "outside": Record<string, Buffer> }> {
+	async function emitDeclarations(workspace: string, nestedDirs: string[], peers?: (specifier: string) => boolean): Promise<{ "inside": Record<string, Buffer>; "outside": Record<string, Buffer> }> {
 		const slug = workspace.replace(/[\\/]/gu, "-").replace(/^\.$/u, "root");
 		const outDir = path.join(os.tmpdir(), `dts-${slug}-${process.pid}`);
 		const configPath = path.join(__root, `.tsconfig.dts.${slug}.json`);
@@ -176,7 +176,13 @@ if (isEntry(import.meta)) {
 		await fs.writeFile(configPath, JSON.stringify({
 			"extends": "./tsconfig.json",
 			"compilerOptions": { "noEmit": false, "declaration": true, "emitDeclarationOnly": true, "skipLibCheck": true, "outDir": outDir, "rootDir": __root },
-			"include": [path.join(workspace, "**", "*.ts").replace(/\\/gu, "/")],
+			// (a bundled package's siblings by name too: reached through node_modules, tsc takes them for a library's and
+			// declares nothing, and their declarations ship here)
+			"include": [path.join(workspace, "**", "*.ts").replace(/\\/gu, "/"), ...peers === undefined ? [] : Object.keys(JSON.parse(fs.readFileSync(path.join(__root, workspace, "package.json")))["dependencies"] ?? {}).flatMap((name) => {
+				const sibling = path.relative(__root, fs.realpathSync(path.join(__root, workspace, "node_modules", name))).replace(/\\/gu, "/");
+
+				return sibling.includes("node_modules") ? [] : [sibling + "/**/*.ts"];
+			})],
 			"exclude": ["node_modules", "**/node_modules", "**/test/**", "**/*.test.ts", ...nestedDirs.map((dir) => dir + "/**")]
 		}));
 
@@ -198,10 +204,37 @@ if (isEntry(import.meta)) {
 				return lead + quote + (relocated.startsWith(".") ? relocated : "./" + relocated) + quote;
 			});
 
+			// A bundled package's bare import of what it bundled has nothing to resolve to in the tarball: it's aimed at the
+			// declaration shipped there instead (`theme/component` → `../packages/theme/src/component`). A peer stays as it
+			// is, as does anything whose declaration wasn't emitted (`@stitches/core`'s, say: its own package's).
+			const requireFrom = createRequire(path.join(__root, workspace, "package.json"));
+			const emitted = (source: string) => fs.existsSync(path.join(outDir, source.replace(/\.[^./]+$/u, ".d.ts")));
+			const inline = (text: string, repoRelative: string) => (peers !== undefined ? text.replaceAll(/(\bfrom\s*|\bimport\s*\(\s*|\bimport\s+)(["'])([^."'/][^"']*)\2/gu, (whole, lead: string, quote: string, specifier: string) => {
+				if (peers(specifier)) {
+					return whole;
+				}
+
+				let source: string;
+
+				try {
+					source = path.relative(__root, fs.realpathSync(requireFrom.resolve(specifier))).replace(/\\/gu, "/");
+				} catch {
+					return whole;
+				}
+
+				if (!emitted(source)) {
+					return whole;
+				}
+
+				const aimed = path.posix.relative(path.posix.dirname(keyOf(repoRelative)), keyOf(source.replace(/\.[^./]+$/u, "")));
+
+				return lead + quote + (aimed.startsWith(".") ? aimed : "./" + aimed) + quote;
+			}) : text);
+
 			const declared = await find(outDir).name("*.d.ts").exec(async (absolute): Promise<[string, Buffer]> => {
 				const repoRelative = path.relative(outDir, absolute).replace(/\\/gu, "/");
 
-				return [path.posix.relative(workspace, repoRelative), Buffer.from(relocate(await fs.readFile(absolute), repoRelative))];
+				return [path.posix.relative(workspace, repoRelative), Buffer.from(inline(relocate(await fs.readFile(absolute), repoRelative), repoRelative))];
 			}, { "concurrency": 16 });
 
 			return {
@@ -266,6 +299,13 @@ if (isEntry(import.meta)) {
 		if (packageJson["private"] === true) {
 			continue;   // never publish private packages (the monorepo root, example/fixture packages, …)
 		}
+
+		// A package that names a Custom Elements Manifest is a component, for a page anywhere: it's bundled, everything it
+		// imports but its declared peers in one file, and depends on nothing — so it can import unpublished siblings by
+		// name in the repository, where they're its dependencies, and still install alone.
+		const peers = typeof packageJson["customElements"] === "string" && !Array.isArray(packageJson["files"])
+			? (specifier: string) => specifier.startsWith("node:") || builtinModules.includes(specifier) || packageJson["peerDependencies"]?.[packageName(specifier)] !== undefined
+			: undefined;
 
 	// In CI only the release workspaces publish — each onto its own GitHub release series (see release.ts).
 		if (isCI && !releasePatterns.some((pattern) => pattern.test(workspace))) {
@@ -342,6 +382,7 @@ if (isEntry(import.meta)) {
 			try {
 				result = await vite.build({
 					"mode": "production",
+					...peers === undefined ? {} : { "ssr": { "noExternal": true } },
 					"root": path.join(__root, workspace).replace(/\\/gu, "/"),
 					"define": {
 						"process.env": "process.env"
@@ -351,11 +392,10 @@ if (isEntry(import.meta)) {
 						"target": "esnext",
 						"rollupOptions": {
 							"input": entryPoints,
-							"external": (id) => !id.startsWith(".") && !path.isAbsolute(id),
+							"external": (id) => !id.startsWith(".") && !path.isAbsolute(id) && (peers === undefined || peers(id)),
 							"preserveEntrySignatures": "strict",
 							"output": {
-								"preserveModules": true,
-								"preserveModulesRoot": path.join(__root, workspace).replace(/\\/gu, "/"),
+								...peers === undefined ? { "preserveModules": true, "preserveModulesRoot": path.join(__root, workspace).replace(/\\/gu, "/") } : {},
 								"entryFileNames": "[name].js"
 							}
 						},
@@ -387,7 +427,7 @@ if (isEntry(import.meta)) {
 
 		// Ship `.d.ts` for the transpiled sources — the esbuild/vite output above carries no types. A sibling's
 		// (outside the workspace) only where the build shipped its module: an alias import stays external.
-			const declarations = await emitDeclarations(workspace, nestedDirs);
+			const declarations = await emitDeclarations(workspace, nestedDirs, peers);
 
 			Object.assign(files, declarations.inside);
 
@@ -457,6 +497,7 @@ if (isEntry(import.meta)) {
 		} : {
 			...publishable,
 			"name": scopeName(packageJson["name"]),
+			...peers === undefined ? {} : { "dependencies": undefined },
 			"exports": Object.fromEntries(Object.keys(files).filter((key) => key !== "package.json" && !key.endsWith(".d.ts")).flatMap((key) => {
 				// Data (a manifest) is exported at its own path, as tools and imports name it.
 				if (!/\.[cm]?js$/u.test(key)) {
