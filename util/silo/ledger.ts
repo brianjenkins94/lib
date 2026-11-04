@@ -20,7 +20,8 @@
  *                            decide again)
  *   unowned file             a code file no entry owns: none's `paths` hold it, and it isn't a test one names (decision
  *                            22: owned by declaration, not inferred). Tests, scripts and vendored code are code too.
- *   owned twice              a code file two entries' `paths` hold: one feature owns a file (a test may be named by more)
+ *   owned twice              a code file two entries' `paths` hold: one owner a file is where attribution starts, until
+ *                            coverage from runs and traces says how to handle sharing (a test may be named by more)
  *
  * And the leases (`dormant`): a way in nobody decided about keeps its place while the runs reach its code; one whose
  * files the runs loaded and whose own code none of them ran is dormant — a suggestion, with its price, to remove it or
@@ -37,8 +38,6 @@ import { priceOf, priceText } from "./cost";
 import { INTERNAL_FACETS, withoutWayIn } from "./features";
 import { TOP } from "./graph";
 import { includeByDefault } from "./history";
-import { manifestPath } from "./layout";
-import { manifestWithout } from "./manifest";
 
 export type LedgerStatus = "active" | "experiment" | "parked" | "stopped" | "removed";
 
@@ -79,9 +78,8 @@ export interface DriftFacts {
 	/** Its docs (`.md`) and its code, with their text. */
 	"docs": { "file": string; "text": string }[];
 	"code": { "file": string; "text": string }[];
-	/** The repository's code files, from the root (`isOwnedCode`), each held to an owner, or only those in `scope`'s folders.
-	 *  None: no file is held to an owner. */
-	"owned"?: { "scope"?: string[]; "files": string[] };
+	/** The repository's code files, from the root (`isOwnedCode`), each held to an owner. None: no file is held to one. */
+	"owned"?: { "files": string[] };
 }
 
 export type DriftCheck = "stopped but present" | "removed but documented" | "experiment expired" | "dead end" | "stale entry" | "lease expired"
@@ -100,18 +98,6 @@ export interface Drift {
 	"decision": string;
 }
 
-/** The folders `.silo/owned.json`'s `text` holds every code file of to an owner (a list of folders from the root); none
- *  when there's no file or it isn't one. */
-export function parseOwned(text: string | undefined): string[] {
-	try {
-		const parsed: unknown = JSON.parse(text ?? "[]");
-
-		return Array.isArray(parsed) ? parsed.filter((each): each is string => typeof each === "string" && each !== "").map((each) => each.replace(/\/+$/u, "")) : [];
-	} catch {
-		return [];
-	}
-}
-
 /** Whether a file of the repository is code a feature must own: anything that runs or type-checks, tests, scripts and
  *  vendored code among it (decision 22); not what's installed or built, nor a tool's dot-folder. */
 export function isOwnedCode(file: string): boolean {
@@ -125,13 +111,13 @@ function holds(path: string, file: string): boolean {
 	return file === bare || file.startsWith(bare + "/");
 }
 
-/** The code files under `facts.owned`'s folders no live entry owns (by `paths`, or naming it a test), and those two
+/** The code files in `facts.owned` no live entry owns (by `paths`, or naming it a test), and those two
  *  entries' `paths` both hold: by file. */
 function ownership(ledger: Ledger, owned: NonNullable<DriftFacts["owned"]>): Drift[] {
 	const live = Object.entries(ledger).filter(([, entry]) => entry.status !== "removed");
 	const found: Drift[] = [];
 
-	for (const file of owned.files.filter((each) => owned.scope === undefined || owned.scope.some((folder) => holds(folder, each))).toSorted()) {
+	for (const file of owned.files.toSorted()) {
 		const owners = live.filter(([, entry]) => (entry.paths ?? []).some((path) => holds(path, file))).map(([name]) => name).toSorted();
 		const tested = live.some(([, entry]) => (entry.tests ?? []).some((path) => holds(path, file)));
 
@@ -459,14 +445,6 @@ export function removalOf(input: { "name": string; "why": string; "key"?: string
 		return without === undefined ? [] : [{ "file": file, "text": without }];
 	});
 	const nothing = price.files.length === 0 && manifests.length === 0;
-	// (and the feature manifest, so the change passes its own `silo check`: its key and files out of their feature)
-	const manifest = nothing ? undefined : textOf(manifestPath());
-	const without = manifest === undefined ? undefined : manifestWithout(manifest, key === undefined ? [] : [key], [...paths, ...price.files]);
-
-	if (without !== undefined) {
-		manifests.push({ "file": manifestPath(), "text": without });
-	}
-
 	const restore = price.files.length === 0 ? undefined : `git checkout ${input.head} -- ${price.files.join(" ")}`;
 	const named = [key?.slice(key.indexOf("|") + 1), ...paths, ...price.files].filter((each): each is string => each !== undefined && each !== "");
 	const docs = tracked.filter((file) => file.endsWith(".md") && named.some((each) => textOf(file)?.includes(each) === true));
@@ -541,22 +519,19 @@ if (isEntry(import.meta)) {
 		// A lease: kept until a date — once it's passed, decide again.
 		assert.deepEqual(drift(withStatus({}, "export", "active", "kept a while", today, { "paths": ["src/old.ts"], "until": "2026-10-01" }), facts).map((each) => each.check), ["lease expired", "dead end", "dead end"]);
 		assert.deepEqual(drift(withStatus({}, "export", "active", "kept a while", today, { "paths": ["src/old.ts"], "until": "2027-01-01" }), facts).map((each) => each.check), ["dead end", "dead end"]);
-		// Ownership (decision 22): every code file in an owned folder is one feature's, or a test one names.
+		// Ownership (decision 22): every code file is one feature's, or a test one names.
 		const owning = withStatus(withStatus(withStatus({}, "engine", "active", "core", today, { "paths": ["src/engine"] }), "both", "active", "core", today, { "paths": ["src/engine/index.ts"] }), "gone", "removed", "out", today, { "paths": ["src/old.ts"] });
 		const tested: Ledger = { ...owning, "engine": { ...owning["engine"], "tests": ["test/engine.test.ts"] } };
-		const owned = { "scope": parseOwned("[\"src/\", \"test\"]"), "files": ["src/engine/index.ts", "src/engine/run.ts", "src/old.ts", "test/engine.test.ts", "tools/x.ts"] };
+		const owned = { "files": ["src/engine/index.ts", "src/engine/run.ts", "src/old.ts", "test/engine.test.ts"] };
 
 		assert.deepEqual(drift(tested, { ...facts, "ways": [], "owned": owned }).filter((each) => each.check === "unowned file" || each.check === "owned twice").map((each) => [each.check, each.message]), [
 			["owned twice", "src/engine/index.ts is owned by \"both\" and \"engine\""],
 			["unowned file", "src/old.ts is owned by no feature"]
 		]);
-		// Without a scope, every file given; what's installed, built or a tool's isn't code to own.
-		assert.deepEqual(drift(owning, { ...facts, "ways": [], "owned": { "files": ["tools/x.ts"] } }).map((each) => each.message), ["tools/x.ts is owned by no feature"]);
+		// What's installed, built or a tool's isn't code to own.
 		assert.deepEqual(["src/a.ts", "test/a.test.mjs", "pkg/vendor/x.js", "a.d.ts", "src/a.css", "node_modules/x/i.js", "pkg/dist/i.js", ".refs/main/a.ts", ".github/x.mjs"].filter(isOwnedCode), ["src/a.ts", "test/a.test.mjs", "pkg/vendor/x.js", "a.d.ts"]);
-		// (a removed entry owns nothing; a file outside the owned folders isn't held to one; a test named is owned)
+		// (a removed entry owns nothing; a test named is owned)
 		assert.deepEqual(drift(owning, { ...facts, "ways": [], "owned": { ...owned, "files": ["test/engine.test.ts"] } }).map((each) => each.message), ["test/engine.test.ts is owned by no feature"]);
-		assert.deepEqual(parseOwned("not json"), []);
-		assert.deepEqual(parseOwned(undefined), []);
 		// Dormant: its file loaded, its code never ran — not one decided about, nor one whose files never loaded.
 		const ways: WayCode[] = [
 			{ "key": "command|a.export", "facet": "command", "id": "a.export", "declarations": ["src/a.ts#exportAll"] },
