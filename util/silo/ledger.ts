@@ -170,7 +170,12 @@ export function withStatus(ledger: Ledger, name: string, status: LedgerStatus, w
 
 /** What a removed entry is still known by in prose: its way in's id, its paths, and their file names (when they're
  *  distinctive enough not to match words). */
-function namesOf(entry: LedgerEntry): string[] {
+/** Whether `text` says `name` as itself: not as the end of a longer path or name (`server-bridge.ts` for `bridge.ts`). */
+function mentions(text: string, name: string): boolean {
+	return new RegExp(`(?<![\\w./-])${name.replaceAll(/[.*+?^${}()|[\]\\]/gu, "\\$&")}`, "u").test(text);
+}
+
+function namesOf(entry: LedgerEntry, others: ReadonlySet<string> = new Set()): string[] {
 	const names = new Set<string>();
 
 	if (entry.key !== undefined) {
@@ -178,11 +183,14 @@ function namesOf(entry: LedgerEntry): string[] {
 	}
 
 	for (const path of entry.paths ?? []) {
-		names.add(path);
+		const base = path.replace(/\/+$/u, "").split("/").at(-1) ?? "";
 
-		const base = path.split("/").at(-1) ?? "";
+		// (a bare folder, `src`, is any doc's word; a file name, unless another file there has it now)
+		if (path.includes("/") || base.includes(".")) {
+			names.add(path);
+		}
 
-		if (base.includes(".") && base.length > 6) {
+		if (base.includes(".") && base.length > 6 && !others.has(base)) {
 			names.add(base);
 		}
 	}
@@ -213,7 +221,8 @@ export function drift(ledger: Ledger, facts: DriftFacts): Drift[] {
 		}
 
 		if (entry.status === "removed") {
-			const named = facts.docs.flatMap(({ file, text }) => (namesOf(entry).some((each) => text.includes(each)) ? [file] : []));
+			const others = new Set(facts.code.map(({ file }) => file.split("/").at(-1) ?? ""));
+			const named = facts.docs.flatMap(({ file, text }) => (namesOf(entry, others).some((each) => mentions(text, each)) ? [file] : []));
 
 			if (named.length > 0) {
 				found.push({ "check": "removed but documented", "entry": name, "message": `"${name}" was removed${entry.in === undefined ? "" : ` (${entry.in})`}, and ${named.join(", ")} still ${named.length === 1 ? "names" : "name"} it`, "code": "take it out of those docs", "decision": "restore it, if the docs are right" });
@@ -453,14 +462,18 @@ export function removalOf(input: { "name": string; "why": string; "key"?: string
 
 		return without === undefined ? [] : [{ "file": file, "text": without }];
 	});
-	const nothing = price.files.length === 0 && manifests.length === 0;
-	const restore = price.files.length === 0 ? undefined : `git checkout ${input.head} -- ${price.files.join(" ")}`;
-	const named = [key?.slice(key.indexOf("|") + 1), ...paths, ...price.files].filter((each): each is string => each !== undefined && each !== "");
-	const docs = tracked.filter((file) => file.endsWith(".md") && named.some((each) => textOf(file)?.includes(each) === true));
+	// (the tests only it names go with it: nothing else runs them)
+	const claimed = (file: string): boolean => Object.entries(input.ledger).some(([other, entry]) => other !== name && entry.status !== "removed" && entry.status !== "stopped" && [...entry.paths ?? [], ...entry.tests ?? []].some((path) => holds(path, file)));
+	const tests = tracked.filter((file) => (input.ledger[name]?.tests ?? []).some((path) => holds(path, file)) && !claimed(file));
+	const files = [...new Set([...price.files, ...tests])];
+	const nothing = files.length === 0 && manifests.length === 0;
+	const restore = files.length === 0 ? undefined : `git checkout ${input.head} -- ${files.join(" ")}`;
+	const named = [key?.slice(key.indexOf("|") + 1), ...paths, ...files].filter((each): each is string => each !== undefined && each !== "");
+	const docs = tracked.filter((file) => file.endsWith(".md") && named.some((each) => mentions(textOf(file) ?? "", each)));
 	const entry = input.ledger[name];
-	const ledger = nothing ? ledgerText(input.ledger) : ledgerText(withStatus(withoutRemoved(input.ledger, name, key === undefined ? [] : [key], [...paths, ...price.files], input.today), name, "removed", input.why || entry?.why || "removed", input.today, { ...key === undefined ? {} : { "key": key }, "paths": [...new Set([...paths, ...price.files])], ...restore === undefined ? {} : { "restore": restore } }));
+	const ledger = nothing ? ledgerText(input.ledger) : ledgerText(withStatus(withoutRemoved(input.ledger, name, key === undefined ? [] : [key], [...paths, ...files], input.today), name, "removed", input.why || entry?.why || "removed", input.today, { ...key === undefined ? {} : { "key": key }, "paths": [...new Set([...paths, ...files])], ...restore === undefined ? {} : { "restore": restore } }));
 
-	return { "nothing": nothing, "price": price, "files": price.files, "manifests": manifests, "byHand": byHand, "registrations": registrations, "docs": docs, "ledger": ledger, ...restore === undefined ? {} : { "restore": restore } };
+	return { "nothing": nothing, "price": price, "files": files, "manifests": manifests, "byHand": byHand, "registrations": registrations, "docs": docs, "ledger": ledger, ...restore === undefined ? {} : { "restore": restore } };
 }
 
 /** A removal, said: what was taken out and what's left by hand (`silo remove`'s report, the editor's). */
@@ -602,5 +615,14 @@ if (isEntry(import.meta)) {
 		assert.deepEqual([narrowed["Only"]?.status, narrowed["Only"]?.why, narrowed["Only"]?.since], ["removed", "went with \"Gone\": it owned nothing else", "2026-12-01"]);
 		assert.deepEqual(narrowed["Else"]?.ways, ["command|e"]);
 		assert.deepEqual(narrowed["Tombstone"]?.ways, ["view|a"]);
+		// A removed entry's docs: said as itself, not as the end of another name, nor a bare folder, nor a name another file has.
+		const gone = withStatus({}, "proto", "removed", "out", today, { "paths": ["src", "src/bridge.ts", "src/canary.ts", "src/stub.ts"] });
+		const documents = (text: string): number => drift(gone, { ...facts, "ways": [], "docs": [{ "file": "a.md", text }], "code": [{ "file": "extensions/canary.ts", "text": "" }] }).filter((each) => each.check === "removed but documented").length;
+
+		assert.equal(documents("src/ holds server-bridge.ts, and extensions/canary.ts is canary.ts"), 0);
+		assert.equal(documents("packages/hub/src/stub.ts"), 0);
+		assert.equal(documents("see src/stub.ts"), 1);
+		assert.equal(documents("see `stub.ts`"), 1);
+		assert.equal(documents("the old bridge.ts"), 1);
 	})();
 }
