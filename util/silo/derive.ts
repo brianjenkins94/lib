@@ -1,8 +1,8 @@
 /**
  * silo — features from the code alone (pure, zero-dep): a program's ways in (./features) grouped so each group may be
- * one feature, knowing nothing about the repository, each grouping scored against its manifest (./manifest
- * `scoreGrouping`): how near a derivation is to taking the hand-written manifest's place (silo README, *The feature
- * manifest*). A grouping is each way in's group, by its key; a way in it can't place is in none.
+ * one feature, knowing nothing about the repository, each grouping scored against the features the ledger declares
+ * (`scoreGrouping`): how near a derivation is to what people declared (silo README, *The feature manifest*). A grouping
+ * is each way in's group, by its key; a way in it can't place is in none.
  *
  *   byFile     the file that registers it: a baseline, what a derivation has to beat
  *   byFolder   that file's folder: a baseline the other way, fewer and larger groups
@@ -20,8 +20,9 @@
 
 import type { Feature } from "./features";
 import type { DeclarationGraph } from "./graph";
+import type { Declared } from "./ledger";
 import { isEntry } from "@brianjenkins94/util/env";
-import { reach, TOP } from "./graph";
+import { nodeId, reach, TOP } from "./graph";
 import { AMBIENT_MIN, joinAlike } from "./test-features";
 
 /** Each way in's group, by its key. */
@@ -168,6 +169,131 @@ export function byTests(features: Iterable<Feature>, graph: DeclarationGraph, te
 	return grouping;
 }
 
+/** How near a grouping of the ways in is to the features the ledger declares (./ledger `declaredFeatures`). Of the features that own ways in: `whole`
+ *  ones are one group with nothing else in it; `split` ones are in more than one group, `merged` ones share a group with
+ *  another feature (`splitAndMerged`, both); `partly` ones are whole but for ways in the grouping placed nowhere;
+ *  `unseen` ones have none placed. `precision` and `recall` are B-cubed, each way in's: how much of its group is its
+ *  feature, and how much of its feature is in its group (a way in placed nowhere has none) — and `f`, their harmonic
+ *  mean. */
+export interface GroupingScore {
+	"features": number;
+	"ways": number;
+	"placed": number;
+	"groups": number;
+	"whole": number;
+	"split": number;
+	"merged": number;
+	"splitAndMerged": number;
+	"partly": number;
+	"unseen": number;
+	"precision": number;
+	"recall": number;
+	"f": number;
+}
+
+/** `grouping` (each way in's group, by its key) scored against `declared`'s features. */
+export function scoreGrouping(declared: Declared[], grouping: ReadonlyMap<string, string>): GroupingScore {
+	const truth = new Map(declared.flatMap(([name, feature]) => (feature.ways ?? []).map((key): [string, string] => [key, name])));
+	const members = (of: Iterable<[string, string]>): Map<string, string[]> => {
+		const by = new Map<string, string[]>();
+
+		for (const [key, group] of of) {
+			by.set(group, [...by.get(group) ?? [], key]);
+		}
+
+		return by;
+	};
+	const byFeature = members([...truth].map(([key, feature]): [string, string] => [key, feature]));
+	const byGroup = members([...grouping].filter(([key]) => truth.has(key)));
+	const score: GroupingScore = { "features": byFeature.size, "ways": truth.size, "placed": 0, "groups": byGroup.size, "whole": 0, "split": 0, "merged": 0, "splitAndMerged": 0, "partly": 0, "unseen": 0, "precision": 0, "recall": 0, "f": 0 };
+
+	for (const [feature, keys] of byFeature) {
+		const groups = new Set(keys.flatMap((key) => (grouping.has(key) ? [grouping.get(key)!] : [])));
+		const split = groups.size > 1;
+		const merged = [...groups].some((group) => byGroup.get(group)!.some((key) => truth.get(key) !== feature));
+
+		if (groups.size === 0) {
+			score.unseen += 1;
+		} else if (split && merged) {
+			score.splitAndMerged += 1;
+		} else if (split) {
+			score.split += 1;
+		} else if (merged) {
+			score.merged += 1;
+		} else if (keys.some((key) => !grouping.has(key))) {
+			score.partly += 1;
+		} else {
+			score.whole += 1;
+		}
+	}
+
+	let precision = 0;
+	let recall = 0;
+
+	for (const [key, feature] of truth) {
+		const group = grouping.has(key) ? byGroup.get(grouping.get(key)!)! : undefined;
+
+		if (group !== undefined) {
+			const same = group.filter((each) => truth.get(each) === feature).length;
+
+			score.placed += 1;
+			precision += same / group.length;
+			recall += same / byFeature.get(feature)!.length;
+		}
+	}
+
+	score.precision = score.placed === 0 ? 0 : precision / score.placed;
+	score.recall = truth.size === 0 ? 0 : recall / truth.size;
+	score.f = score.precision + score.recall === 0 ? 0 : 2 * score.precision * score.recall / (score.precision + score.recall);
+
+	return score;
+}
+
+/**
+ * The code each of `declared`'s features owns, by node id, each feature by its name. A feature owns what its ways in
+ * reach, and what registers them: the declaration each registration is written in (an `install…`, an `activate`, a
+ * module's body) and what its own code reaches; and every declaration in its `paths`, with what they reach (code no way
+ * in leads to: a route, a library's export). A handler's code is its way's, not that declaration's (./ts-analysis), so a
+ * declaration that registers many features leads to its setup, not into theirs. A declaration several features reach is
+ * each one's.
+ */
+export function codeOwners(declared: Declared[], features: ReadonlyMap<string, Feature>, graph: DeclarationGraph): Map<string, Set<string>> {
+	const declarations = new Map<string, { "id": string; "start": number; "end": number }[]>();
+
+	for (const id of graph.fingerprints.keys()) {
+		const range = graph.range?.(id);
+
+		if (range !== undefined) {
+			declarations.set(range.file, [...declarations.get(range.file) ?? [], { "id": id, "start": range.start, "end": range.end }]);
+		}
+	}
+
+	/** The declaration a registration is written in: the narrowest that holds it, else its module's body. */
+	const holder = ({ file, start, end }: { "file": string; "start": number; "end": number }): string[] => {
+		const held = (declarations.get(file) ?? []).filter((each) => each.start <= start && end <= each.end).toSorted((left, right) => (left.end - left.start) - (right.end - right.start))[0];
+
+		return held !== undefined ? [held.id] : graph.fingerprints.has(nodeId(file, TOP)) ? [nodeId(file, TOP)] : [];
+	};
+	const owners = new Map<string, Set<string>>();
+	const ids = [...graph.fingerprints.keys()];
+
+	for (const [name, feature] of declared) {
+		const ways = (feature.ways ?? []).flatMap((key) => (features.has(key) ? [features.get(key)!] : []));
+		const under = (id: string): boolean => (feature.paths ?? []).some((path) => {
+			const file = id.slice(0, id.lastIndexOf("#"));
+			const at = path.replace(/\/+$/u, "");
+
+			return file === at || file.startsWith(at + "/");
+		});
+
+		for (const id of reach(graph, [...ways.flatMap((way) => [...way.roots, ...way.ranges.flatMap(holder)]), ...ids.filter(under)])) {
+			owners.set(id, (owners.get(id) ?? new Set()).add(name));
+		}
+	}
+
+	return owners;
+}
+
 if (isEntry(import.meta)) {
 	void (async function() {
 		const assert: typeof import("node:assert").strict = (await import("node:assert")).strict;
@@ -202,5 +328,29 @@ if (isEntry(import.meta)) {
 
 		assert.equal(linked.get("tool"), linked.get("read"));
 		assert.notEqual(linked.get("write"), linked.get("read"));
+		{
+			// Scoring a grouping: notes whole; commit split over two groups; push merged with pull; tags unseen.
+			const truth: Declared[] = [["notes", { "ways": ["n1", "n2"] }], ["commit", { "ways": ["c1", "c2"] }], ["push", { "ways": ["p1"] }], ["pull", { "ways": ["l1"] }], ["tags", { "ways": ["t1"] }]];
+			const scored = scoreGrouping(truth, new Map([["n1", "g1"], ["n2", "g1"], ["c1", "g2"], ["c2", "g3"], ["p1", "g4"], ["l1", "g4"], ["elsewhere", "g5"]]));
+
+			assert.deepEqual({ ...scored, "precision": undefined, "recall": undefined, "f": undefined }, { "features": 5, "ways": 7, "placed": 6, "groups": 4, "whole": 1, "split": 1, "merged": 2, "splitAndMerged": 0, "partly": 0, "unseen": 1, "precision": undefined, "recall": undefined, "f": undefined });
+			// (precision: n1 n2 c1 c2 1 each, p1 l1 ½ each → 5/6; recall: n 1+1, c ½+½, p 1, l 1, t 0 → 5/7)
+			assert.equal(scored.precision.toFixed(4), (5 / 6).toFixed(4));
+			assert.equal(scored.recall.toFixed(4), (5 / 7).toFixed(4));
+			// The features grouped as themselves are whole.
+			assert.equal(scoreGrouping(truth, new Map([["n1", "n"], ["n2", "n"], ["c1", "c"], ["c2", "c"], ["p1", "p"], ["l1", "l"], ["t1", "t"]])).f, 1);
+			// Owners: activate registers both commands (offsets 10–40 and 50–80 inside it) and sets up with `connect`; each
+			// handler uses its own helper. Each feature owns its helper; both own activate and connect; `unused` is no one's.
+			const edges: Record<string, string[]> = { "a.ts#activate": ["a.ts#connect"], "a.ts#connect": [], "a.ts#open": [], "a.ts#save": [], "a.ts#unused": [] };
+			const ranges: Record<string, [number, number]> = { "a.ts#activate": [0, 100], "a.ts#connect": [100, 120], "a.ts#open": [120, 140], "a.ts#save": [140, 160], "a.ts#unused": [160, 180] };
+			const graph: DeclarationGraph = { "fingerprints": new Map(Object.keys(edges).map((id) => [id, id])), "nodes": () => Object.keys(edges), "edges": (id) => edges[id] ?? [], "range": (id) => (ranges[id] === undefined ? undefined : { "file": "a.ts", "start": ranges[id]![0], "end": ranges[id]![1] }) };
+			const command = (id: string, root: string, start: number): [string, Feature] => [`command|${id}`, { "key": `command|${id}`, "facet": "command", "id": id, "label": "", "files": ["a.ts"], "sides": ["registered"], "code": [], "roots": [root], "ranges": [{ "file": "a.ts", "start": start, "end": start + 30 }] }];
+			const owned = codeOwners([["open", { "ways": ["command|open"] }], ["save", { "ways": ["command|save"] }]], new Map([command("open", "a.ts#open", 10), command("save", "a.ts#save", 50)]), graph);
+
+			assert.deepEqual(Object.fromEntries([...owned].map(([id, of]) => [id, [...of].toSorted()])), { "a.ts#open": ["open"], "a.ts#activate": ["open", "save"], "a.ts#connect": ["open", "save"], "a.ts#save": ["save"] });
+			// A feature's paths own what's in them, a file or a folder: `unused` by its file, and nothing in a file that only
+			// starts with the path's name.
+			assert.deepEqual([...codeOwners([["by file", { "paths": ["a.ts"] }], ["by folder", { "paths": ["a"] }]], new Map(), graph).keys()].toSorted(), ["a.ts#activate", "a.ts#connect", "a.ts#open", "a.ts#save", "a.ts#unused"]);
+		}
 	})();
 }

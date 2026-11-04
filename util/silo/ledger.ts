@@ -50,7 +50,7 @@ export interface LedgerEntry {
 	"why": string;
 	"since": string;
 	"key"?: string;
-	/** A declared feature's (decision 21; ./manifest `DeclaredFeature`): what it's for, where it's told, its ways in, and
+	/** A declared feature's (decision 21): what it's for, where it's told, its ways in, and
 	 *  the tests it owns, beside the paths it owns. */
 	"what"?: string;
 	"docs"?: string;
@@ -85,7 +85,7 @@ export interface DriftFacts {
 }
 
 export type DriftCheck = "stopped but present" | "removed but documented" | "experiment expired" | "dead end" | "stale entry" | "lease expired"
-	// (the feature manifest's: ./manifest)
+	// (declared features': declaredDrift)
 	| "unplaced way in" | "gone way in" | "placed twice" | "missing path" | "empty feature"
 	// (decision 22)
 	| "unowned file" | "owned twice";
@@ -334,6 +334,91 @@ export function dormantWays(features: ReadonlyMap<string, Feature>, graph: Decla
 	return dormant(ways, ledger, reached).map((way) => ({ "way": way, "feature": features.get(way.key)!, "price": priceOf(graph, roots, { "roots": features.get(way.key)?.roots ?? [] }, textOf) }));
 }
 
+/** A feature as the ledger declares it, with its name. */
+export type Declared = [string, Pick<LedgerEntry, "what" | "docs" | "ways" | "paths" | "tests">];
+
+/** The features the ledger declares that own code now: an entry with any of `what`, `ways` and `tests`, not removed or
+ *  stopped. Any other entry is a decision about code, not a feature's declaration. */
+export function declaredFeatures(ledger: Ledger): Declared[] {
+	return Object.entries(ledger).filter(([, entry]) => (entry.what !== undefined || entry.ways !== undefined || entry.tests !== undefined) && entry.status !== "removed" && entry.status !== "stopped");
+}
+
+/** The declared features' drift from the code, their own first, then the ways in none owns (decision 21: the ledger's are
+ *  the source of truth). A repository that declares none isn't held to them.
+ *   unplaced way in    a way in no feature owns: new code, or one missed
+ *   gone way in        a feature owns a key that isn't found: the code went, moved or was renamed
+ *   placed twice       a key two features own
+ *   missing path       a feature's path or test that isn't there
+ *   empty feature      one that owns no way in and no path: nothing says what it is */
+export function declaredDrift(ledger: Ledger, facts: Pick<DriftFacts, "ways" | "exists">): Drift[] {
+	const declared = declaredFeatures(ledger);
+	const found: Drift[] = [];
+	const keys = new Set(facts.ways.map((way) => way.key));
+	const owners = new Map<string, string[]>();
+
+	if (declared.length === 0) {
+		return [];
+	}
+
+	for (const [name, feature] of declared) {
+		const where = `"${name}"`;
+
+		for (const key of feature.ways ?? []) {
+			owners.set(key, [...owners.get(key) ?? [], where]);
+
+			if (!keys.has(key)) {
+				found.push({ "check": "gone way in", "entry": name, "message": `${where} owns ${key}, and no way in has that key`, "code": "nothing: it went, moved or was renamed", "decision": "take it out of the feature, or put the key it has now" });
+			}
+		}
+
+		for (const path of [...feature.paths ?? [], ...feature.tests ?? []]) {
+			if (!facts.exists(path)) {
+				found.push({ "check": "missing path", "entry": name, "message": `${where} names ${path}, and it isn't there`, "code": "nothing: it went or moved", "decision": "take it out of the feature, or name where it is now" });
+			}
+		}
+
+		if ((feature.ways ?? []).length === 0 && (feature.paths ?? []).length === 0) {
+			found.push({ "check": "empty feature", "entry": name, "message": `${where} owns no way in and no path`, "code": "nothing", "decision": "give it its ways in or its own files, or take it out" });
+		}
+	}
+
+	for (const [key, those] of owners) {
+		if (those.length > 1) {
+			found.push({ "check": "placed twice", "message": `${key} is owned by ${those.join(" and ")}`, "code": "nothing", "decision": "keep it in the one it serves" });
+		}
+	}
+
+	for (const way of facts.ways.toSorted((left, right) => left.key.localeCompare(right.key))) {
+		if (!owners.has(way.key)) {
+			found.push({ "check": "unplaced way in", "message": `${way.facet} ${way.id || way.key} is in no feature of the ledger (key ${way.key})`, "code": "take it out, if nothing needs it", "decision": "put its key in the `ways` of the feature it serves (.silo/features.json), or in a new one" });
+		}
+	}
+
+	return found;
+}
+
+/** The ledger with a removal taken out of the other live features declaring what it took (the change passes its own
+ *  `silo check`): the `keys`, and the `paths` and what's in them, out of their `ways`, `paths` and `tests`. One left owning
+ *  nothing went with it: removed too, saying so. */
+export function withoutRemoved(ledger: Ledger, name: string, keys: string[], paths: string[], today: string): Ledger {
+	const gone = (path: string): boolean => paths.some((each) => path === each || path.startsWith(each.replace(/\/+$/u, "") + "/"));
+	let kept = ledger;
+
+	for (const [other, entry] of declaredFeatures(ledger) as [string, LedgerEntry][]) {
+		const ways = (entry.ways ?? []).filter((key) => !keys.includes(key));
+		const owned = (entry.paths ?? []).filter((path) => !gone(path));
+		const tests = (entry.tests ?? []).filter((path) => !gone(path));
+
+		if (other !== name && (ways.length !== (entry.ways ?? []).length || owned.length !== (entry.paths ?? []).length || tests.length !== (entry.tests ?? []).length)) {
+			const narrowed: LedgerEntry = { ...entry, ...entry.ways === undefined ? {} : { "ways": ways }, ...entry.paths === undefined ? {} : { "paths": owned }, ...entry.tests === undefined ? {} : { "tests": tests } };
+
+			kept = ways.length === 0 && owned.length === 0 ? withStatus({ ...kept, [other]: entry }, other, "removed", `went with "${name}": it owned nothing else`, today) : { ...kept, [other]: narrowed };
+		}
+	}
+
+	return kept;
+}
+
 /** What taking a feature out is (`silo remove`, the editor's Remove): the files only it reaches, to delete; its
  *  manifests without it; the ledger with its tombstone; and what's left by hand — its code in files it shares, where its
  *  way in is stated in code, the docs naming it. `nothing` when there's nothing to take out on its own (its code shares
@@ -380,7 +465,7 @@ export function removalOf(input: { "name": string; "why": string; "key"?: string
 	const named = [key?.slice(key.indexOf("|") + 1), ...paths, ...price.files].filter((each): each is string => each !== undefined && each !== "");
 	const docs = tracked.filter((file) => file.endsWith(".md") && named.some((each) => textOf(file)?.includes(each) === true));
 	const entry = input.ledger[name];
-	const ledger = nothing ? ledgerText(input.ledger) : ledgerText(withStatus(input.ledger, name, "removed", input.why || entry?.why || "removed", input.today, { ...key === undefined ? {} : { "key": key }, "paths": [...new Set([...paths, ...price.files])], ...restore === undefined ? {} : { "restore": restore } }));
+	const ledger = nothing ? ledgerText(input.ledger) : ledgerText(withStatus(withoutRemoved(input.ledger, name, key === undefined ? [] : [key], [...paths, ...price.files], input.today), name, "removed", input.why || entry?.why || "removed", input.today, { ...key === undefined ? {} : { "key": key }, "paths": [...new Set([...paths, ...price.files])], ...restore === undefined ? {} : { "restore": restore } }));
 
 	return { "nothing": nothing, "price": price, "files": price.files, "manifests": manifests, "byHand": byHand, "registrations": registrations, "docs": docs, "ledger": ledger, ...restore === undefined ? {} : { "restore": restore } };
 }
@@ -481,5 +566,43 @@ if (isEntry(import.meta)) {
 		assert.deepEqual([...records!.declarations].toSorted(), ["src/a.ts#(top)", "src/a.ts#Box", "src/a.ts#helper"]);
 		assert.equal(reachedFromRecords("not json"), undefined);
 		assert.equal(reachedFromRecords(undefined), undefined);
+		// Declared features: their ways placed, their paths and tests checked, a key two own placed twice; a removed one owns
+		// nothing, an entry that's only a decision isn't a feature, and a repository declaring none isn't held to them.
+		const declaring: Ledger = {
+			"Notes on code": { "status": "active", "why": "w", "since": today, "what": "Notes.", "ways": ["command|notes.add", "hub request|git.commit"], "paths": ["src/git"], "tests": ["test/notes.test.ts"] },
+			"Commit": { "status": "active", "why": "w", "since": today, "what": "Commit.", "ways": ["hub request|git.commit", "command|commit.gone"] },
+			"Pull": { "status": "active", "why": "w", "since": today, "what": "Pull." },
+			"Old notes": { "status": "removed", "why": "w", "since": today, "ways": ["command|fresh"] },
+			"a decision": { "status": "parked", "why": "w", "since": today, "paths": ["src/elsewhere"] }
+		};
+		const declaredWays: FoundWay[] = [
+			{ "key": "command|notes.add", "facet": "command", "id": "notes.add", "sides": ["declared", "registered"] },
+			{ "key": "hub request|git.commit", "facet": "hub request", "id": "git.commit", "sides": [] },
+			{ "key": "command|fresh", "facet": "command", "id": "fresh", "sides": ["registered"] }
+		];
+
+		assert.deepEqual(declaredFeatures(declaring).map(([name]) => name), ["Notes on code", "Commit", "Pull"]);
+		assert.deepEqual(declaredDrift(declaring, { "ways": declaredWays, "exists": (path) => path === "src/git" }).map((each) => [each.check, each.entry ?? each.message]), [
+			["missing path", "Notes on code"],
+			["gone way in", "Commit"],
+			["empty feature", "Pull"],
+			["placed twice", "hub request|git.commit is owned by \"Notes on code\" and \"Commit\""],
+			["unplaced way in", "command fresh is in no feature of the ledger (key command|fresh)"]
+		]);
+		assert.deepEqual(declaredDrift({ "a decision": declaring["a decision"]! }, { "ways": declaredWays, "exists": () => false }), []);
+		// A removal out of what else declares it: narrowed, or removed too when it owned nothing else; tests by what they're in.
+		const narrowed = withoutRemoved({
+			"Gone": { "status": "active", "why": "w", "since": today, "what": "G.", "ways": ["view|a"], "paths": ["src/a.ts"] },
+			"Kept": { "status": "active", "why": "w", "since": today, "what": "K.", "ways": ["view|a", "command|b"], "paths": ["src/z/index.ts", "src/k.ts"], "tests": ["src/z/z.test.ts"] },
+			"Only": { "status": "active", "why": "w", "since": today, "what": "O.", "paths": ["src/z"] },
+			"Else": { "status": "active", "why": "w", "since": today, "what": "E.", "ways": ["command|e"] },
+			"Tombstone": { "status": "removed", "why": "w", "since": today, "ways": ["view|a"] }
+		}, "Gone", ["view|a"], ["src/a.ts", "src/z"], "2026-12-01");
+
+		assert.deepEqual(narrowed["Gone"]?.ways, ["view|a"]);
+		assert.deepEqual([narrowed["Kept"]?.ways, narrowed["Kept"]?.paths, narrowed["Kept"]?.tests], [["command|b"], ["src/k.ts"], []]);
+		assert.deepEqual([narrowed["Only"]?.status, narrowed["Only"]?.why, narrowed["Only"]?.since], ["removed", "went with \"Gone\": it owned nothing else", "2026-12-01"]);
+		assert.deepEqual(narrowed["Else"]?.ways, ["command|e"]);
+		assert.deepEqual(narrowed["Tombstone"]?.ways, ["view|a"]);
 	})();
 }
