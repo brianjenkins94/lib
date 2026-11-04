@@ -349,7 +349,8 @@ if (isEntry(import.meta)) {
 			const rawExports = packageJson["exports"];
 			let entryPoints: string[] | Record<string, string>;
 
-			if (rawExports === undefined) {
+			// (a `"./*"` pattern is the source's own self-reference, not a list: every source file ships, as with none)
+			if (rawExports === undefined || (typeof rawExports === "object" && Object.keys(rawExports).some((specifier) => specifier.includes("*")))) {
 				entryPoints = (await find(workspace).name("*.ts").prune((dir) => dir.includes("node_modules") || isNested(dir + "/") || isHidden(dir)).exec()).map((entry) => path.join(__root, entry).replace(/\\/gu, "/"));
 			} else {
 			// `exports` maps import specifiers (".", "./typed") to targets, and those specifiers are NOT valid
@@ -538,7 +539,7 @@ if (isEntry(import.meta)) {
 						? "./" + String(declaredBin).replace(/^\.\//u, "")
 						: Object.fromEntries(Object.entries(declaredBin).map(([name, target]) => [name, "./" + String(target).replace(/^\.\//u, "")])) }
 				: binFiles.length > 0
-					? { "bin": Object.fromEntries(binFiles.map((key) => [`${packageJson["name"]}-${pascalCaseToKebabCase(path.basename(key, ".js"))}`, "./" + key])) }
+					? { "bin": Object.fromEntries(binFiles.map((key) => [`${String(packageJson["name"]).split("/").at(-1)}-${pascalCaseToKebabCase(path.basename(key, ".js"))}`, "./" + key])) }
 					: {}),
 			"version": version
 		}, undefined, 2);
