@@ -18,8 +18,8 @@
  *   stale entry              an entry that names nothing that's there
  *   lease expired            an active entry kept `until` a date that's passed (a dormant feature kept for a while:
  *                            decide again)
- *   unowned file             a code file in an owned folder (`.silo/owned.json`) no entry owns: none's `paths` hold it,
- *                            and it isn't a test one names (decision 22: owned by declaration, not inferred)
+ *   unowned file             a code file no entry owns: none's `paths` hold it, and it isn't a test one names (decision
+ *                            22: owned by declaration, not inferred). Tests, scripts and vendored code are code too.
  *   owned twice              a code file two entries' `paths` hold: one feature owns a file (a test may be named by more)
  *
  * And the leases (`dormant`): a way in nobody decided about keeps its place while the runs reach its code; one whose
@@ -79,9 +79,9 @@ export interface DriftFacts {
 	/** Its docs (`.md`) and its code, with their text. */
 	"docs": { "file": string; "text": string }[];
 	"code": { "file": string; "text": string }[];
-	/** Where every code file must be owned (`.silo/owned.json`'s folders, parseOwned), and the repository's code files,
-	 *  from the root. None: no file is held to an owner. */
-	"owned"?: { "scope": string[]; "files": string[] };
+	/** The repository's code files, from the root (`isOwnedCode`), each held to an owner, or only those in `scope`'s folders.
+	 *  None: no file is held to an owner. */
+	"owned"?: { "scope"?: string[]; "files": string[] };
 }
 
 export type DriftCheck = "stopped but present" | "removed but documented" | "experiment expired" | "dead end" | "stale entry" | "lease expired"
@@ -112,6 +112,12 @@ export function parseOwned(text: string | undefined): string[] {
 	}
 }
 
+/** Whether a file of the repository is code a feature must own: anything that runs or type-checks, tests, scripts and
+ *  vendored code among it (decision 22); not what's installed or built, nor a tool's dot-folder. */
+export function isOwnedCode(file: string): boolean {
+	return /\.[cm]?[jt]sx?$/u.test(file) && !/(?:^|\/)(?:node_modules|dist)\/|(?:^|\/)\.[^/]+\//u.test(file);
+}
+
 /** Whether `file` is `path` or under it (a folder: `path` with or without its `/`). */
 function holds(path: string, file: string): boolean {
 	const bare = path.replace(/\/+$/u, "");
@@ -125,7 +131,7 @@ function ownership(ledger: Ledger, owned: NonNullable<DriftFacts["owned"]>): Dri
 	const live = Object.entries(ledger).filter(([, entry]) => entry.status !== "removed");
 	const found: Drift[] = [];
 
-	for (const file of owned.files.filter((each) => owned.scope.some((folder) => holds(folder, each))).toSorted()) {
+	for (const file of owned.files.filter((each) => owned.scope === undefined || owned.scope.some((folder) => holds(folder, each))).toSorted()) {
 		const owners = live.filter(([, entry]) => (entry.paths ?? []).some((path) => holds(path, file))).map(([name]) => name).toSorted();
 		const tested = live.some(([, entry]) => (entry.tests ?? []).some((path) => holds(path, file)));
 
@@ -544,6 +550,9 @@ if (isEntry(import.meta)) {
 			["owned twice", "src/engine/index.ts is owned by \"both\" and \"engine\""],
 			["unowned file", "src/old.ts is owned by no feature"]
 		]);
+		// Without a scope, every file given; what's installed, built or a tool's isn't code to own.
+		assert.deepEqual(drift(owning, { ...facts, "ways": [], "owned": { "files": ["tools/x.ts"] } }).map((each) => each.message), ["tools/x.ts is owned by no feature"]);
+		assert.deepEqual(["src/a.ts", "test/a.test.mjs", "pkg/vendor/x.js", "a.d.ts", "src/a.css", "node_modules/x/i.js", "pkg/dist/i.js", ".refs/main/a.ts", ".github/x.mjs"].filter(isOwnedCode), ["src/a.ts", "test/a.test.mjs", "pkg/vendor/x.js", "a.d.ts"]);
 		// (a removed entry owns nothing; a file outside the owned folders isn't held to one; a test named is owned)
 		assert.deepEqual(drift(owning, { ...facts, "ways": [], "owned": { ...owned, "files": ["test/engine.test.ts"] } }).map((each) => each.message), ["test/engine.test.ts is owned by no feature"]);
 		assert.deepEqual(parseOwned("not json"), []);
