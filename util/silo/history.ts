@@ -22,7 +22,6 @@
  * snapshot). What it finds is for the session: nothing derived from edits is kept — once committed, the commit tells it.
  */
 
-import type { Exercise } from "./exercise";
 import type { Feature, WayIn } from "./features";
 import type { Analyzer, DeclarationGraph } from "./graph";
 import { isEntry } from "@brianjenkins94/util/env";
@@ -46,10 +45,6 @@ export type HistoryEvent = { "key": string; "facet": string; "id": string } & (
 	// Its registration (and inline handler) changed, or a declaration it reaches did (`file`, `declaration`).
 	| { "type": "changed"; "file": string; "via": "registration" }
 	| { "type": "changed"; "file": string; "via": "reach"; "declaration": string }
-	// What runs say of it (`./exercise`), when that changes: its code ran — how many runs, when last — or its file ran and
-	// its code didn't. Only facts carry these: a git history has no runs.
-	| { "type": "exercised"; "file": string; "runs": number; "lastAt": string }
-	| { "type": "dormant"; "file": string }
 );
 
 /** What happened between one snapshot and the one before it. */
@@ -175,34 +170,6 @@ export async function *replay(snapshots: AsyncIterable<Snapshot> | Iterable<Snap
 		yield await replayer.step(snapshot);
 	}
 }
-
-// ── what runs say ───────────────────────────────────────────────────────────────────────────────────────────────
-
-/** What changed in what runs say of the features (`./exercise`): an event for each that became exercised, or dormant. A
- *  feature no run has reached yet (unobserved) makes none. */
-export function exerciseEvents(features: ReadonlyMap<string, Feature>, before: ReadonlyMap<string, Exercise>, now: ReadonlyMap<string, Exercise>): HistoryEvent[] {
-	const events: HistoryEvent[] = [];
-
-	for (const [key, exercise] of now) {
-		const feature = features.get(key);
-
-		if (feature === undefined || exercise.status === before.get(key)?.status) {
-			continue;
-		}
-
-		const base = { "key": key, "facet": feature.facet, "id": feature.id, "file": feature.files[0] ?? "" };
-
-		if (exercise.status === "exercised") {
-			events.push({ ...base, "type": "exercised", "runs": exercise.runs, "lastAt": exercise.lastAt });
-		} else if (exercise.status === "dormant") {
-			events.push({ ...base, "type": "dormant" });
-		}
-	}
-
-	return events;
-}
-
-// ── telling it ───────────────────────────────────────────────────────────────────────────────────────────────
 
 /** Which part of the program a file belongs to: an extension by its name, otherwise its package or top folder. */
 export function areaOf(file: string): string {
@@ -342,7 +309,6 @@ export function narrate(steps: Step[], options: NarrateOptions = {}): Section[] 
 	const changed = new Map<string, { "event": HistoryEvent; "times": number; "days": Set<string> }>();
 	const shared = new Map<string, { "file": string; "name": string; "features": number; "times": number; "days": Set<string> }>();
 	const moves = new Map<string, HistoryEvent[]>();
-	const ran = new Map<string, { "event": HistoryEvent & { "type": "exercised" | "dormant" }; "when": string }>();
 
 	for (const step of steps) {
 		const renamed = new Set<HistoryEvent>();
@@ -425,11 +391,6 @@ export function narrate(steps: Step[], options: NarrateOptions = {}): Section[] 
 				case "sides":
 					say(event.file, 4, sidesSentence(event), event.key);
 					break;
-				case "exercised":
-				case "dormant":
-					// What runs last said of it, in the span.
-					ran.set(event.key, { "event": event, "when": day(step) });
-					break;
 				default:
 					break;
 			}
@@ -474,14 +435,6 @@ export function narrate(steps: Step[], options: NarrateOptions = {}): Section[] 
 		const what = name === "(top)" ? `\`${file.slice(file.lastIndexOf("/") + 1)}\`'s top level` : `\`${name}\``;
 
 		say(file, 2, `Changed ${what}, which ${features} features use${times > 1 ? `: ${times} times over ${days.size} day${days.size > 1 ? "s" : ""}` : ""}.`);
-	}
-
-	for (const { event, when } of ran.values()) {
-		if (INTERNAL_FACETS.has(event.facet) && event.type === "exercised") {
-			continue; // plumbing running is no news
-		}
-
-		say(event.file, 6, event.type === "exercised" ? `Ran ${named(event)} (${when}${event.runs > 1 ? `, in ${String(event.runs)} runs` : ""}).` : `Dormant: ${named(event)} — its file ran, its code didn't (${when}).`, event.key);
 	}
 
 	for (const [route, events] of moves) {
@@ -719,15 +672,6 @@ if (isEntry(import.meta)) {
 		assert.deepEqual(tried(steps).map((group) => group.features.map((feature) => feature.id)), [["files.write"]]);
 		assert.equal(foldIds(["files.read", "files.write", "shell.run"]), "`files.{read,write}`, `shell.run`");
 		assert.match(historyMarkdown(steps.slice(1), { "title": "Notes" }), /^# Notes\n\n6 snapshots, 2026-10-02 to 2026-10-07/u);
-
-		// What runs say, as events when it changes: a feature whose code ran, and one whose file ran without it.
-		const ranFeatures = featuresOf([{ "file": "r/extension.ts", "ways": [{ "facet": "command", "id": "r.used", "label": "", "roots": [] }, { "facet": "command", "id": "r.idle", "label": "", "roots": [] }] }]);
-		const nowRan = new Map([["command|r.used", { "status": "exercised" as const, "runs": 3, "lastAt": "2026-10-12T10:00:00Z" }], ["command|r.idle", { "status": "dormant" as const, "files": ["r/extension.ts"] }]]);
-		const ranEvents = exerciseEvents(ranFeatures, new Map(), nowRan);
-
-		assert.deepEqual(ranEvents.map((event) => event.type + " " + event.id), ["exercised r.used", "dormant r.idle"]);
-		assert.deepEqual(exerciseEvents(ranFeatures, nowRan, nowRan), [], "no change, no event");
-		assert.deepEqual(narrate([{ "snapshot": "edit:1", "date": "2026-10-12T10:00:00Z", "features": 2, "events": ranEvents }]).flatMap((section) => section.lines), ["Ran command `r.used` (2026-10-12, in 3 runs).", "Dormant: command `r.idle` — its file ran, its code didn't (2026-10-12)."]);
 
 		// The features as a document: by area, plumbing folded.
 		const document = featuresMarkdown(features.values(), { "title": "Notes" });

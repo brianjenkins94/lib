@@ -110,7 +110,7 @@ export interface DeclarationGraph {
 	nodes(): Iterable<string>;
 	/** Where a node leads: the declarations (or imports) its code uses, or what an import resolves to. */
 	edges(id: string): string[];
-	/** Where a declaration is in its file, when the analyzer kept it (for joining with what ran there: `./exercise`). */
+	/** Where a declaration is in its file, when the analyzer kept it (for joining with what ran there: `./coverage`). */
 	range?(id: string): { "file": string; "start": number; "end": number } | undefined;
 }
 

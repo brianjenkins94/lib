@@ -8,23 +8,21 @@
  *
  * Each declaration's status (ran, or reached and not run) is followed commit to commit, so the story is the changes:
  * a declaration that started running, one that stopped, one reached that never ran. Declarations, not spans: a span's
- * id changes when its code is edited, a declaration keeps its name. Each change is the features' it's in — the ways in
- * whose code reaches it (`./features`, `./graph`): its own when it's a feature's root, shared, or everyone's
- * (infrastructure) — or its folder's, when no feature reaches it; and, when a declaration that leads to it changed in the
- * same interval, that's said too.
+ * id changes when its code is edited, a declaration keeps its name. Each change is told by the features the caller says own
+ * its file (`owners`: the ledger's, ./ledger `ownersOf`), or its folder when none does; and, when a declaration that leads
+ * to it changed in the same interval, that's said too.
  *
  * Where a span is in a text is BABLR's to say (its ids are BABLR span ids) — the caller's `place`, so this module loads
  * no parser: the CLI's is BABLR in Node, the editor's its BABLR worker.
  */
 
 import type { RunEnvelope } from "./evidence";
-import type { Feature } from "./features";
 import type { Analyzer, DeclarationGraph } from "./graph";
 import type { Snapshot } from "./history";
 import { isEntry } from "@brianjenkins94/util/env";
 import { parseEvidence, parseRuns } from "./evidence.js";
 import { reach, TOP } from "./graph.js";
-import { areaOf, Replayer, SHARED } from "./history.js";
+import { areaOf, Replayer } from "./history.js";
 
 /** A span of a text, as BABLR names it. */
 export interface PlacedSpan { "id": string; "start": number; "end": number }
@@ -41,10 +39,8 @@ export interface CoverageChange {
 	"file": string;
 	/** Its node id (`file#name`, `file#(top)` for a module's own body). */
 	"declaration": string;
-	/** The features whose code reaches it, by key — none when no feature does (then `area` is all it's told by). */
+	/** The features that own its file, by name — none when none does (then `area` is all it's told by). */
 	"features": string[];
-	/** Its own to one feature (a root of it), one feature's, a few's, or everyone's. */
-	"share": "own" | "one" | "shared" | "infrastructure" | "none";
 	"area": string;
 	/** A declaration that changed in the same interval and leads to this one (itself included), when one did. */
 	"after"?: string;
@@ -61,8 +57,6 @@ export interface CoverageStep {
 	/** Files what ran there isn't counted for: path → why. Their code couldn't be parsed where it ran (the run kept
 	 *  nothing — its envelope says), or this commit's text of them can't be parsed to place what was kept. */
 	"unparsed": Record<string, string>;
-	/** The features of the commit, by key, for the story's labels. */
-	"features": ReadonlyMap<string, Pick<Feature, "facet" | "id" | "label">>;
 }
 
 const EVIDENCE = /^\.silo\/evidence\/[^/]+\/[^/]+\/(.+)\.jsonl$/u;
@@ -75,14 +69,16 @@ const RUNS = /^\.silo\/runs\/[^/]+\.jsonl$/u;
 export class CoverageReplayer {
 	readonly #read: (oid: string) => Promise<string>;
 	readonly #place: PlaceSpans;
+	readonly #owners: (file: string) => string[];
 	readonly #history: Replayer;
 	readonly #status = new Map<string, boolean>();
 	readonly #placed = new Map<string, Promise<PlacedSpan[] | { "unparsed": string }>>();
 	#evidence = new Map<string, string>();
 	#runs = new Set<string>();
 
-	constructor(read: (oid: string) => Promise<string>, options: { "analyzer": Analyzer; "place": PlaceSpans; "include"?: (path: string) => boolean }) {
+	constructor(read: (oid: string) => Promise<string>, options: { "analyzer": Analyzer; "place": PlaceSpans; "owners"?: (file: string) => string[]; "include"?: (path: string) => boolean }) {
 		this.#read = read;
+		this.#owners = options.owners ?? (() => []);
 		this.#place = options.place;
 		this.#history = new Replayer(read, { "analyzer": options.analyzer, ...options.include === undefined ? {} : { "include": options.include } });
 	}
@@ -90,7 +86,7 @@ export class CoverageReplayer {
 	async step(snapshot: Snapshot): Promise<CoverageStep> {
 		await this.#history.step(snapshot);
 
-		const { graph, features, changed } = this.#history.last ?? { "graph": undefined as never, "features": new Map(), "changed": [] };
+		const { graph, changed } = this.#history.last ?? { "graph": undefined as never, "changed": [] };
 		const files = new Map(snapshot.files.map((file) => [file.path, file.oid]));
 		const evidence = new Map(snapshot.files.filter((file) => EVIDENCE.test(file.path)).map((file) => [file.path, file.oid]));
 		const previous = this.#evidence;
@@ -151,7 +147,6 @@ export class CoverageReplayer {
 			}
 		}
 
-		// Each feature's reach, once — only when something changed status.
 		const transitions: [string, CoverageChange["kind"]][] = [];
 
 		for (const [declaration, ran] of now) {
@@ -168,7 +163,6 @@ export class CoverageReplayer {
 			this.#status.set(declaration, ran);
 		}
 
-		const reaches = transitions.length === 0 ? new Map<string, Set<string>>() : new Map([...features].map(([key, feature]) => [key, reach(graph, feature.roots)]));
 		const leadsTo = new Map<string, string>();
 
 		for (const one of changed) {
@@ -181,26 +175,15 @@ export class CoverageReplayer {
 
 		const changes = transitions.map(([declaration, kind]): CoverageChange => {
 			const file = declaration.slice(0, declaration.lastIndexOf("#"));
-			const reachedBy = [...reaches].filter(([, reached]) => reached.has(declaration)).map(([key]) => key).sort((one, other) => one.localeCompare(other));
-			const own = reachedBy.some((key) => features.get(key)?.roots.includes(declaration) === true);
 			const after = leadsTo.get(declaration) ?? (changed.includes(declaration) ? declaration : undefined);
-			let share: CoverageChange["share"] = "none";
 
-			if (reachedBy.length >= SHARED) {
-				share = "infrastructure";
-			} else if (reachedBy.length > 1) {
-				share = "shared";
-			} else if (reachedBy.length === 1) {
-				share = own ? "own" : "one";
-			}
-
-			return { "kind": kind, "file": file, "declaration": declaration, "features": reachedBy, "share": share, "area": areaOf(file), ...after === undefined ? {} : { "after": after } };
+			return { "kind": kind, "file": file, "declaration": declaration, "features": this.#owners(file), "area": areaOf(file), ...after === undefined ? {} : { "after": after } };
 		});
 
 		this.#evidence = evidence;
 		this.#runs = seen;
 
-		return { "snapshot": snapshot.id, "date": snapshot.date, "runs": runs, "changes": changes, "unplaced": unplaced, "unparsed": unparsed, "features": new Map([...features].map(([key, feature]) => [key, { "facet": feature.facet, "id": feature.id, "label": feature.label }])) };
+		return { "snapshot": snapshot.id, "date": snapshot.date, "runs": runs, "changes": changes, "unplaced": unplaced, "unparsed": unparsed };
 	}
 
 	/** A text's spans, placed once per version — or why they can't be. */
@@ -229,7 +212,7 @@ function declarationAt(graph: DeclarationGraph, file: string, offset: number): s
 }
 
 /** Replay snapshots, oldest first, yielding what each interval's runs did. */
-export async function *coverageReplay(snapshots: AsyncIterable<Snapshot> | Iterable<Snapshot>, read: (oid: string) => Promise<string>, options: { "analyzer": Analyzer; "place": PlaceSpans; "include"?: (path: string) => boolean }): AsyncGenerator<CoverageStep> {
+export async function *coverageReplay(snapshots: AsyncIterable<Snapshot> | Iterable<Snapshot>, read: (oid: string) => Promise<string>, options: { "analyzer": Analyzer; "place": PlaceSpans; "owners"?: (file: string) => string[]; "include"?: (path: string) => boolean }): AsyncGenerator<CoverageStep> {
 	const replayer = new CoverageReplayer(read, options);
 
 	for await (const snapshot of snapshots) {
@@ -238,7 +221,7 @@ export async function *coverageReplay(snapshots: AsyncIterable<Snapshot> | Itera
 }
 
 /** The story, as markdown: each commit that brought runs, what they ran, and what started and stopped running — by
- *  feature, a shared declaration once, and what no feature reaches by its folder. */
+ *  feature, and what no feature owns by its folder. */
 export function coverageMarkdown(steps: CoverageStep[], options: { "title"?: string } = {}): string {
 	const lines = [`# ${options.title ?? "Coverage over time"}`, ""];
 	const name = (decl: string): string => "`" + decl.slice(decl.lastIndexOf("/") + 1) + "`";
@@ -252,18 +235,7 @@ export function coverageMarkdown(steps: CoverageStep[], options: { "title"?: str
 		const groups = new Map<string, CoverageChange[]>();
 
 		for (const change of step.changes) {
-			const label = (key: string): string => {
-				const feature = step.features.get(key);
-
-				return feature === undefined ? key : `${feature.facet} ${feature.label || feature.id}`;
-			};
-			let group = change.area;
-
-			if (change.share === "infrastructure") {
-				group = "shared by many features";
-			} else if (change.features.length > 0) {
-				group = change.features.map(label).join(", ");
-			}
+			const group = change.features.length > 0 ? change.features.join(", ") : change.area;
 
 			groups.set(group, [...groups.get(group) ?? [], change]);
 		}
@@ -341,17 +313,17 @@ if (isEntry(import.meta)) {
 			snapshot("3", observed({ "g": { "ever": 2, "lastRun": "r2" }, "h": { "ever": 1, "lastRun": "r2" }, "u": { "ever": 0, "lastRun": "r2" } }), [envelope("r1"), envelope("r2")]),
 			// Nothing ran: nothing to tell.
 			snapshot("4", observed({ "g": { "ever": 2, "lastRun": "r2" }, "h": { "ever": 1, "lastRun": "r2" }, "u": { "ever": 0, "lastRun": "r2" } }), [envelope("r1"), envelope("r2")])
-		], read, { "analyzer": await analyzer(), "place": place })) {
+		], read, { "analyzer": await analyzer(), "place": place, "owners": (file) => (file === "app.js" ? ["App"] : []) })) {
 			steps.push(step);
 		}
 
-		const told = steps.map((step) => step.changes.map((change) => `${change.kind} ${change.declaration} ${change.share}`).sort());
+		const told = steps.map((step) => step.changes.map((change) => `${change.kind} ${change.declaration} ${change.features.join()}`).sort());
 
-		assert.deepEqual(told[1], ["started app.js#go own", "started app.js#helper one", "unreached app.js#unused none"]);
-		assert.deepEqual(told[2], ["stopped app.js#helper one"]);
+		assert.deepEqual(told[1], ["started app.js#go App", "started app.js#helper App", "unreached app.js#unused App"]);
+		assert.deepEqual(told[2], ["stopped app.js#helper App"]);
 		assert.deepEqual(told[3], []);
 		assert.deepEqual(steps.map((step) => step.runs.map((run) => run.id)), [[], ["r1"], ["r2"], []]);
-		assert.match(coverageMarkdown(steps), /stopped running: `app\.js#helper`/u);
+		assert.match(coverageMarkdown(steps), /\*\*App\*\* — stopped running: `app\.js#helper`/u);
 		assert.ok(steps.every((step) => Object.keys(step.unparsed).length === 0));
 
 		// What can't be parsed is said, never dropped: a run whose file the editor couldn't parse (its envelope), and a

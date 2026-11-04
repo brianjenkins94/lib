@@ -326,6 +326,15 @@ export function dormantWays(features: ReadonlyMap<string, Feature>, graph: Decla
 	return dormant(ways, ledger, reached).map((way) => ({ "way": way, "feature": features.get(way.key)!, "price": priceOf(graph, roots, { "roots": features.get(way.key)?.roots ?? [] }, textOf) }));
 }
 
+/** Whose a file is, by declaration: the live entries whose `paths` hold it, or that name it a test. One attribution of code
+ *  to features, whatever runs show (decision 22): what's observed is compared with this, it doesn't stand in for it. */
+export function ownersOf(ledger: Ledger, file: string): string[] {
+	const live = Object.entries(ledger).filter(([, entry]) => entry.status !== "removed" && entry.status !== "stopped");
+	const owners = live.filter(([, entry]) => (entry.paths ?? []).some((path) => holds(path, file))).map(([name]) => name);
+
+	return owners.length > 0 ? owners : live.filter(([, entry]) => (entry.tests ?? []).some((path) => holds(path, file))).map(([name]) => name);
+}
+
 /** A feature as the ledger declares it, with its name. */
 export type Declared = [string, Pick<LedgerEntry, "what" | "docs" | "ways" | "paths" | "tests">];
 
@@ -532,6 +541,11 @@ if (isEntry(import.meta)) {
 		assert.deepEqual(["src/a.ts", "test/a.test.mjs", "pkg/vendor/x.js", "a.d.ts", "src/a.css", "node_modules/x/i.js", "pkg/dist/i.js", ".refs/main/a.ts", ".github/x.mjs"].filter(isOwnedCode), ["src/a.ts", "test/a.test.mjs", "pkg/vendor/x.js", "a.d.ts"]);
 		// (a removed entry owns nothing; a test named is owned)
 		assert.deepEqual(drift(owning, { ...facts, "ways": [], "owned": { ...owned, "files": ["test/engine.test.ts"] } }).map((each) => each.message), ["test/engine.test.ts is owned by no feature"]);
+		// Whose a file is: by its paths, a test by who names it, nobody's when removed or undeclared.
+		assert.deepEqual(ownersOf(tested, "src/engine/run.ts"), ["engine"]);
+		assert.deepEqual(ownersOf(tested, "src/engine/index.ts").toSorted(), ["both", "engine"]);
+		assert.deepEqual(ownersOf(tested, "test/engine.test.ts"), ["engine"]);
+		assert.deepEqual(ownersOf(tested, "src/old.ts"), []);
 		// Dormant: its file loaded, its code never ran — not one decided about, nor one whose files never loaded.
 		const ways: WayCode[] = [
 			{ "key": "command|a.export", "facet": "command", "id": "a.export", "declarations": ["src/a.ts#exportAll"] },
