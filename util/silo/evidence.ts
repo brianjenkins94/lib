@@ -565,10 +565,21 @@ export interface PurityObservation extends Observed, PurityCounts {
 	"unseen"?: string;
 }
 
-export type Observation = ReachedObservation | ValueObservation | BranchObservation | PurityObservation;
+/** Where a function's time went in the runs that profiled it (a preview's CPU profile): its own time, the faded weight
+ *  (`w`, ms); its time with what it called (`totalMs`) and how long those profiles sampled (`profiledMs`), faded the same
+ *  way, so `w / profiledMs` is its share of the time; and who called it and what it called, by name, each by its ms. */
+export interface TimeObservation extends Observed {
+	"kind": "time";
+	"totalMs": number;
+	"profiledMs": number;
+	"callers": Record<string, number>;
+	"callees": Record<string, number>;
+}
+
+export type Observation = ReachedObservation | ValueObservation | BranchObservation | PurityObservation | TimeObservation;
 
 /** The kinds an evidence file holds. */
-const KINDS = new Set<string>(["reached", "value", "branch", "purity"]);
+const KINDS = new Set<string>(["reached", "value", "branch", "purity", "time"]);
 
 /** At most this many type tags a value observation keeps; the rest count as `other`. */
 export const MAX_TAGS = 8;
@@ -731,6 +742,27 @@ export function foldPurity(known: Observation[], reports: PurityReport[], run: {
 	});
 }
 
+/** One function's time in a run's profiles: its own, with what it called, how long the profiles sampled, and its callers
+ *  and callees, each by its ms. */
+export interface TimeReport { "span": string; "selfMs": number; "totalMs": number; "profiledMs": number; "callers": Record<string, number>; "callees": Record<string, number> }
+
+/** One run's profiles of a file, folded in: each function they sampled adds its time; one they didn't only fades (it
+ *  didn't take time this run). Only a run that profiled the file folds its times: one that didn't says nothing of them. */
+export function foldTimes(known: Observation[], reports: TimeReport[], run: { "id": string; "at": string }, halfLife = HALF_LIFE_RUNS): Observation[] {
+	return fold<TimeObservation, TimeReport>("time", known, reports, run, halfLife, (a, b) => ({ "span": a.span, "selfMs": a.selfMs + b.selfMs, "totalMs": a.totalMs + b.totalMs, "profiledMs": Math.max(a.profiledMs, b.profiledMs), "callers": mergeTags(a.callers, b.callers), "callees": mergeTags(a.callees, b.callees) }), (before, report, fade) => {
+		const faded = (counts: Record<string, number> | undefined): Record<string, number> => Object.fromEntries(Object.entries(counts ?? {}).map(([name, ms]) => [name, ms * fade]));
+
+		return {
+			"w": (before?.w ?? 0) * fade + report.selfMs,
+			"ever": (before?.ever ?? 0) + 1,
+			"totalMs": (before?.totalMs ?? 0) * fade + report.totalMs,
+			"profiledMs": (before?.profiledMs ?? 0) * fade + report.profiledMs,
+			"callers": mergeTags(faded(before?.callers), report.callers),
+			"callees": mergeTags(faded(before?.callees), report.callees)
+		};
+	});
+}
+
 // ── samples: the values themselves, on this machine only ──
 
 /** A few distinct primitives seen at a value site — "only ever `"left"` or `"right"`" — kept in `.silo/local/` on the
@@ -801,6 +833,18 @@ if (isEntry(import.meta)) {
 		assert.ok(Math.abs(twice[0]!.w - (3 * 2 ** (-1 / HALF_LIFE_RUNS) + 3)) < 1e-9);
 		assert.deepEqual(parseEvidence(evidenceText(twice)), twice, "a purity line reads back");
 		assert.equal((foldPurity(twice, [], { "id": "r3", "at": "2026-10-03T00:00:00.000Z" })[0] as PurityObservation).calls, 6, "a function that didn't run keeps its counts, fading");
+
+		// A function's time in the runs that profiled it: its own and with what it called add up, faded, against how long
+		// the profiles sampled; its callers and callees by name; one a later profile didn't sample only fades.
+		const time = (selfMs: number, callers: Record<string, number> = {}): TimeReport => ({ "span": "g", "selfMs": selfMs, "totalMs": selfMs * 2, "profiledMs": 5000, "callers": callers, "callees": { "sqrt": selfMs / 2 } });
+		const profiled = foldTimes([], [time(1000, { "draw": 1000 })], { "id": "p1", "at": "2026-10-01T00:00:00.000Z" });
+		const again = foldTimes(profiled, [time(500, { "draw": 400, "tick": 100 })], { "id": "p2", "at": "2026-10-02T00:00:00.000Z" }) as TimeObservation[];
+		const fade = 2 ** (-1 / HALF_LIFE_RUNS);
+
+		assert.ok(Math.abs(again[0]!.w - (1000 * fade + 500)) < 1e-9 && Math.abs(again[0]!.profiledMs - (5000 * fade + 5000)) < 1e-9);
+		assert.deepEqual(Object.keys(again[0]!.callers).toSorted(), ["draw", "tick"]);
+		assert.deepEqual(parseEvidence(evidenceText(again)), again, "a time line reads back");
+		assert.ok((foldTimes(again, [], { "id": "p3", "at": "2026-10-03T00:00:00.000Z" })[0] as TimeObservation).w < again[0]!.w, "one a profile didn't sample fades");
 
 		// The packages a run ran: by name@version, the lockfile's integrity where it names the same install.
 		const lock = JSON.stringify({ "packages": { "node_modules/greet": { "version": "1.2.3", "integrity": "sha512-a" }, "node_modules/greet/node_modules/@scope/inner": { "version": "0.0.9", "integrity": "sha512-b" } } });
