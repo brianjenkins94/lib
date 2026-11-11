@@ -297,8 +297,13 @@ export function settledReach(baseline: { "consumer"?: Record<string, WsConsumer>
  * altogether grows too (the code started using a package it had), unless the package itself is new (`added`: taken as
  * it is, as syncPackages takes a library added). With no `previous` (the baseline being made) nothing grows. Pure;
  * `grew` names the entries that grew, `workspace spec`.
+ *
+ * `seen`: the code's use now from the files `previous` was read from alone, when `next` was read from more (the editor
+ * reads what TypeScript's server holds, which grows as its projects load, so a file can be read for the first time long
+ * after the baseline was made): only that can have grown, and what the rest brings is taken as it is. Left out, it's
+ * `next`: every file was read both times, as the command line reads them.
  */
-export function syncConsumer(previous: Record<string, WsConsumer> | undefined, next: Record<string, WsConsumer>, added: ReadonlySet<string> = new Set()): { "consumer": Record<string, WsConsumer>; "grew": string[] } {
+export function syncConsumer(previous: Record<string, WsConsumer> | undefined, next: Record<string, WsConsumer>, added: ReadonlySet<string> = new Set(), seen: Record<string, WsConsumer> = next): { "consumer": Record<string, WsConsumer>; "grew": string[] } {
 	const consumer: Record<string, WsConsumer> = structuredClone(next);
 	const grew: string[] = [];
 
@@ -311,14 +316,23 @@ export function syncConsumer(previous: Record<string, WsConsumer> | undefined, n
 			const before = previous[workspace]?.[spec];
 			const name = spec.startsWith("@") ? spec.split("/").slice(0, 2).join("/") : spec.split("/")[0];
 			const kept = { ...before?.grew };
+			// (the use from files read before: what changed in it is what can have grown)
+			const counted = seen[workspace]?.[spec];
 
-			if (before !== undefined || (entry.kind === "package" && !added.has(name))) {
-				const reach = before?.caps ?? [];
-				const members = entry.members.filter((member) => before?.members.includes(member) !== true);
-				const origin = members.length > 0 ? members.join(", ") : entry.dynamic && before?.dynamic !== true ? "*" : entry.version ?? "";
+			if (counted !== undefined && (before !== undefined || (entry.kind === "package" && !added.has(name)))) {
+				const members = counted.members.filter((member) => before?.members.includes(member) !== true);
+				const opened = counted.dynamic && before?.dynamic !== true;
+				const moved = before !== undefined && before.version !== entry.version;
 
-				for (const capability of entry.caps.filter((each) => !covers(reach, each))) {
-					kept[capability] ??= origin;
+				// (the same members, the same version, as dynamic as it was: what it reaches now that it didn't, files read
+				// for the first time brought in)
+				if (before === undefined || members.length > 0 || opened || moved) {
+					const reach = before?.caps ?? [];
+					const origin = members.length > 0 ? members.join(", ") : opened ? "*" : entry.version ?? "";
+
+					for (const capability of entry.caps.filter((each) => !covers(reach, each))) {
+						kept[capability] ??= origin;
+					}
 				}
 			}
 
@@ -948,6 +962,15 @@ if (isEntry(import.meta)) {
 		assert.deepEqual(grown.grew.sort(), [". known", ". other", ". tool"]);
 		assert.deepEqual(syncConsumer(undefined, { ".": { "tool": entry(["load"], ["net"]) } }).consumer["."]["tool"].grew, undefined, "the baseline being made: nothing grows");
 		assert.deepEqual(syncConsumer(grown.consumer, grown.consumer).grew, [], "nothing new: nothing grows again");
+
+		// Read from more files than before (`seen`: the use from the files read both times): only that can grow; a use or
+		// members only the files read for the first time bring are taken as they are.
+		const wider = syncConsumer(before, { ".": { "tool": entry(["load", "fetchAll"], ["fs:read", "net"]), "other": entry(["a"], ["exec"]), "late": entry(["go"], ["net"]) } }, new Set(), { ".": { "tool": entry(["load"], []), "other": entry(["a", "c"], []) } });
+
+		assert.equal(wider.consumer["."]["tool"].grew, undefined, "fetchAll only from a file read for the first time: taken as it is");
+		assert.equal(wider.consumer["."]["late"].grew, undefined, "a use only those files have: taken as it is");
+		assert.deepEqual(wider.consumer["."]["other"].grew, { "exec": "a" }, "what grew before stays grown");
+		assert.deepEqual(syncConsumer(before, { ".": { "tool": entry(["load"], ["fs:read", "net"], { "version": "2.0.0" }) } }).consumer["."]["tool"].grew, { "net": "2.0.0" }, "a version that reaches more grows, with the version");
 
 		// What to slice: a use unchanged since a baseline with joins keeps its join; any other is read, `*` when dynamic.
 		const kept = { "consumer": { ".": { "tool": entry(["load"], ["fs:read"]), "@s/p/sub": entry(["x"], ["env"]) } }, "join": JOIN };
