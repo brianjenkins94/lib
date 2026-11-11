@@ -166,11 +166,23 @@ function memberRead(ts: Ts, node: TsNode): { "object": TsNode; "key": string } |
 	return undefined;
 }
 
+/** Whether `callee`'s method is the platform's: TypeScript's own lib declares it (`CustomElementRegistry.get`, `Map.get`,
+ *  `URLSearchParams.get`), as no HTTP client's is. Unknown (no symbol: an `any`) isn't. */
+function declaredByLib(program: TsNode, callee: TsNode): boolean {
+	const symbol = program.getTypeChecker().getSymbolAtLocation(callee.name);
+	const declarations: TsNode[] = symbol?.declarations ?? [];
+
+	return declarations.length > 0 && declarations.every((declaration) => program.isSourceFileDefaultLibrary(declaration.getSourceFile()) === true);
+}
+
 /**
  * Find every place `sourceFile` (a TypeScript SourceFile, read by `ts`) reaches a capability per the configured
- * matchers, capturing string-literal resources — a call's argument, or a member read's key.
+ * matchers, capturing string-literal resources — a call's argument, or a member read's key. Given its `program`, an
+ * HTTP verb on any receiver (`*.get`, `*.post` …) whose method TypeScript's own lib declares isn't a
+ * request: those verbs are matched for a client's (fido's, axios's), and `customElements.get("wa-button")` or
+ * `params.get("q")` is the platform's lookup. (`fetch` is the platform's request, matched by its name.)
  */
-export function findReach(ts: Ts, sourceFile: TsNode, config: MatcherConfig = ALL_MATCHERS): Reach[] {
+export function findReach(ts: Ts, sourceFile: TsNode, config: MatcherConfig = ALL_MATCHERS, program?: TsNode): Reach[] {
 	const matchers = normalize(config);
 	const callMatchers = matchers.filter((matcher) => matcher.member === undefined);
 	const memberMatchers = matchers.filter((matcher) => matcher.member !== undefined);
@@ -186,8 +198,9 @@ export function findReach(ts: Ts, sourceFile: TsNode, config: MatcherConfig = AL
 		if (ts.isCallExpression(node)) {
 			const matcher = callMatchers.find((candidate) => matchesCallee(ts, candidate, node.expression));
 			const argument = matcher === undefined ? undefined : node.arguments[matcher.arg ?? 0];
+			const platforms = program !== undefined && matcher?.capability === "net" && matcher.object === undefined && HTTP_VERBS.has(matcher.property ?? "") && declaredByLib(program, node.expression);
 
-			if (matcher !== undefined && argument !== undefined && ts.isStringLiteralLike(argument)) {
+			if (matcher !== undefined && argument !== undefined && ts.isStringLiteralLike(argument) && !platforms) {
 				found.push({ "capability": matcher.capability, "value": argument.text, "callee": renderCallee(ts, node.expression), "safe": matcher.safe, ...at(node) });
 			}
 		} else {
@@ -293,6 +306,28 @@ if (isEntry(import.meta)) {
 
 		assert.equal(src.slice(first.start, first.end), "fetch(\"https://example.com/a\")");
 		assert.deepEqual(reach("fido.get(\"/a\"); map.get(\"/b\");", ["fido.get"]).map((each) => each.callee), ["fido.get"]);
+
+		// With its program, a verb the platform's lib declares isn't a request; a client's, or an `any`'s, is.
+		const typed = (text: string): Reach[] => {
+			const host = ts.createCompilerHost({});
+			const read = host.getSourceFile.bind(host);
+
+			host.getSourceFile = (name, ...rest) => (name === "app.ts" ? ts.createSourceFile(name, text, ts.ScriptTarget.Latest, true) : read(name, ...rest));
+
+			const program = ts.createProgram(["app.ts"], { "lib": ["lib.es2022.d.ts", "lib.dom.d.ts"], "noEmit": true }, host);
+
+			return findReach(ts, program.getSourceFile("app.ts"), undefined, program);
+		};
+
+		assert.deepEqual(typed([
+			"customElements.get(\"wa-button\");",
+			"new URLSearchParams(location.search).get(\"q\");",
+			"declare const client: { get(url: string): Promise<unknown> };",
+			"client.get(\"/api\");",
+			"declare const loose: any;",
+			"loose.get(\"/b\");",
+			"window.fetch(\"https://example.com/c\");"
+		].join("\n")).map((each) => each.callee), ["client.get", "loose.get", "window.fetch"]);
 
 		// The import surface, off TypeScript's tree: silo audit's, and the editor's baseline consumer.
 		const imports = [
