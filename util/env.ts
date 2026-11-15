@@ -26,7 +26,12 @@ const isNode = !isBun && ("self" in globalThis && "process" in globalThis.self) 
  *  for Node. It's neither: no DOM, and no filesystem. */
 export const isWorkers = globalThis.navigator?.userAgent === "Cloudflare-Workers";
 
-export const isBrowser = !isWorkers && (!isBun && !isDeno && ("self" in globalThis && "addEventListener" in globalThis.self) || "window" in globalThis);
+/** Node's own process (its getBuiltinModule, 22.3+), wherever it runs: a Node runtime inside a browser (the editor's
+ *  debugger) also shows its programs a worker's globals (`self`, `addEventListener`), and isn't a browser for that. A
+ *  browser's bundle has no `process`, or a stand-in without it. */
+const isNodeRuntime = typeof (globalThis as { "process"?: { "getBuiltinModule"?: unknown } }).process?.getBuiltinModule === "function";
+
+export const isBrowser = !isWorkers && !isNodeRuntime && (!isBun && !isDeno && ("self" in globalThis && "addEventListener" in globalThis.self) || "window" in globalThis);
 
 export function getRuntime() {
 	return isWorkers ? "workers" : isBrowser ? "browser" : isBun ? "bun" : isDeno ? "deno" : isNode ? "node" : "unknown";
