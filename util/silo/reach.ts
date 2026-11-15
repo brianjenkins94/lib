@@ -363,7 +363,7 @@ if (isEntry(import.meta)) {
 
 		fs.writeFileSync(file, imports + "\n" + src);
 
-		const sources = readSources(modules, folder, [file]);
+		const sources = await readSources(modules, folder, [file]);
 
 		try {
 			const both = imports + "\n" + src;

@@ -1,11 +1,12 @@
 /**
- * silo — TypeScript 7's analyzer (Node): a program's ways in and declaration graph read by the compiler itself
+ * silo — TypeScript 7's analyzer (Node, or a browser's runtime): a program's ways in and declaration graph read by the compiler itself
  * (`./ts-analysis`, with TypeScript 7's API as its host). What a declaration uses is what the checker
  * says each of its names is — an import followed through re-exports and the tsconfig's `paths`, a scope's own local left
  * out, a method call resolved to the declaration that holds the method — so reach follows the program as TypeScript sees
  * it.
  *
- * One compiler process for a whole replay: the first snapshot is a synthetic program over the snapshot's sources (a
+ * One compiler for a whole replay (its native process; or, where none can start, its WebAssembly build in this one —
+ * `apiOf`): the first snapshot is a synthetic program over the snapshot's sources (a
  * filesystem layer of their contents over the disk, which still serves `node_modules`), and each later one is an update
  * with a layer of what changed — nothing is checked out. A file is analyzed again only when it, or a file it resolves
  * names into, changed. The program's own packages (a workspace's, by their package.json) resolve to their sources — not
@@ -33,25 +34,144 @@ import { analysisOf, analyzeFile, stale } from "./ts-analysis";
 
 /** TypeScript's `sync` and `ast` modules (≥ 7.1), and its node predicates (`ast/is`), loosely typed: the few calls below. */
 export interface TypeScriptModules {
-	"sync": { "API": new (options: { "cwd": string }) => any };
+	"sync": { "API": new (options: { "cwd": string } | { "transport": unknown }) => any };
 	"ast": { "SyntaxKind": Record<string | number, string | number> };
 	"is"?: Record<string, (node: any) => boolean>;
+	/** Its WebAssembly build, where that's installed beside it at the same version: the API in this process, for where
+	 *  no native compiler can start (a browser's runtime: the editor's debugger). `tsc` is the module's path; the
+	 *  compiler's own lib files are in its folder. */
+	"wasm"?: { "WasmTransport": new (options: Record<string, unknown>) => unknown; "instantiateWasm": (module: unknown) => Promise<unknown>; "tsc": string };
 }
+
+/** TypeScript's WebAssembly build: the compiler as one module, its lib files beside it. */
+const WASM_PACKAGE = "@typescript/typescript-wasip1-wasm";
 
 /**
  * TypeScript ≥ 7.1's modules as installed beside `from` (a folder; default package name `typescript`), or undefined when
- * there's none that new.
+ * there's none that new. With them its WebAssembly build, when that's installed too, at the same version.
  */
 export async function typescriptModules(from: string, name = "typescript"): Promise<TypeScriptModules | undefined> {
 	const resolve = createRequire(from.replace(/\/$/u, "") + "/package.json").resolve;
+	const load = async (subpath: string): Promise<any> => import(/*! @external */ url.pathToFileURL(resolve(`${name}/${subpath}`)).href);
+	let modules: TypeScriptModules;
 
 	try {
-		const load = async (subpath: string): Promise<any> => import(/*! @external */ url.pathToFileURL(resolve(`${name}/${subpath}`)).href);
-
-		return { "sync": await load("sync"), "ast": await load("ast"), "is": await load("ast/is") } as TypeScriptModules;
+		modules = { "sync": await load("sync"), "ast": await load("ast"), "is": await load("ast/is") } as TypeScriptModules;
 	} catch {
 		return undefined;
 	}
+
+	try {
+		const version = (manifest: string): string => JSON.parse(fs.readFileSync(resolve(manifest))).version;
+
+		// (the reactor and the API speak one version's protocol: another version's module is no use to it)
+		if (version(`${name}/package.json`) === version(`${WASM_PACKAGE}/package.json`)) {
+			const { WasmTransport, instantiateWasm } = await load("wasm");
+
+			modules.wasm = { "WasmTransport": WasmTransport, "instantiateWasm": instantiateWasm, "tsc": resolve(`${WASM_PACKAGE}/lib/tsc.wasm`) };
+		}
+	} catch {
+		// (none, or a TypeScript older than its WebAssembly build: the native compiler only)
+	}
+
+	return modules;
+}
+
+/**
+ * TypeScript's API over `root`: the native compiler's process, or — where none can start, or `SILO_TYPESCRIPT=wasm` says
+ * so — the same compiler built for WebAssembly, run in this process and reading through `node:fs` (in the editor's
+ * debugger, the workspace). It's slower (a program over 95 files: 2.7 s against 0.17 s), so only where there's no other.
+ */
+export async function apiOf(modules: TypeScriptModules, root: string): Promise<any> {
+	const asked = process.env["SILO_TYPESCRIPT"];
+
+	if (asked !== "wasm") {
+		try {
+			return new modules.sync.API({ "cwd": root });
+		} catch (error) {
+			if (modules.wasm === undefined || asked === "native") {
+				throw error;
+			}
+		}
+	}
+
+	if (modules.wasm === undefined) {
+		throw new Error(`TypeScript's WebAssembly build isn't installed beside it: ${WASM_PACKAGE}, at TypeScript's own version`);
+	}
+
+	const instance = await modules.wasm.instantiateWasm(await WebAssembly.compile(fs.readFileSync(modules.wasm.tsc, { "encoding": null })));
+
+	return new modules.sync.API({ "transport": new modules.wasm.WasmTransport({ "instance": instance, "cwd": root, "fs": wasmFileSystem(path.dirname(modules.wasm.tsc)), "useCaseSensitiveFileNames": caseSensitive() }) });
+}
+
+/** Whether this file system tells `a` from `A` (as the native API asks it: this file's name with its case swapped). */
+function caseSensitive(): boolean {
+	const own = url.fileURLToPath(import.meta.url);
+
+	return process.platform !== "win32" && !fs.existsSync(own.replace(/\w/gu, (char) => (char === char.toUpperCase() ? char.toLowerCase() : char.toUpperCase())));
+}
+
+/** The reactor's file system: `node:fs`, but for the compiler's own lib files (`bundled:///libs/…`), which are the
+ *  WebAssembly package's, in `libs`. */
+function wasmFileSystem(libs: string): Record<string, (path: string, ...rest: any[]) => unknown> {
+	const BUNDLED = "bundled:///libs";
+	const real = (each: string): string => (each.startsWith(BUNDLED) ? libs + each.slice(BUNDLED.length) : each);
+	const stat = (each: string): ReturnType<typeof fs.statSync> | undefined => {
+		try {
+			return fs.statSync(real(each));
+		} catch {
+			return undefined;
+		}
+	};
+
+	return {
+		"readFile": (each) => {
+			try {
+				return fs.readFileSync(real(each));
+			} catch {
+				return undefined;
+			}
+		},
+		"fileExists": (each) => stat(each)?.isFile() ?? false,
+		"directoryExists": (each) => stat(each)?.isDirectory() ?? false,
+		"getAccessibleEntries": (each) => {
+			const entries = { "files": [] as string[], "directories": [] as string[], "symlinks": [] as string[] };
+
+			try {
+				for (const entry of fs.readdirSync(real(each), { "withFileTypes": true })) {
+					// (a link is listed as what it points to, and named a link)
+					const target = entry.isSymbolicLink() ? stat(path.join(each, entry.name)) : entry;
+
+					if (target !== undefined) {
+						(target.isDirectory() ? entries.directories : entries.files).push(entry.name);
+
+						if (entry.isSymbolicLink()) {
+							entries.symlinks.push(entry.name);
+						}
+					}
+				}
+			} catch {
+				// (no folder: nothing in it)
+			}
+
+			return entries;
+		},
+		"realpath": (each) => {
+			try {
+				return each.startsWith(BUNDLED) ? each : fs.realpathSync(each);
+			} catch {
+				return each;
+			}
+		},
+		"stat": (each) => {
+			const found = stat(each);
+
+			return found === undefined ? undefined : { "mode": found.mode, "size": found.size, "mtime": found.mtime };
+		},
+		// (the analysis writes nothing: emit is never asked for)
+		"writeFile": () => undefined,
+		"removeFile": () => undefined
+	};
 }
 
 /** TypeScript 7.1's AST module as `./reach`'s readings take a `ts`: its node predicates and SyntaxKind — and
@@ -63,11 +183,11 @@ export function astOf(modules: TypeScriptModules): any {
 }
 
 /**
- * Each of `files` (absolute paths under `root`) as TypeScript 7.1 parses it — one compiler process, every file opened in
- * one snapshot. `read` gives a file's SourceFile (undefined for one it couldn't); `close` ends the process.
+ * Each of `files` (absolute paths under `root`) as TypeScript 7.1 parses it — one compiler, every file opened in
+ * one snapshot (`apiOf`'s compiler). `read` gives a file's SourceFile (undefined for one it couldn't); `close` ends it.
  */
-export function readSources(modules: TypeScriptModules, root: string, files: readonly string[]): { "read": (file: string) => any; "close": () => void } {
-	const api = new modules.sync.API({ "cwd": root });
+export async function readSources(modules: TypeScriptModules, root: string, files: readonly string[]): Promise<{ "read": (file: string) => any; "close": () => void }> {
+	const api = await apiOf(modules, root);
 	const snapshot = api.createSnapshot({ "openFiles": [...files] });
 
 	return {
@@ -128,7 +248,7 @@ export async function typescriptAnalyzer(options: TypeScriptAnalyzerOptions): Pr
 
 	const kinds = ts.ast.SyntaxKind;
 	const root = options.root.replace(/\/$/u, "");
-	const api = new ts.sync.API({ "cwd": root });
+	const api = await apiOf(ts, root);
 	// The program reads the JavaScript sources too. A project with no tsconfig (plain JavaScript, say) is read with
 	// TypeScript's defaults for a module that a bundler resolves.
 	const baseOptions = { ...await parsedOptions(api, options.tsconfig ?? root + "/tsconfig.json"), "allowJs": true };
@@ -290,68 +410,76 @@ if (isEntry(import.meta)) {
 		const assert: typeof import("node:assert").strict = (await import("node:assert")).strict;
 		const { replay } = await import("./history");
 
-		// A repository with only a tsconfig on disk: every version of its sources comes from the snapshots.
-		const root = await fs.realpath(await fs.mkdtemp(path.join(fs.tmpdir(), "silo-typescript-")));
-
-		fs.writeFileSync(path.join(root, "tsconfig.json"), JSON.stringify({ "compilerOptions": { "module": "esnext", "moduleResolution": "bundler", "target": "esnext", "strict": false } }));
-
 		// The TypeScript ≥ 7.1 lib tests with (its dev dependency `typescript-7`; lib's own `typescript` is older).
 		const modules = await typescriptModules(import.meta.dirname, "typescript-7");
 
 		assert.ok(modules !== undefined, "typescript-7 (lib's dev dependency) is installed");
+		assert.ok(modules.wasm !== undefined, "and its WebAssembly build, at its version");
 
-		const analyzer = await typescriptAnalyzer({ "root": root, "typescript": modules });
+		// The same analysis from the native compiler and from its WebAssembly build (where no native one can start).
+		for (const compiler of ["native", "wasm"]) {
+			process.env["SILO_TYPESCRIPT"] = compiler;
 
-		assert.ok(analyzer !== undefined);
+			// A repository with only a tsconfig on disk: every version of its sources comes from the snapshots.
+			const root = await fs.realpath(await fs.mkdtemp(path.join(fs.tmpdir(), "silo-typescript-")));
 
-		const blobs = new Map<string, string>();
-		let next = 0;
-		const snapshot = (date: string, files: Record<string, string>): { "id": string; "date": string; "files": { "path": string; "oid": string }[] } => ({
-			"id": "s" + (next += 1),
-			"date": date + "T00:00:00Z",
-			"files": Object.entries(files).map(([file, text]) => {
-				const oid = "oid" + blobs.size;
+			fs.writeFileSync(path.join(root, "tsconfig.json"), JSON.stringify({ "compilerOptions": { "module": "esnext", "moduleResolution": "bundler", "target": "esnext", "strict": false } }));
 
-				blobs.set(oid, text);
+			const analyzer = await typescriptAnalyzer({ "root": root, "typescript": modules });
 
-				return { "path": file, "oid": oid };
-			})
-		});
-		// A method call: name matching alone can't tell which `go` this is; the checker can.
-		const extension = "import { Runner } from \"./runner\";\nimport { other } from \"./other\";\nconst runner = new Runner();\nexport function activate() {\n\tvscode.commands.registerCommand(\"run.go\", () => runner.go());\n\tvscode.commands.registerCommand(\"run.other\", () => other());\n}\n";
-		const runner = (go: string): string => `import { shout } from "./shout";\nexport class Runner { go() { return shout(${go}); } }\n`;
-		const steps = [];
+			assert.ok(analyzer !== undefined);
 
-		try {
-			for await (const step of replay([
-				snapshot("2026-10-01", { "x/extension.ts": extension, "x/runner.ts": runner("\"a\""), "x/shout.ts": "export const shout = (s: string) => s + \"!\";\n", "x/other.ts": "export const other = () => 1;\n" }),
-				snapshot("2026-10-02", { "x/extension.ts": extension, "x/runner.ts": runner("\"a\""), "x/shout.ts": "export const shout = (s: string) => s + \"?\";\n", "x/other.ts": "export const other = () => 1;\n" }),
-				snapshot("2026-10-03", { "x/extension.ts": extension, "x/runner.ts": runner("\"a\""), "x/shout.ts": "export const shout = (s: string) => s + \"?\";\n", "x/other.ts": "export const other = () => 2;\n" })
-			], async (oid) => blobs.get(oid)!, { "analyzer": analyzer })) {
-				steps.push(step);
+			const blobs = new Map<string, string>();
+			let next = 0;
+			const snapshot = (date: string, files: Record<string, string>): { "id": string; "date": string; "files": { "path": string; "oid": string }[] } => ({
+				"id": "s" + (next += 1),
+				"date": date + "T00:00:00Z",
+				"files": Object.entries(files).map(([file, text]) => {
+					const oid = "oid" + blobs.size;
+
+					blobs.set(oid, text);
+
+					return { "path": file, "oid": oid };
+				})
+			});
+			// A method call: name matching alone can't tell which `go` this is; the checker can.
+			const extension = "import { Runner } from \"./runner\";\nimport { other } from \"./other\";\nconst runner = new Runner();\nexport function activate() {\n\tvscode.commands.registerCommand(\"run.go\", () => runner.go());\n\tvscode.commands.registerCommand(\"run.other\", () => other());\n}\n";
+			const runner = (go: string): string => `import { shout } from "./shout";\nexport class Runner { go() { return shout(${go}); } }\n`;
+			const steps = [];
+
+			try {
+				for await (const step of replay([
+					snapshot("2026-10-01", { "x/extension.ts": extension, "x/runner.ts": runner("\"a\""), "x/shout.ts": "export const shout = (s: string) => s + \"!\";\n", "x/other.ts": "export const other = () => 1;\n" }),
+					snapshot("2026-10-02", { "x/extension.ts": extension, "x/runner.ts": runner("\"a\""), "x/shout.ts": "export const shout = (s: string) => s + \"?\";\n", "x/other.ts": "export const other = () => 1;\n" }),
+					snapshot("2026-10-03", { "x/extension.ts": extension, "x/runner.ts": runner("\"a\""), "x/shout.ts": "export const shout = (s: string) => s + \"?\";\n", "x/other.ts": "export const other = () => 2;\n" })
+				], async (oid) => blobs.get(oid)!, { "analyzer": analyzer })) {
+					steps.push(step);
+				}
+			} finally {
+				analyzer.close?.();
+				await fs.rm(root, { "force": true, "recursive": true });
 			}
-		} finally {
-			analyzer.close?.();
-			await fs.rm(root, { "force": true, "recursive": true });
+
+			const changes = (step: (typeof steps)[number]): string[] => step.events.map((event) => event.type + " " + event.id + (event.type === "changed" && event.via === "reach" ? " via " + event.file + "#" + event.declaration : "")).sort();
+
+			assert.deepEqual(changes(steps[1]!), ["changed run.go via x/shout.ts#shout"], compiler + ": through the method the call resolves to, and the import it uses");
+			assert.deepEqual(changes(steps[2]!), ["changed run.other via x/other.ts#other"], compiler + ": a later snapshot reads its own version of the file");
+
+			// A project with no tsconfig (plain JavaScript): read with TypeScript's defaults, its ways in found all the same.
+			const plain = await fs.realpath(await fs.mkdtemp(path.join(fs.tmpdir(), "silo-typescript-plain-")));
+			const untyped = (await typescriptAnalyzer({ "root": plain, "typescript": modules }))!;
+
+			try {
+				const { ways } = await untyped.analyze(new Map([["cli.js", "cli"]]), async () => "defineCommand(\"notes\", () => 1);\n");
+
+				assert.deepEqual(ways.get("cli.js")?.map((way) => way.facet + " " + way.id), ["terminal command notes"]);
+			} finally {
+				untyped.close?.();
+				await fs.rm(plain, { "force": true, "recursive": true });
+			}
 		}
 
-		const changes = (step: (typeof steps)[number]): string[] => step.events.map((event) => event.type + " " + event.id + (event.type === "changed" && event.via === "reach" ? " via " + event.file + "#" + event.declaration : "")).sort();
-
-		assert.deepEqual(changes(steps[1]!), ["changed run.go via x/shout.ts#shout"], "through the method the call resolves to, and the import it uses");
-		assert.deepEqual(changes(steps[2]!), ["changed run.other via x/other.ts#other"], "a later snapshot reads its own version of the file");
-
-		// A project with no tsconfig (plain JavaScript): read with TypeScript's defaults, its ways in found all the same.
-		const plain = await fs.realpath(await fs.mkdtemp(path.join(fs.tmpdir(), "silo-typescript-plain-")));
-		const untyped = (await typescriptAnalyzer({ "root": plain, "typescript": modules }))!;
-
-		try {
-			const { ways } = await untyped.analyze(new Map([["cli.js", "cli"]]), async () => "defineCommand(\"notes\", () => 1);\n");
-
-			assert.deepEqual(ways.get("cli.js")?.map((way) => way.facet + " " + way.id), ["terminal command notes"]);
-		} finally {
-			untyped.close?.();
-			await fs.rm(plain, { "force": true, "recursive": true });
-		}
+		delete process.env["SILO_TYPESCRIPT"];
 	})();
 }
 

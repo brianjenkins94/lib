@@ -110,7 +110,7 @@ function owningWorkspace(file: string, root: string): string {
  *  `target` import, read by `typescript` — so a monorepo audit attributes each dep's usage to the package that imports it. */
 export async function workspaceSurfaces(target: string, root: string, typescript: TypeScriptModules): Promise<Record<string, Record<string, SurfaceEntry>>> {
 	const all = await files(path.resolve(target));
-	const sources = readSources(typescript, path.resolve(root), all);
+	const sources = await readSources(typescript, path.resolve(root), all);
 	const ts = astOf(typescript);
 	const buckets = new Map<string, Surface>();
 
