@@ -41,12 +41,15 @@ export function getRuntime() {
  *
  * Bundled as CommonJS, `import.meta` arrives empty or undefined; then the module's file is the bundle's, which is this
  * module's own — so it says whether Node started the bundle, as it does for an ES module bundle.
+ *
+ * Asked of the process, not of `isBrowser`: a Node runtime inside a browser (the editor's debugger, whose programs see
+ * a worker's globals) still has the file it started in argv[1]; a browser's bundle has no `getBuiltinModule`.
  */
 export function isEntry(meta?: { "url"?: string }): boolean {
-	const entry = process.argv[1];
+	const entry = globalThis.process?.argv?.[1];
 	const file = meta?.url ?? ownUrl;
 
-	if (isBrowser || entry === undefined || file === undefined) {
+	if (entry === undefined || file === undefined || typeof process.getBuiltinModule !== "function") {
 		return false;
 	}
 
