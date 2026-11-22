@@ -105,6 +105,12 @@ export const observedCapabilitiesPath = (user: string): string => `${SILO_DIR}/c
  */
 export type RunScope = "shared" | "local";
 
+/** Where `user`'s vouches go (./select): committed, a file a person, merged by line as runs are. */
+export const vouchesPath = (user: string): string => `${SILO_DIR}/vouches/${userFile(user)}.jsonl`;
+
+/** Where everyone's vouches are. */
+export const VOUCHES_DIR = `${SILO_DIR}/vouches`;
+
 /** Where `user`'s run envelopes go: shared runs in `runs/`, local ones in `local/runs/`. */
 export function runsPath(user: string, scope: RunScope = "shared"): string {
 	return `${scope === "local" ? LOCAL_DIR : SILO_DIR}/runs/${userFile(user)}.jsonl`;
