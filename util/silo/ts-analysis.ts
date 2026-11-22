@@ -19,7 +19,7 @@ import type { WayIn } from "./features";
 import type { Analysis, DeclarationGraph } from "./graph";
 import { agentTool, codeArgumentsFrom, CLI_CALL, cliCommand, CREATE, CREATE_RECEIVER, type ObjectReader, REGISTER, words } from "./features";
 import { isEntry } from "@brianjenkins94/util/env";
-import { candidates, nodeId, TOP } from "./graph";
+import { ALL, candidates, nodeId, TOP } from "./graph";
 
 /** A node of TypeScript's tree, as either host presents it. */
 export interface TsNode { "kind": number; "pos": number; "end": number; "parent"?: TsNode; "text"?: string; [key: string]: any }
@@ -529,6 +529,38 @@ export function analyzeFile(host: TsHost, path: string, file: TsNode, text: stri
 		}
 	});
 
+	// A dynamic import (`await import("./module")`, a literal path) leads to all of that module: what's taken from it can't
+	// be told by name (`const { a } = await import(…)` and `(await import(…)).a` alike), as `import * as ns` used bare
+	// can't — `module#*`, every declaration of the module (graphOf). A test that loads its subject this way reaches it.
+	const dynamicImports = (node: TsNode): string[] => {
+		const found: string[] = [];
+		const visit = (child: TsNode): void => {
+			if (is(child, "CallExpression") && is(child["expression"], "ImportKeyword")) {
+				const target = candidates(path, literal(child["arguments"]?.[0]) ?? "").find((candidate) => host.has(candidate));
+
+				if (target !== undefined) {
+					found.push(target);
+				}
+			}
+
+			each(child, visit);
+		};
+
+		visit(node);
+
+		return found;
+	};
+
+	for (const [owner, node] of [...code, ...body.map((statement): [string, TsNode] => [TOP, statement])]) {
+		for (const target of dynamicImports(node)) {
+			uses.set(owner, (uses.get(owner) ?? new Set()).add(nodeId(target, ALL)));
+
+			if (!analysis.modules.includes(target)) {
+				analysis.modules.push(target);
+			}
+		}
+	}
+
 	for (const [name, node] of code) {
 		const existing = analysis.declarations[name];
 
@@ -632,6 +664,11 @@ export function graphOf(files: ReadonlyMap<string, FileAnalysis>): DeclarationGr
 			}
 
 			const declaration = analysis.declarations[name];
+
+			// (a whole module, as a dynamic import reaches it: each of its declarations)
+			if (name === ALL) {
+				return Object.keys(analysis.declarations).map((each) => nodeId(path, each));
+			}
 
 			if (declaration !== undefined) {
 				// A module's body runs the bodies of the modules it imports.

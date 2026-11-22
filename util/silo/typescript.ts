@@ -465,6 +465,24 @@ if (isEntry(import.meta)) {
 			assert.deepEqual(changes(steps[1]!), ["changed run.go via x/shout.ts#shout"], compiler + ": through the method the call resolves to, and the import it uses");
 			assert.deepEqual(changes(steps[2]!), ["changed run.other via x/other.ts#other"], compiler + ": a later snapshot reads its own version of the file");
 
+			// A dynamic import leads to all of its module: a test that loads its subject so reaches what it tests.
+			const loads = await fs.realpath(await fs.mkdtemp(path.join(fs.tmpdir(), "silo-typescript-loads-")));
+
+			fs.writeFileSync(path.join(loads, "tsconfig.json"), JSON.stringify({ "compilerOptions": { "module": "esnext", "moduleResolution": "bundler", "target": "esnext" } }));
+
+			const loading = (await typescriptAnalyzer({ "root": loads, "typescript": modules }))!;
+
+			try {
+				const sources: Record<string, string> = { "subject.ts": "export const double = (n: number) => n * 2;\nexport const half = (n: number) => n / 2;\n", "subject.test.ts": "const { double } = await import(\"./subject\");\nconsole.log(double(2));\n" };
+				const { graph } = await loading.analyze(new Map(Object.keys(sources).map((file) => [file, file])), async (file) => sources[file]!);
+				const { reach: reachOf } = await import("./graph");
+
+				assert.deepEqual([...reachOf(graph, ["subject.test.ts#(top)"])].sort(), ["subject.test.ts#(top)", "subject.test.ts#double", "subject.ts#double", "subject.ts#half"], compiler + ": a dynamic import reaches its module's declarations");
+			} finally {
+				loading.close?.();
+				await fs.rm(loads, { "force": true, "recursive": true });
+			}
+
 			// A project with no tsconfig (plain JavaScript): read with TypeScript's defaults, its ways in found all the same.
 			const plain = await fs.realpath(await fs.mkdtemp(path.join(fs.tmpdir(), "silo-typescript-plain-")));
 			const untyped = (await typescriptAnalyzer({ "root": plain, "typescript": modules }))!;

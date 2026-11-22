@@ -25,6 +25,9 @@ import type { WayIn } from "./features";
 /** A module's body: its top-level statements that aren't declarations. */
 export const TOP = "(top)";
 
+/** All of a module (`file#*`): what a dynamic import of it leads to, every declaration in it. */
+export const ALL = "*";
+
 /** One of the program's own packages: where it is, and the file each of its entry points (`.`, `./sub`) names. */
 export interface Package {
 	"name": string;
