@@ -17,7 +17,7 @@
 import type { DeclarationGraph } from "./graph";
 import type { TestStanding } from "./outcomes";
 import { isEntry } from "@brianjenkins94/util/env";
-import { reach, TOP } from "./graph";
+import { digest, reach, TOP } from "./graph";
 
 /** A pass (or a failure) made where the code was written, for CI to take. */
 export interface Vouch {
@@ -31,7 +31,8 @@ export interface Vouch {
 	"runtime": string;
 	/** The commit it was made for, when there is one. */
 	"commit"?: string;
-	/** Each declaration it reached, by id (`file#name`), with its fingerprint then. */
+	/** Each declaration it reached, by id (`file#name`), with its fingerprint's digest then (./graph `digest`); a file the
+	 *  graph doesn't read, by its path, with its contents' git id's. */
 	"reached": Record<string, string>;
 }
 
@@ -59,18 +60,37 @@ export function staticReach(graph: DeclarationGraph, file: string): Set<string> 
 	return reach(graph, [`${file}#${TOP}`]);
 }
 
-/** Each declaration of `reached` with its fingerprint now (for a vouch). */
+/** Each declaration of `reached` with its fingerprint's digest now (for a vouch: a fingerprint is the declaration's
+ *  whole shape, too long to keep). */
 export function fingerprintsOf(graph: DeclarationGraph, reached: Iterable<string>): Record<string, string> {
 	return Object.fromEntries([...reached].flatMap((id) => {
 		const fingerprint = graph.fingerprints.get(id);
 
-		return fingerprint === undefined ? [] : [[id, fingerprint]];
+		return fingerprint === undefined ? [] : [[id, digest(fingerprint)]];
 	}));
 }
 
+const digests = new WeakMap<ReadonlyMap<string, string>, Map<string, string>>();
+
 /** Whether `vouch` holds of the code as `fingerprints` has it: every declaration it reached still there, unchanged. */
 export function vouchHolds(vouch: Vouch, fingerprints: ReadonlyMap<string, string>): boolean {
-	return Object.entries(vouch.reached).every(([id, fingerprint]) => fingerprints.get(id) === fingerprint);
+	const known = digests.get(fingerprints) ?? new Map<string, string>();
+
+	digests.set(fingerprints, known);
+
+	return Object.entries(vouch.reached).every(([id, kept]) => {
+		const fingerprint = fingerprints.get(id);
+
+		if (fingerprint === undefined) {
+			return false;
+		}
+
+		if (!known.has(id)) {
+			known.set(id, digest(fingerprint));
+		}
+
+		return known.get(id) === kept;
+	});
 }
 
 /** What selection needs to know. */

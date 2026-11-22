@@ -15,6 +15,7 @@
 
 import { isEntry } from "@brianjenkins94/util/env";
 import type { Trigger } from "./policy.js";
+import { digest } from "./graph.js";
 
 /** A value a run put on a line (the editor's live values): where (`line`, its offsets in the text that ran `at`, and
  *  `span`, the id of the BABLR span around it — the same through a reformat, an edit elsewhere or a move), whose
@@ -119,27 +120,15 @@ export function inputOf(capability: string, resource: string): string {
 	return `${capability} ${shown}`.trim();
 }
 
-/** A string's hash, 64-bit FNV-1a as hex: a key, not a secret's. */
-function hash(text: string): string {
-	let value = 0xcbf29ce484222325n;
-
-	for (let index = 0; index < text.length; index += 1) {
-		value ^= BigInt(text.charCodeAt(index));
-		value = (value * 0x100000001b3n) & 0xffffffffffffffffn;
-	}
-
-	return value.toString(16).padStart(16, "0");
-}
-
 /** What makes a run the same run as another: the text it ran, its inputs, its values and its end. */
 export function traceKey(trace: RunTrace): string {
 	// By its code's spans when it has them — a reformat, a comment or an edit to code it didn't run leaves it the same
 	// run — else by the exact text and lines.
 	if (trace.declarations !== undefined && trace.declarations.length > 0) {
-		return hash(JSON.stringify([trace.test === undefined ? null : [trace.test.id, trace.test.outcome], ...trace.program === undefined ? [] : [trace.program], trace.declarations, trace.inputs, trace.values.map((each) => [each.span ?? each.line, each.name, each.kind, each.call, each.turns, each.value ?? null]), trace.end === undefined ? null : [trace.end.kind]]));
+		return digest(JSON.stringify([trace.test === undefined ? null : [trace.test.id, trace.test.outcome], ...trace.program === undefined ? [] : [trace.program], trace.declarations, trace.inputs, trace.values.map((each) => [each.span ?? each.line, each.name, each.kind, each.call, each.turns, each.value ?? null]), trace.end === undefined ? null : [trace.end.kind]]));
 	}
 
-	return hash(JSON.stringify([trace.test === undefined ? null : [trace.test.id, trace.test.outcome], ...trace.program === undefined ? [] : [trace.program], trace.oid, trace.inputs, trace.values.map((each) => [each.line, each.name, each.kind, each.call, each.turns, each.value ?? null]), trace.end === undefined ? null : [trace.end.kind, trace.end.line]]));
+	return digest(JSON.stringify([trace.test === undefined ? null : [trace.test.id, trace.test.outcome], ...trace.program === undefined ? [] : [trace.program], trace.oid, trace.inputs, trace.values.map((each) => [each.line, each.name, each.kind, each.call, each.turns, each.value ?? null]), trace.end === undefined ? null : [trace.end.kind, trace.end.line]]));
 }
 
 /** What reached a file, when a trace is only that: a test, or a run of another program — undefined for the file's own runs. */

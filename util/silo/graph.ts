@@ -25,6 +25,19 @@ import type { WayIn } from "./features";
 /** A module's body: its top-level statements that aren't declarations. */
 export const TOP = "(top)";
 
+/** A string's digest, 64-bit FNV-1a as hex: a key, not a secret's — what a vouch keeps of a fingerprint (./select), and
+ *  what makes a run the same run as another (./traces). */
+export function digest(text: string): string {
+	let value = 0xcbf29ce484222325n;
+
+	for (let index = 0; index < text.length; index += 1) {
+		value ^= BigInt(text.charCodeAt(index));
+		value = (value * 0x100000001b3n) & 0xffffffffffffffffn;
+	}
+
+	return value.toString(16).padStart(16, "0");
+}
+
 /** All of a module (`file#*`): what a dynamic import of it leads to, every declaration in it. */
 export const ALL = "*";
 
