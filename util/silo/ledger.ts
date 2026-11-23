@@ -20,8 +20,9 @@
  *                            decide again)
  *   unowned file             a code file no entry owns: none's `paths` hold it, and it isn't a test one names (decision
  *                            22: owned by declaration, not inferred). Tests, scripts and vendored code are code too.
- *   owned twice              a code file two entries' `paths` hold: one owner a file is where attribution starts, until
- *                            coverage from runs and traces says how to handle sharing (a test may be named by more)
+ *   owned twice              a code file two entries' `paths` hold that coverage doesn't show each one's tests running:
+ *                            a file is several features' if and only if real coverage says so (the user, 2026-11-22),
+ *                            as the last run's reach has it (`owned.ran`); a test may be named by more
  *
  * And the leases (`dormant`): a way in nobody decided about keeps its place while the runs reach its code; one whose
  * files the runs loaded and whose own code none of them ran is dormant — a suggestion, with its price, to remove it or
@@ -78,8 +79,10 @@ export interface DriftFacts {
 	/** Its docs (`.md`) and its code, with their text. */
 	"docs": { "file": string; "text": string }[];
 	"code": { "file": string; "text": string }[];
-	/** The repository's code files, from the root (`isOwnedCode`), each held to an owner. None: no file is held to one. */
-	"owned"?: { "files": string[] };
+	/** The repository's code files, from the root (`isOwnedCode`), each held to an owner. None: no file is held to one.
+	 *  `ran`: for a code file, the test files whose tests ran it, from real coverage (./observed `ranByFile`, the last
+	 *  run's reach): what lets several features own it. */
+	"owned"?: { "files": string[]; "ran"?: Record<string, string[]> };
 }
 
 export type DriftCheck = "stopped but present" | "removed but documented" | "experiment expired" | "dead end" | "stale entry" | "lease expired"
@@ -111,8 +114,8 @@ function holds(path: string, file: string): boolean {
 	return file === bare || file.startsWith(bare + "/");
 }
 
-/** The code files in `facts.owned` no live entry owns (by `paths`, or naming it a test), and those two
- *  entries' `paths` both hold: by file. */
+/** The code files in `facts.owned` no live entry owns (by `paths`, or naming it a test), and those two entries' `paths`
+ *  both hold that coverage doesn't show each one's tests running (`owned.ran`): by file. */
 function ownership(ledger: Ledger, owned: NonNullable<DriftFacts["owned"]>): Drift[] {
 	const live = Object.entries(ledger).filter(([, entry]) => entry.status !== "removed");
 	const found: Drift[] = [];
@@ -124,7 +127,12 @@ function ownership(ledger: Ledger, owned: NonNullable<DriftFacts["owned"]>): Dri
 		if (owners.length === 0 && !tested) {
 			found.push({ "check": "unowned file", "message": `${file} is owned by no feature`, "code": "delete it, if nothing needs it", "decision": "name it in the `paths` of the feature it's part of (or the `tests` of the one it tests), or declare a feature for it" });
 		} else if (owners.length > 1) {
-			found.push({ "check": "owned twice", "entry": owners[0], "message": `${file} is owned by ${owners.map((name) => `"${name}"`).join(" and ")}`, "code": "split it, so each part is one feature's", "decision": "take it out of all but one of their `paths`" });
+			const ran = owned.ran?.[file] ?? [];
+			const unshown = owners.filter((name) => !ran.some((test) => (ledger[name]!.tests ?? []).some((path) => holds(path, test))));
+
+			if (unshown.length > 0) {
+				found.push({ "check": "owned twice", "entry": owners[0], "message": `${file} is owned by ${owners.map((name) => `"${name}"`).join(" and ")}${ran.length === 0 ? ", and no test's coverage shows it run" : `, and no test of ${unshown.map((name) => `"${name}"`).join(" or ")} ran it`}`, "code": "split it, so each part is one feature's", "decision": "take it out of the `paths` of all but one, or show each one's tests running it in the last run's reach (`silo observed <reach>`)" });
+			}
 		}
 	}
 
@@ -547,9 +555,14 @@ if (isEntry(import.meta)) {
 		const owned = { "files": ["src/engine/index.ts", "src/engine/run.ts", "src/old.ts", "test/engine.test.ts"] };
 
 		assert.deepEqual(drift(tested, { ...facts, "ways": [], "owned": owned }).filter((each) => each.check === "unowned file" || each.check === "owned twice").map((each) => [each.check, each.message]), [
-			["owned twice", "src/engine/index.ts is owned by \"both\" and \"engine\""],
+			["owned twice", "src/engine/index.ts is owned by \"both\" and \"engine\", and no test's coverage shows it run"],
 			["unowned file", "src/old.ts is owned by no feature"]
 		]);
+		// Several owners when the last run's reach shows each one's tests running the file.
+		const twice = (ran: Record<string, string[]>): string[] => drift({ ...tested, "both": { ...tested["both"], "tests": ["test/both.mjs"] } }, { ...facts, "ways": [], "owned": { ...owned, "files": [...owned.files, "test/both.mjs"], "ran": ran } }).filter((each) => each.check === "owned twice").map((each) => each.message);
+
+		assert.deepEqual(twice({ "src/engine/index.ts": ["test/both.mjs", "test/engine.test.ts"] }), []);
+		assert.deepEqual(twice({ "src/engine/index.ts": ["test/both.mjs"] }), ["src/engine/index.ts is owned by \"both\" and \"engine\", and no test of \"engine\" ran it"]);
 		// What's installed, built or a tool's isn't code to own.
 		assert.deepEqual(["src/a.ts", "test/a.test.mjs", "pkg/vendor/x.js", "a.d.ts", "src/a.css", "node_modules/x/i.js", "pkg/dist/i.js", ".refs/main/a.ts", ".github/x.mjs"].filter(isOwnedCode), ["src/a.ts", "test/a.test.mjs", "pkg/vendor/x.js", "a.d.ts"]);
 		// (a removed entry owns nothing; a test named is owned)

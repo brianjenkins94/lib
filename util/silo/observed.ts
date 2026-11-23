@@ -55,6 +55,52 @@ export function parseReach(file: string, text: string): TestReach[] {
 	return Object.entries(JSON.parse(text) as Record<string, Record<string, unknown[]>>).map(([name, reach]) => ({ "file": file, "name": name, "reach": reach }));
 }
 
+/** What each test ran, by file, kept in the repository (`.silo/last-run/reach.json`): its tests by file and name, and
+ *  each file they ran with the tests (by index) that ran any of it. When it was read, and nothing finer — the check that
+ *  reads it asks only whether a feature's tests run a file. */
+export interface ReachRecord {
+	"version": 2;
+	"at": string;
+	"tests": { "file": string; "name": string }[];
+	"files": Record<string, number[]>;
+}
+
+/** The record of `tests`' reach, read `at`. */
+export function reachRecord(tests: TestReach[], at: string): ReachRecord {
+	const sorted = tests.toSorted((one, other) => one.file.localeCompare(other.file) || one.name.localeCompare(other.name));
+	const files: Record<string, number[]> = {};
+
+	for (const [index, test] of sorted.entries()) {
+		for (const [file, statements] of Object.entries(test.reach)) {
+			if (statements.length > 0) {
+				(files[file] ??= []).push(index);
+			}
+		}
+	}
+
+	return { "version": 2, "at": at, "tests": sorted.map(({ file, name }) => ({ "file": file, "name": name })), "files": Object.fromEntries(Object.entries(files).sort(([one], [other]) => one.localeCompare(other))) };
+}
+
+/** For each file in a reach record's `text`, the test files whose tests ran it (./ledger's ownership check's `ran`);
+ *  none when there's no record, or it's another version. */
+export function ranByFile(text: string | undefined): Record<string, string[]> {
+	let record: Partial<ReachRecord>;
+
+	try {
+		record = JSON.parse(text ?? "") as Partial<ReachRecord>;
+	} catch {
+		return {};
+	}
+
+	if (record.version !== 2 || record.tests === undefined || record.files === undefined) {
+		return {};
+	}
+
+	const tests = record.tests;
+
+	return Object.fromEntries(Object.entries(record.files).map(([file, ran]) => [file, [...new Set(ran.flatMap((index) => (tests[index] === undefined ? [] : [tests[index].file])))]]));
+}
+
 /** Each test's reach against what the ledger declares, those least in their own features' code first. */
 export function observedAgainstDeclared(ledger: Ledger, tests: TestReach[]): Observed {
 	const statementsOf = (test: TestReach): string[] => Object.entries(test.reach).flatMap(([file, statements]) => statements.map((statement) => `${file}\0${JSON.stringify(statement)}`));
@@ -160,6 +206,17 @@ if (isEntry(import.meta)) {
 		assert.match(said, /Too few of their own to tell: 8\./u);
 		assert.deepEqual(parseReach("test/a.mjs", JSON.stringify({ "t": { "src/a.ts": [[1, 0, 1, 2]] } })), [{ "file": "test/a.mjs", "name": "t", "reach": { "src/a.ts": [[1, 0, 1, 2]] } }]);
 		assert.deepEqual(observedAgainstDeclared(ledger, []), { "tests": [], "limit": 1, "few": [] });
+
+		// The record kept of what each test ran, and who ran each file, read back.
+		const record = reachRecord([
+			{ "file": "test/notes.mjs", "name": "b", "reach": { "src/shared.ts": [[1]], "src/notes.ts": [[1]] } },
+			{ "file": "test/git.mjs", "name": "a", "reach": { "src/shared.ts": [[2]], "src/git.ts": [] } }
+		], today);
+
+		assert.deepEqual(record, { "version": 2, "at": today, "tests": [{ "file": "test/git.mjs", "name": "a" }, { "file": "test/notes.mjs", "name": "b" }], "files": { "src/notes.ts": [1], "src/shared.ts": [0, 1] } });
+		assert.deepEqual(ranByFile(JSON.stringify(record)), { "src/notes.ts": ["test/notes.mjs"], "src/shared.ts": ["test/git.mjs", "test/notes.mjs"] });
+		assert.deepEqual(ranByFile(JSON.stringify({ "version": 1, "tests": [], "reach": {} })), {});
+		assert.deepEqual(ranByFile(undefined), {});
 		assert.equal(observedText({ "tests": [], "limit": 1, "few": [] }).split("\n")[0], "Each test against the features its file declares, by the statements at most 1 tests ran.");
 	})();
 }

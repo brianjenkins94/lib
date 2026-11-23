@@ -128,6 +128,10 @@ export const baselinePath = (): string => `${SILO_DIR}/baseline.json`;
 /** The feature ledger (./ledger): decisions about features — shared, one entry a few sorted lines. */
 export const ledgerPath = (): string => `${SILO_DIR}/features.json`;
 
+/** What each test ran, as the last coverage read had it (./observed `reachRecord`): shared, so a check can hold the
+ *  ledger to real coverage. */
+export const lastRunReachPath = (): string => `${SILO_DIR}/last-run/reach.json`;
+
 /** Where this machine keeps every run of `file` it has, values and all (./traces). */
 export const localTracesPath = (file: string): string => `${LOCAL_DIR}/traces/${file}.jsonl`;
 
