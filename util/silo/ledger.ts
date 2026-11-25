@@ -16,17 +16,13 @@
  *   dead end                 a way in that leads nowhere: a command or view declared and never registered, a setting
  *                            its code never reads (its name nowhere in the code)
  *   stale entry              an entry that names nothing that's there
- *   lease expired            an active entry kept `until` a date that's passed (a dormant feature kept for a while:
- *                            decide again)
+ *   lease expired            an active entry kept `until` a date that's passed: decide again
  *   unowned file             a code file no entry owns: none's `paths` hold it, and it isn't a test one names (decision
  *                            22: owned by declaration, not inferred). Tests, scripts and vendored code are code too.
  *   owned twice              a code file two entries' `paths` hold that coverage doesn't show each one's tests running:
  *                            a file is several features' if and only if real coverage says so (the user, 2026-11-22),
  *                            as the last run's reach has it (`owned.ran`); a test may be named by more
  *
- * And the leases (`dormant`): a way in nobody decided about keeps its place while the runs reach its code; one whose
- * files the runs loaded and whose own code none of them ran is dormant — a suggestion, with its price, to remove it or
- * to keep it a while (active, `until` 90 days on).
  * Each is an error once it's quiet on its repository (the editor's since 2026-10-25: its `silo check` fails on any), and
  * what deleting an entry's feature would free is its price (`./cost`).
  */
@@ -36,8 +32,7 @@ import type { Feature } from "./features";
 import type { DeclarationGraph } from "./graph";
 import { isEntry } from "@brianjenkins94/util/env";
 import { priceOf, priceText } from "./cost";
-import { INTERNAL_FACETS, withoutWayIn } from "./features";
-import { TOP } from "./graph";
+import { withoutWayIn } from "./features";
 import { includeByDefault } from "./history";
 
 export type LedgerStatus = "active" | "experiment" | "parked" | "stopped" | "removed";
@@ -267,81 +262,8 @@ export function drift(ledger: Ledger, facts: DriftFacts): Drift[] {
 	return facts.owned === undefined ? found : [...found, ...ownership(ledger, facts.owned)];
 }
 
-/** What the runs reached: the files they loaded, and the declarations they ran (node ids, `file#name`). */
-export interface Reached { "files": ReadonlySet<string>; "declarations": ReadonlySet<string> }
-
-/** A way in, and its own code: the declarations its way in names (node ids, `file#name`). */
-export interface WayCode { "key": string; "facet": string; "id": string; "declarations": string[] }
-
-/** The leases run out: the ways in nobody decided about (no entry names their key, nor paths holding their code) whose
- *  files the runs loaded — so they could have run them — and whose own code none of them ran. */
-export function dormant(ways: WayCode[], ledger: Ledger, reached: Reached): WayCode[] {
-	const keys = new Set(Object.values(ledger).flatMap((entry) => (entry.key === undefined ? [] : [entry.key])));
-	const paths = Object.values(ledger).flatMap((entry) => entry.paths ?? []).map((path) => path.replace(/\/+$/u, ""));
-	const fileOf = (id: string): string => id.slice(0, id.indexOf("#"));
-	const decided = (file: string): boolean => paths.some((path) => file === path || file.startsWith(path + "/"));
-
-	return ways.filter((way) => way.declarations.length > 0 && !keys.has(way.key) && !way.declarations.some((id) => decided(fileOf(id))) && way.declarations.some((id) => reached.files.has(fileOf(id))) && !way.declarations.some((id) => reached.declarations.has(id))).toSorted((left, right) => left.key.localeCompare(right.key));
-}
-
-/** Where CI keeps what the editor's architecture suites reached (its test/selection.mjs): the record `dormant` reads. */
+/** Where CI's records of what its tests reached are (./derive `testsFromRecords`'s text). */
 export const CI_RECORDS = ".silo/evidence/ci/architecture.json";
-
-/** What CI's records (`CI_RECORDS`'s text) say the runs reached — the files they loaded, the declarations they ran, as
- *  the graph names them (`(top level)` a file's body, `Class.member` its class) — or undefined, with none. */
-export function reachedFromRecords(text: string | undefined): Reached | undefined {
-	if (text === undefined) {
-		return undefined;
-	}
-
-	try {
-		const { reach } = JSON.parse(text) as { "reach"?: Record<string, Record<string, number[]>> };
-
-		if (reach === undefined) {
-			return undefined;
-		}
-
-		const declarations = new Set(Object.entries(reach).flatMap(([at, names]) => Object.keys(names).flatMap((name) => name.split(", ").map((each) => `${at}#${each === "(top level)" ? TOP : each.split(".")[0]}`))));
-
-		return { "files": new Set(Object.keys(reach)), "declarations": declarations };
-	} catch {
-		return undefined;
-	}
-}
-
-/** Whether a declaration's code runs only when it's called — a function or a class (or a const holding one) — so a run
- *  that never ran it says something: a module's other names run as it loads, which the records can't tell. */
-function callable(graph: DeclarationGraph, id: string, textOf: (file: string) => string | undefined): boolean {
-	const range = graph.range?.(id);
-	const text = range === undefined ? undefined : textOf(range.file)?.slice(range.start, range.end);
-
-	return text !== undefined && /^(?:export\s+)?(?:default\s+)?(?:(?:async\s+)?function\b|(?:abstract\s+)?class\b|(?:const|let|var)\s+[\w$]+\s*(?::[^=]+)?=\s*(?:async\s*)?(?:function\b|\([^)]*\)\s*(?::[^=]+)?=>|[\w$]+\s*=>))/u.test(text);
-}
-
-/** A way in's own code: the declarations it names, an import followed to what it imports — those that run only when
- *  called (none: it can't be judged at this grain, as a handler written inline, inside what registers it). */
-export function wayCodeOf(graph: DeclarationGraph, feature: Pick<Feature, "key" | "facet" | "id" | "roots">, textOf: (file: string) => string | undefined): WayCode {
-	const resolved = (id: string, seen = new Set<string>()): string[] => {
-		if (graph.fingerprints.has(id)) {
-			return [id];
-		}
-
-		seen.add(id);
-
-		return graph.edges(id).filter((next) => !seen.has(next)).flatMap((next) => resolved(next, seen));
-	};
-
-	return { "key": feature.key, "facet": feature.facet, "id": feature.id, "declarations": [...new Set(feature.roots.flatMap((root) => resolved(root)))].filter((id) => callable(graph, id, textOf)) };
-}
-
-/** The program's dormant ways in (`dormant`), each with its feature (where it's registered: `ranges`) and its price —
- *  what `silo check` lists, and the editor marks where each is registered. */
-export function dormantWays(features: ReadonlyMap<string, Feature>, graph: DeclarationGraph, ledger: Ledger, reached: Reached, textOf: (file: string) => string | undefined): { "way": WayCode; "feature": Feature; "price": Price }[] {
-	const roots = [...features.values()].flatMap((feature) => feature.roots);
-	const ways = [...features.values()].filter((feature) => !INTERNAL_FACETS.has(feature.facet)).map((feature) => wayCodeOf(graph, feature, textOf));
-
-	return dormant(ways, ledger, reached).map((way) => ({ "way": way, "feature": features.get(way.key)!, "price": priceOf(graph, roots, { "roots": features.get(way.key)?.roots ?? [] }, textOf) }));
-}
 
 /** Whose a file is, by declaration: the live entries whose `paths` hold it, or that name it a test. One attribution of code
  *  to features, whatever runs show (decision 22): what's observed is compared with this, it doesn't stand in for it. */
@@ -572,24 +494,6 @@ if (isEntry(import.meta)) {
 		assert.deepEqual(ownersOf(tested, "src/engine/index.ts").toSorted(), ["both", "engine"]);
 		assert.deepEqual(ownersOf(tested, "test/engine.test.ts"), ["engine"]);
 		assert.deepEqual(ownersOf(tested, "src/old.ts"), []);
-		// Dormant: its file loaded, its code never ran — not one decided about, nor one whose files never loaded.
-		const ways: WayCode[] = [
-			{ "key": "command|a.export", "facet": "command", "id": "a.export", "declarations": ["src/a.ts#exportAll"] },
-			{ "key": "command|a.open", "facet": "command", "id": "a.open", "declarations": ["src/a.ts#open"] },
-			{ "key": "command|b.never", "facet": "command", "id": "b.never", "declarations": ["src/b.ts#never"] },
-			{ "key": "command|a.kept", "facet": "command", "id": "a.kept", "declarations": ["src/kept/c.ts#run"] }
-		];
-		const reached: Reached = { "files": new Set(["src/a.ts", "src/kept/c.ts"]), "declarations": new Set(["src/a.ts#open"]) };
-
-		assert.deepEqual(dormant(ways, withStatus({}, "kept", "active", "for agents", today, { "paths": ["src/kept"] }), reached).map((each) => each.key), ["command|a.export"]);
-
-		// CI's records: the files a test loaded, the declarations it ran — a file's body, a class by its own name.
-		const records = reachedFromRecords(JSON.stringify({ "reach": { "src/a.ts": { "(top level), helper": [1], "Box.open": [2] } } }));
-
-		assert.deepEqual([...records!.files], ["src/a.ts"]);
-		assert.deepEqual([...records!.declarations].toSorted(), ["src/a.ts#(top)", "src/a.ts#Box", "src/a.ts#helper"]);
-		assert.equal(reachedFromRecords("not json"), undefined);
-		assert.equal(reachedFromRecords(undefined), undefined);
 		// Declared features: their ways placed, their paths and tests checked, a key two own placed twice; a removed one owns
 		// nothing, an entry that's only a decision isn't a feature, and a repository declaring none isn't held to them.
 		const declaring: Ledger = {

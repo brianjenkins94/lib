@@ -114,7 +114,7 @@ export function linkedBySubjects(grouping: Grouping, features: Iterable<Feature>
 }
 
 /** What each test ran, in CI's records (`{ tests, reach: { file: { "name, name": [test…] } } }`): its declarations as
- *  node ids, by its index — a method by its class, a file's body as TOP, as ./ledger `reachedFromRecords` reads them. */
+ *  node ids, by its index — a method by its class, a file's body as TOP. */
 export function testsFromRecords(text: string | undefined): Map<string, Set<string>> {
 	const tests = new Map<string, Set<string>>();
 

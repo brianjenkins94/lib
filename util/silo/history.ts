@@ -90,7 +90,7 @@ export class Replayer {
 	}
 
 	/** What the last step read: the program's declaration graph and features, and the declarations that changed since the
-	 *  step before it — for what joins history with something else (`./coverage`) without reading it twice. */
+	 *  step before it — for what joins history with something else without reading it twice. */
 	get last(): { "graph": DeclarationGraph; "features": ReadonlyMap<string, Feature>; "changed": readonly string[] } | undefined {
 		return this.#previousGraph === undefined || this.#previous === undefined ? undefined : { "graph": this.#previousGraph, "features": this.#previous, "changed": this.#changed };
 	}
