@@ -356,9 +356,11 @@ export function withoutRemoved(ledger: Ledger, name: string, keys: string[], pat
 	return kept;
 }
 
-/** What taking a feature out is (`silo remove`, the editor's Remove): the files only it reaches, to delete; its
- *  manifests without it; the ledger with its tombstone; and what's left by hand — its code in files it shares, where its
- *  way in is stated in code, the docs naming it. `nothing` when there's nothing to take out on its own (its code shares
+/** What taking a feature out is (`silo remove`, the editor's Remove): the files only it reaches, to delete, with those of
+ *  its paths that aren't code (a workflow, a page, a migration) and nothing that stays names; its manifests without it;
+ *  the ledger with its tombstone; and what's left by hand — its code in files it shares, its other files something that
+ *  stays names (`kept`, and what names each: none for a package.json or a migration, never deleted), where its way in is stated in code,
+ *  the docs naming it. `nothing` when there's nothing to take out on its own (its code shares
  *  files, no manifest declares it): then no tombstone either, for what's still there. */
 export interface Removal {
 	"nothing": boolean;
@@ -366,10 +368,46 @@ export interface Removal {
 	"files": string[];
 	"manifests": { "file": string; "text": string }[];
 	"byHand": string[];
+	"kept": { "file": string; "by": string[] }[];
 	"registrations": string[];
 	"docs": string[];
 	"ledger": string;
 	"restore"?: string;
+}
+
+/** What a removal never deletes: a manifest, and a migration — what it did where it ran stays done, so undoing it is another. */
+const NEVER = /(?:^|\/)(?:package\.json$|migrations\/)/u;
+
+/** Of a removal's own files that aren't code (`candidates`), which go and which something staying names, by path or file
+ *  name: named by one that stays itself counts, so it's settled until none changes. What's named by a doc or by `.silo/`
+ *  goes: those are said, and the ledger's own. A name put together as the program runs isn't seen. */
+function uncoded(candidates: string[], going: string[], tracked: string[], textOf: (file: string) => string | undefined): { "files": string[]; "kept": { "file": string; "by": string[] }[] } {
+	const gone = new Set([...going, ...candidates]);
+	const kept = new Map<string, string[]>();
+	const keep = (file: string, by: string[]): void => {
+		gone.delete(file);
+		kept.set(file, by);
+	};
+
+	for (const file of candidates.filter((each) => NEVER.test(each))) {
+		keep(file, []);
+	}
+
+	for (let settled = false; !settled;) {
+		settled = true;
+
+		for (const file of candidates.filter((each) => gone.has(each))) {
+			const name = new RegExp(`(?<![\\w-])${file.split("/").at(-1)!.replaceAll(/[.*+?^${}()|[\]\\]/gu, "\\$&")}(?![\\w-])`, "u");
+			const by = tracked.filter((each) => !gone.has(each) && !each.endsWith(".md") && !each.startsWith(".silo/") && name.test(textOf(each) ?? ""));
+
+			if (by.length > 0) {
+				keep(file, by);
+				settled = false;
+			}
+		}
+	}
+
+	return { "files": candidates.filter((file) => gone.has(file)), "kept": [...kept].map(([file, by]) => ({ "file": file, "by": by })) };
 }
 
 /** Plan taking out `name` — a ledger entry, or a way in's `key` — and/or `paths`, against the program as it is: its
@@ -392,7 +430,9 @@ export function removalOf(input: { "name": string; "why": string; "key"?: string
 	// (the tests only it names go with it: nothing else runs them)
 	const claimed = (file: string): boolean => Object.entries(input.ledger).some(([other, entry]) => other !== name && entry.status !== "removed" && entry.status !== "stopped" && [...entry.paths ?? [], ...entry.tests ?? []].some((path) => holds(path, file)));
 	const tests = tracked.filter((file) => (input.ledger[name]?.tests ?? []).some((path) => holds(path, file)) && !claimed(file));
-	const files = [...new Set([...price.files, ...tests])];
+	// (its files the graph doesn't read: a workflow, a page, a migration)
+	const others = uncoded(tracked.filter((file) => !isOwnedCode(file) && !price.files.includes(file) && !tests.includes(file) && paths.some((path) => holds(path, file)) && !claimed(file)), [...price.files, ...tests], tracked, textOf);
+	const files = [...new Set([...price.files, ...tests, ...others.files])];
 	const nothing = files.length === 0 && manifests.length === 0;
 	const restore = files.length === 0 ? undefined : `git checkout ${input.head} -- ${files.join(" ")}`;
 	const named = [key?.slice(key.indexOf("|") + 1), ...paths, ...files].filter((each): each is string => each !== undefined && each !== "");
@@ -400,22 +440,25 @@ export function removalOf(input: { "name": string; "why": string; "key"?: string
 	const entry = input.ledger[name];
 	const ledger = nothing ? ledgerText(input.ledger) : ledgerText(withStatus(withoutRemoved(input.ledger, name, key === undefined ? [] : [key], [...paths, ...files], input.today), name, "removed", input.why || entry?.why || "removed", input.today, { ...key === undefined ? {} : { "key": key }, "paths": [...new Set([...paths, ...files])], ...restore === undefined ? {} : { "restore": restore } }));
 
-	return { "nothing": nothing, "price": price, "files": files, "manifests": manifests, "byHand": byHand, "registrations": registrations, "docs": docs, "ledger": ledger, ...restore === undefined ? {} : { "restore": restore } };
+	return { "nothing": nothing, "price": price, "files": files, "manifests": manifests, "byHand": byHand, "kept": others.kept, "registrations": registrations, "docs": docs, "ledger": ledger, ...restore === undefined ? {} : { "restore": restore } };
 }
 
 /** A removal, said: what was taken out and what's left by hand (`silo remove`'s report, the editor's). */
 export function removalText(name: string, removal: Removal): string {
+	const kept = removal.kept.map(({ file, by }) => `${file} (${by.length === 0 ? file.endsWith("package.json") ? "a manifest" : "a migration" : `named in ${by.join(", ")}`})`).join(", ");
 	const states = (files: string[]): string => `where ${files.join(", ")} ${files.length === 1 ? "states" : "state"} it`;
 
 	if (removal.nothing) {
-		return [`Nothing of "${name}" silo can take out on its own: ${priceText(removal.price)}.`, ...removal.byHand.length === 0 ? [] : [`  by hand (it shares their files): ${removal.byHand.join(", ")}`], ...removal.registrations.length === 0 ? [] : [`  its way in: ${states(removal.registrations)}`], "  then `silo status` it removed, with where it went."].join("\n");
+		return [`Nothing of "${name}" silo can take out on its own${removal.kept.length > 0 && removal.price.declarations.length === 0 ? "" : `: ${priceText(removal.price)}`}.`, ...removal.byHand.length === 0 ? [] : [`  by hand (it shares their files): ${removal.byHand.join(", ")}`], ...kept === "" ? [] : [`  its other files: ${kept}`], ...removal.registrations.length === 0 ? [] : [`  its way in: ${states(removal.registrations)}`], "  then `silo status` it removed, with where it went."].join("\n");
 	}
 
 	return [
-		`Removed "${name}": ${priceText(removal.price)}.`,
+		// (what isn't code has no price: with no code of its own, none is said)
+		`Removed "${name}"${removal.price.declarations.length === 0 && removal.files.length > 0 ? "" : `: ${priceText(removal.price)}`}.`,
 		...removal.files.length === 0 ? [] : [`  deleted: ${removal.files.join(", ")}`],
 		...removal.manifests.length === 0 ? [] : [`  taken out of: ${removal.manifests.map((each) => each.file).join(", ")}`],
 		...removal.byHand.length === 0 ? [] : [`  to take out by hand (it shares their files): ${removal.byHand.join(", ")}`],
+		...kept === "" ? [] : [`  its other files, to take out by hand: ${kept}`],
 		...removal.registrations.length === 0 ? [] : [`  its way in, to take out by hand: ${states(removal.registrations)}`],
 		...removal.docs.length === 0 ? [] : [`  still named in: ${removal.docs.join(", ")}`],
 		`  the ledger has its tombstone${removal.restore === undefined ? "" : ` (silo restore "${name}")`}. Nothing's committed: review the change, then commit it.`
@@ -486,6 +529,25 @@ if (isEntry(import.meta)) {
 		assert.deepEqual(["src/a.ts", "test/a.test.mjs", "pkg/vendor/x.js", "a.d.ts", "src/a.css", "node_modules/x/i.js", "pkg/dist/i.js", ".refs/main/a.ts", ".github/x.mjs"].filter(isOwnedCode), ["src/a.ts", "test/a.test.mjs", "pkg/vendor/x.js", "a.d.ts"]);
 		// (a removed entry owns nothing; a test named is owned)
 		assert.deepEqual(drift(owning, { ...facts, "ways": [], "owned": { ...owned, "files": ["test/engine.test.ts"] } }).map((each) => each.message), ["test/engine.test.ts is owned by no feature"]);
+		// A removal's files that aren't code: those nothing staying names go — but a package.json, a migration, or one another owns.
+		const texts: Record<string, string> = { "rules.txt": "", ".github/workflows/weekly.yml": "run: node weekly (see weekly.yml)", ".github/workflows/ci.yml": "uses: ./.github/workflows/shared.yml", ".github/workflows/shared.yml": "run: cat rules.txt", "both.sql": "", "pkg/package.json": "{}", "pkg/migrations/0001.sql": "", "README.md": ".github/workflows/weekly.yml runs weekly", ".silo/features.json": "weekly.yml" };
+		const noCode: DeclarationGraph = { "fingerprints": new Map(), "nodes": () => [], "edges": () => [] };
+		const taking = (owned: string[]): Removal => removalOf({ "name": "weekly", "why": "gone", "paths": owned, "ledger": { "weekly": { "status": "active", "why": "w", "since": today, "what": "W.", "paths": owned }, "other": { "status": "active", "why": "w", "since": today, "what": "O.", "paths": ["both.sql"] } }, "features": new Map(), "graph": noCode, "tracked": Object.keys(texts), "textOf": (file) => texts[file], "head": "abc1234", "today": today });
+		const weekly = taking([".github/workflows/weekly.yml"]);
+
+		assert.deepEqual([weekly.nothing, weekly.files, weekly.docs, weekly.restore], [false, [".github/workflows/weekly.yml"], ["README.md"], "git checkout abc1234 -- .github/workflows/weekly.yml"]);
+		assert.equal(parseLedger(weekly.ledger)["weekly"].status, "removed");
+		assert.match(removalText("weekly", weekly), /^Removed "weekly"\.\n {2}deleted: \.github\/workflows\/weekly\.yml\n/u);
+		// (rules.txt is named by shared.yml, which ci.yml keeps: both stay)
+		const shared = taking([".github/workflows/shared.yml", "rules.txt", "both.sql", "pkg"]);
+
+		assert.deepEqual([shared.nothing, shared.files], [true, []]);
+		assert.deepEqual(shared.kept.toSorted((left, right) => left.file.localeCompare(right.file)), [{ "file": ".github/workflows/shared.yml", "by": [".github/workflows/ci.yml"] }, { "file": "pkg/migrations/0001.sql", "by": [] }, { "file": "pkg/package.json", "by": [] }, { "file": "rules.txt", "by": [".github/workflows/shared.yml"] }]);
+		assert.match(removalText("weekly", shared), /its other files: .*shared\.yml \(named in \.github\/workflows\/ci\.yml\)/u);
+		assert.equal(parseLedger(shared.ledger)["weekly"].status, "active");
+		// (and once shared.yml goes with it, so does what only it named)
+		delete texts[".github/workflows/ci.yml"];
+		assert.deepEqual(taking([".github/workflows/shared.yml", "rules.txt"]).files, ["rules.txt", ".github/workflows/shared.yml"]);
 		// Whose a file is: by its paths, a test by who names it, nobody's when removed or undeclared.
 		assert.deepEqual(ownersOf(tested, "src/engine/run.ts"), ["engine"]);
 		assert.deepEqual(ownersOf(tested, "src/engine/index.ts").toSorted(), ["both", "engine"]);
