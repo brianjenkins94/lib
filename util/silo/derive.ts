@@ -9,8 +9,6 @@
  *   byReach    what it reaches in the declaration graph, less what many ways in reach (ambient: setup, the hub,
  *              logging), joined by overlap (./test-features `joinAlike`); one reaching nothing of its own (a handler
  *              written inline, where it's registered) by its file
- *   byTests    the tests' clusters (features from tests), from CI's records of what each test ran (./ledger
- *              CI_RECORDS); each way in in the cluster its own reach overlaps most, none when it overlaps none
  *
  * And a join over any of them, `linkedBySubjects`: a hub request or subscription is joined to a way in whose
  * registration quotes its subject — the edge between realms the declaration graph doesn't have (an agent tool and the
@@ -32,10 +30,6 @@ export type Grouping = Map<string, string>;
 export const REACH_AMBIENT = 0.1;
 /** How alike two groups' reach must be to be one feature (their ways' average Jaccard similarity). */
 export const REACH_JOIN = 0.5;
-/** Of the tests, the share that makes a declaration ambient for `byTests` (as ./test-features' AMBIENT_SHARE). */
-export const TESTS_AMBIENT = 0.5;
-/** How alike two groups of tests must be to be one cluster (./test-features' JOIN). */
-export const TESTS_JOIN = 0.5;
 
 /** The file that registers a way in: its code's, else its manifest's. */
 export const registeredIn = (feature: Pick<Feature, "files">): string => feature.files.find((file) => !/(^|\/)package\.json$/u.test(file)) ?? feature.files[0] ?? "";
@@ -111,62 +105,6 @@ export function linkedBySubjects(grouping: Grouping, features: Iterable<Feature>
 	}
 
 	return new Map([...grouping].map(([key, group]) => [key, find(group)]));
-}
-
-/** What each test ran, in CI's records (`{ tests, reach: { file: { "name, name": [test…] } } }`): its declarations as
- *  node ids, by its index — a method by its class, a file's body as TOP. */
-export function testsFromRecords(text: string | undefined): Map<string, Set<string>> {
-	const tests = new Map<string, Set<string>>();
-
-	try {
-		const { reach: ran } = JSON.parse(text ?? "{}") as { "reach"?: Record<string, Record<string, number[]>> };
-
-		for (const [file, names] of Object.entries(ran ?? {})) {
-			for (const [name, indexes] of Object.entries(names)) {
-				for (const each of name.split(", ")) {
-					for (const index of indexes) {
-						const set = tests.get(String(index)) ?? new Set<string>();
-
-						set.add(`${file}#${each === "(top level)" ? TOP : each.split(".")[0]}`);
-						tests.set(String(index), set);
-					}
-				}
-			}
-		}
-	} catch {
-		// (not records: no tests)
-	}
-
-	return tests;
-}
-
-export function byTests(features: Iterable<Feature>, graph: DeclarationGraph, tests: ReadonlyMap<string, ReadonlySet<string>>): Grouping {
-	const all = [...features];
-	const own = lessAmbient(tests, TESTS_AMBIENT);
-	const clusters = joinAlike(own, TESTS_JOIN).map((cluster) => new Set(cluster.flatMap((test) => [...own.get(test)!])));
-	const reaches = ownReach(all, graph);
-	const grouping: Grouping = new Map();
-
-	for (const feature of all) {
-		const mine = [...reaches.get(feature.key)!];
-		let best = -1;
-		let most = 0;
-
-		for (const [index, code] of clusters.entries()) {
-			const shared = mine.filter((id) => code.has(id)).length;
-
-			if (shared > most) {
-				most = shared;
-				best = index;
-			}
-		}
-
-		if (best !== -1) {
-			grouping.set(feature.key, `tests ${best}`);
-		}
-	}
-
-	return grouping;
 }
 
 /** How near a grouping of the ways in is to the features the ledger declares (./ledger `declaredFeatures`). Of the features that own ways in: `whole`
@@ -310,16 +248,6 @@ if (isEntry(import.meta)) {
 		assert.equal(reached.get("open"), reached.get("save"));
 		assert.notEqual(reached.get("open"), reached.get("draw"));
 		assert.equal(reached.get("inline"), "src/c.ts");
-		// Tests: one ran open's code and save's, one draw's; the inline way in overlaps no cluster.
-		const tests = testsFromRecords(JSON.stringify({ "reach": { "a.ts": { "open, save": [0], "parse": [0] }, "b.ts": { "draw": [1], "paint": [1] } } }));
-
-		assert.deepEqual([...tests.get("0")!].toSorted(), ["a.ts#open", "a.ts#parse", "a.ts#save"]);
-		const tested = byTests(ways, graph, tests);
-
-		assert.equal(tested.get("open"), tested.get("save"));
-		assert.notEqual(tested.get("open"), tested.get("draw"));
-		assert.equal(tested.has("inline"), false);
-		assert.equal(testsFromRecords("not json").size, 0);
 		// Subjects: the agent tool in tools.ts quotes "files.read", served in workspace.ts — joined; "files.write", quoted
 		// only by what the tool calls, isn't.
 		const hub = (key: string, id: string, file: string, start: number, end: number): Feature => ({ ...way(key, file, []), "facet": key.startsWith("hub") ? "hub request" : "agent tool", "id": id, "ranges": [{ "file": file, "start": start, "end": end }] });

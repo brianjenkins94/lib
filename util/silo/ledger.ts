@@ -262,9 +262,6 @@ export function drift(ledger: Ledger, facts: DriftFacts): Drift[] {
 	return facts.owned === undefined ? found : [...found, ...ownership(ledger, facts.owned)];
 }
 
-/** Where CI's records of what its tests reached are (./derive `testsFromRecords`'s text). */
-export const CI_RECORDS = ".silo/evidence/ci/architecture.json";
-
 /** Whose a file is, by declaration: the live entries whose `paths` hold it, or that name it a test. One attribution of code
  *  to features, whatever runs show (decision 22): what's observed is compared with this, it doesn't stand in for it. */
 export function ownersOf(ledger: Ledger, file: string): string[] {
