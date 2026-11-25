@@ -356,6 +356,21 @@ export function withoutRemoved(ledger: Ledger, name: string, keys: string[], pat
 	return kept;
 }
 
+/** Whether a feature other than `name` owns a file (its `paths`, not removed or stopped), for what taking `name` out frees
+ *  (./cost `priceOf`). A feature the way in `key` is of isn't another: the rest of its code is priced by its ways in. */
+export function ownedByOthers(ledger: Ledger, name: string, key?: string): (file: string) => boolean {
+	const paths = Object.entries(ledger).filter(([other, entry]) => other !== name && entry.status !== "removed" && entry.status !== "stopped" && (key === undefined || (entry.key !== key && entry.ways?.includes(key) !== true))).flatMap(([, entry]) => entry.paths ?? []);
+	const known = new Map<string, boolean>();
+
+	return (file) => {
+		const owned = known.get(file) ?? paths.some((path) => holds(path, file));
+
+		known.set(file, owned);
+
+		return owned;
+	};
+}
+
 /** What taking a feature out is (`silo remove`, the editor's Remove): the files only it reaches, to delete, with those of
  *  its paths that aren't code (a workflow, a page, a migration) and nothing that stays names; its manifests without it;
  *  the ledger with its tombstone; and what's left by hand — its code in files it shares, its other files something that
@@ -415,7 +430,7 @@ function uncoded(candidates: string[], going: string[], tracked: string[], textO
 export function removalOf(input: { "name": string; "why": string; "key"?: string; "paths": string[]; "ledger": Ledger; "features": ReadonlyMap<string, Feature>; "graph": DeclarationGraph; "tracked": string[]; "textOf": (file: string) => string | undefined; "head": string; "today": string }): Removal {
 	const { name, key, paths, features, graph, tracked, textOf } = input;
 	const roots = [...features.values()].flatMap((feature) => feature.roots);
-	const price = priceOf(graph, roots, { "roots": key === undefined ? [] : features.get(key)?.roots ?? [], "paths": paths }, textOf);
+	const price = priceOf(graph, roots, { "roots": key === undefined ? [] : features.get(key)?.roots ?? [], "paths": paths }, textOf, ownedByOthers(input.ledger, name, key));
 	const whole = new Set(price.files);
 	// (its code in a file it shares: what deleting can't do alone)
 	const byHand = price.declarations.filter((id) => !whole.has(id.slice(0, id.indexOf("#"))));
@@ -529,6 +544,14 @@ if (isEntry(import.meta)) {
 		assert.deepEqual(["src/a.ts", "test/a.test.mjs", "pkg/vendor/x.js", "a.d.ts", "src/a.css", "node_modules/x/i.js", "pkg/dist/i.js", ".refs/main/a.ts", ".github/x.mjs"].filter(isOwnedCode), ["src/a.ts", "test/a.test.mjs", "pkg/vendor/x.js", "a.d.ts"]);
 		// (a removed entry owns nothing; a test named is owned)
 		assert.deepEqual(drift(owning, { ...facts, "ways": [], "owned": { ...owned, "files": ["test/engine.test.ts"] } }).map((each) => each.message), ["test/engine.test.ts is owned by no feature"]);
+		// What another feature owns isn't a removal's, whatever reaches it: not by the paths, nor by its reach — but the rest of
+		// the feature its way in is of is priced by its ways in.
+		const owners = ownedByOthers({ "Log": { "status": "active", "why": "w", "since": today, "paths": ["src/log.ts", "lib"] }, "Gone": { "status": "removed", "why": "w", "since": today, "paths": ["src/gone.ts"] }, "Mail": { "status": "active", "why": "w", "since": today, "ways": ["command|mail"], "paths": ["src/mail.ts"] } }, "Switch", "command|mail");
+
+		assert.deepEqual(["src/log.ts", "lib/a.ts", "src/gone.ts", "src/mail.ts", "src/free.ts"].map(owners), [true, true, false, false, false]);
+		const logged: DeclarationGraph = { "fingerprints": new Map([["src/switch.ts#on", "1"], ["src/log.ts#log", "2"], ["src/only.ts#one", "3"]]), "nodes": () => [], "edges": (id) => (id === "src/switch.ts#on" ? ["src/log.ts#log", "src/only.ts#one"] : []) };
+
+		assert.deepEqual(removalOf({ "name": "Switch", "why": "gone", "paths": ["src/switch.ts"], "ledger": { "Switch": { "status": "active", "why": "w", "since": today, "paths": ["src/switch.ts"] }, "Log": { "status": "active", "why": "w", "since": today, "paths": ["src/log.ts"] } }, "features": new Map(), "graph": logged, "tracked": ["src/switch.ts", "src/log.ts", "src/only.ts"], "textOf": () => "", "head": "abc1234", "today": today }).files, ["src/only.ts", "src/switch.ts"]);
 		// A removal's files that aren't code: those nothing staying names go — but a package.json, a migration, or one another owns.
 		const texts: Record<string, string> = { "rules.txt": "", ".github/workflows/weekly.yml": "run: node weekly (see weekly.yml)", ".github/workflows/ci.yml": "uses: ./.github/workflows/shared.yml", ".github/workflows/shared.yml": "run: cat rules.txt", "both.sql": "", "pkg/package.json": "{}", "pkg/migrations/0001.sql": "", "README.md": ".github/workflows/weekly.yml runs weekly", ".silo/features.json": "weekly.yml" };
 		const noCode: DeclarationGraph = { "fingerprints": new Map(), "nodes": () => [], "edges": () => [] };

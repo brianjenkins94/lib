@@ -6,6 +6,9 @@
  *
  * An entry is the feature a ledger entry names: a way in's roots (`./features`), and its `paths` (files or folders, from
  * the root) — its own code, priced whether anything else reaches it or not, and never entered on the way to the rest.
+ *
+ * What other features own (`others`, by file: ./ledger `ownedByOthers`) is theirs, with what it reaches: not every
+ * feature's code starts at a way in (an API's routes don't), and a file two own isn't one's to free.
  */
 
 import type { DeclarationGraph } from "./graph";
@@ -50,19 +53,21 @@ function reachAvoiding(graph: DeclarationGraph, roots: Iterable<string>, blocked
 
 /**
  * The price of `entry` (its ways in's roots, its paths) in a program whose ways in start at `roots` (every feature's,
- * the entry's own among them). `textOf`: a file's text, for counting lines.
+ * the entry's own among them). `textOf`: a file's text, for counting lines. `others`: whether another feature owns a file.
  */
-export function priceOf(graph: DeclarationGraph, roots: Iterable<string>, entry: { "roots"?: string[]; "paths"?: string[] }, textOf?: (file: string) => string | undefined): Price {
+export function priceOf(graph: DeclarationGraph, roots: Iterable<string>, entry: { "roots"?: string[]; "paths"?: string[] }, textOf?: (file: string) => string | undefined, others: (file: string) => boolean = () => false): Price {
 	const paths = entry.paths ?? [];
-	const own = new Set([...entry.roots ?? [], ...[...graph.fingerprints.keys()].filter((id) => inside(fileOf(id), paths))]);
-	const all = [...roots];
+	const ids = [...graph.fingerprints.keys()];
+	const mine = (file: string): boolean => inside(file, paths) && !others(file);
+	const own = new Set([...entry.roots ?? [], ...ids.filter((id) => mine(fileOf(id)))]);
+	const all = [...roots, ...ids.filter((id) => others(fileOf(id)))];
 	const withIt = reachAvoiding(graph, [...all, ...own], () => false);
-	const without = reachAvoiding(graph, all, (id) => own.has(id) || inside(fileOf(id), paths));
+	const without = reachAvoiding(graph, all, (id) => own.has(id) || mine(fileOf(id)));
 	const freed = [...new Set([...withIt, ...[...own].filter((id) => graph.fingerprints.has(id))])].filter((id) => !without.has(id)).toSorted();
 	const freedSet = new Set(freed);
 	const byFile = new Map<string, string[]>();
 
-	for (const id of graph.fingerprints.keys()) {
+	for (const id of ids) {
 		byFile.set(fileOf(id), [...byFile.get(fileOf(id)) ?? [], id]);
 	}
 
@@ -129,6 +134,14 @@ if (isEntry(import.meta)) {
 		assert.deepEqual(priceOf(graph, roots, { "paths": ["shared.ts"] }).declarations, ["shared.ts#util"]);
 		assert.deepEqual(priceOf(graph, roots, { "paths": ["dead.ts"] }).declarations, ["dead.ts#unused"]);
 		assert.deepEqual(priceOf(graph, roots, { "roots": ["b.ts#other"] }).declarations, ["b.ts#other"]);
+		// What another owns is its own, with what it reaches, no way in of its own or not: by its paths, or the entry's own reach.
+		assert.deepEqual(priceOf(graph, roots, { "paths": ["shared.ts", "only-a.ts"] }, undefined, (file) => file === "shared.ts").files, ["only-a.ts"]);
+		assert.deepEqual(priceOf(graph, roots, { "roots": ["a.ts#main"] }, undefined, (file) => file === "only-a.ts").declarations, ["a.ts#main"]);
+		edges["dead.ts#unused"] = ["only-a.ts#deep"];
+		assert.deepEqual(priceOf(graph, roots, { "roots": ["a.ts#main"] }, undefined, (file) => file === "dead.ts").declarations, ["a.ts#main", "only-a.ts#helper"]);
+		// (but what it reaches of the entry's own goes, as before: by its paths)
+		assert.deepEqual(priceOf(graph, roots, { "paths": ["only-a.ts"] }, undefined, (file) => file === "dead.ts").declarations, ["only-a.ts#deep", "only-a.ts#helper"]);
+		edges["dead.ts#unused"] = [];
 		// Lines, given the text.
 		assert.equal(priceOf(graph, roots, { "paths": ["only-a.ts"] }, () => "function helper() {\n\treturn deep();\n}\nfunction deep() {\n}\n").lines, 4);
 		assert.equal(priceText(priceOf(graph, roots, { "roots": ["a.ts#main"] })), "frees 3 declarations, 2 files whole — 0.0 KB");
