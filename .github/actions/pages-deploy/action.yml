@@ -19,11 +19,20 @@
     "steps": [
       {
         "uses": "actions/upload-pages-artifact@v3",
-        "with": { "path": "${{ inputs.path }}" }
+        # Named by the attempt: a rerun's upload beside the first attempt's, under one name, is refused as two.
+        "with": { "path": "${{ inputs.path }}", "name": "github-pages-${{ github.run_attempt }}" }
+      },
+      {
+        # GitHub's list of a run's artifacts lags the upload that ended just before, and deploy-pages asks it once ("No
+        # artifacts named … were found"): wait until it's there, three answers in a row, in case they differ for a moment.
+        "shell": "bash",
+        "env": { "GH_TOKEN": "${{ github.token }}", "NAME": "github-pages-${{ github.run_attempt }}" },
+        "run": "seen=0\nfor try in $(seq 1 60); do\n  if [ \"$(gh api \"repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/artifacts?name=$NAME\" --jq .total_count || echo 0)\" = 1 ]; then seen=$((seen + 1)); else seen=0; fi\n  if [ \"$seen\" -ge 3 ]; then echo \"$NAME listed after $try tries\"; exit 0; fi\n  sleep 2\ndone\necho \"::error::$NAME isn't listed 2 minutes after its upload\"\nexit 1"
       },
       {
         "id": "deployment",
-        "uses": "actions/deploy-pages@v4"
+        "uses": "actions/deploy-pages@v4",
+        "with": { "artifact_name": "github-pages-${{ github.run_attempt }}" }
       }
     ]
   }
