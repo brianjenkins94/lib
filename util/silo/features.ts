@@ -205,7 +205,7 @@ export function waysInManifest(text: string): WayIn[] {
 
 /** `text` (a manifest) without what declares the way in `facet` `id` — a command with its menus and keybindings, a
  *  view, a setting, a debugger — indented as it was; undefined when it declares none of it (or isn't JSON). What
- *  `silo remove` takes out of a manifest. */
+ *  removal (`removalOf`) takes out of a manifest. */
 export function withoutWayIn(text: string, facet: string, id: string): string | undefined {
 	let manifest: Record<string, any>;
 

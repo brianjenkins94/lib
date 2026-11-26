@@ -31,7 +31,7 @@ import type { Price } from "./cost";
 import type { Feature } from "./features";
 import type { DeclarationGraph } from "./graph";
 import { isEntry } from "@brianjenkins94/util/env";
-import { priceOf, priceText } from "./cost";
+import { priceOf } from "./cost";
 import { withoutWayIn } from "./features";
 import { includeByDefault } from "./history";
 import { ledgerPath, unreadable, VERSIONS } from "./layout";
@@ -127,7 +127,7 @@ function ownership(ledger: Ledger, owned: NonNullable<DriftFacts["owned"]>): Dri
 			const unshown = owners.filter((name) => !ran.some((test) => (ledger[name]!.tests ?? []).some((path) => holds(path, test))));
 
 			if (unshown.length > 0) {
-				found.push({ "check": "owned twice", "entry": owners[0], "message": `${file} is owned by ${owners.map((name) => `"${name}"`).join(" and ")}${ran.length === 0 ? ", and no test's coverage shows it run" : `, and no test of ${unshown.map((name) => `"${name}"`).join(" or ")} ran it`}`, "code": "split it, so each part is one feature's", "decision": "take it out of the `paths` of all but one, or show each one's tests running it in the last run's reach (`silo observed <reach>`)" });
+				found.push({ "check": "owned twice", "entry": owners[0], "message": `${file} is owned by ${owners.map((name) => `"${name}"`).join(" and ")}${ran.length === 0 ? ", and no test's coverage shows it run" : `, and no test of ${unshown.map((name) => `"${name}"`).join(" or ")} ran it`}`, "code": "split it, so each part is one feature's", "decision": "take it out of the `paths` of all but one, or show each one's tests running it in the last run's reach (`.silo/last-run/reach.json`)" });
 			}
 		}
 	}
@@ -259,7 +259,7 @@ export function drift(ledger: Ledger, facts: DriftFacts): Drift[] {
 		}
 
 		if (entry.status === "active" && entry.until !== undefined && entry.until < facts.today) {
-			found.push({ "check": "lease expired", "entry": name, "message": `"${name}" was kept until ${entry.until} (${entry.why})`, "code": "remove it (`silo remove`)", "decision": "keep it a while longer (a later `until`), or for good (no `until`), with why" });
+			found.push({ "check": "lease expired", "entry": name, "message": `"${name}" was kept until ${entry.until} (${entry.why})`, "code": "remove it, then `silo status` it removed", "decision": "keep it a while longer (a later `until`), or for good (no `until`), with why" });
 		}
 
 		if (entry.status !== "removed" && there.length === 0 && (entry.key !== undefined || (entry.paths ?? []).length > 0)) {
@@ -393,7 +393,7 @@ export function ownedByOthers(ledger: Ledger, name: string, key?: string): (file
 	};
 }
 
-/** What taking a feature out is (`silo remove`, the editor's Remove): the files only it reaches, to delete, with those of
+/** What taking a feature out is (what the editor shows on a way in, for a person to carry out): the files only it reaches, to delete, with those of
  *  its paths that aren't code (a workflow, a page, a migration) and nothing that stays names; its manifests without it;
  *  the ledger with its tombstone; and what's left by hand — its code in files it shares, its other files something that
  *  stays names (`kept`, and what names each: none for a package.json or a migration, never deleted), where its way in is stated in code,
@@ -478,28 +478,6 @@ export function removalOf(input: { "name": string; "why": string; "key"?: string
 	const ledger = nothing ? ledgerText(input.ledger) : ledgerText(withStatus(withoutRemoved(input.ledger, name, key === undefined ? [] : [key], [...paths, ...files], input.today), name, "removed", input.why || entry?.why || "removed", input.today, { ...key === undefined ? {} : { "key": key }, "paths": [...new Set([...paths, ...files])], ...restore === undefined ? {} : { "restore": restore } }));
 
 	return { "nothing": nothing, "price": price, "files": files, "manifests": manifests, "byHand": byHand, "kept": others.kept, "registrations": registrations, "docs": docs, "ledger": ledger, ...restore === undefined ? {} : { "restore": restore } };
-}
-
-/** A removal, said: what was taken out and what's left by hand (`silo remove`'s report, the editor's). */
-export function removalText(name: string, removal: Removal): string {
-	const kept = removal.kept.map(({ file, by }) => `${file} (${by.length === 0 ? file.endsWith("package.json") ? "a manifest" : "a migration" : `named in ${by.join(", ")}`})`).join(", ");
-	const states = (files: string[]): string => `where ${files.join(", ")} ${files.length === 1 ? "states" : "state"} it`;
-
-	if (removal.nothing) {
-		return [`Nothing of "${name}" silo can take out on its own${removal.kept.length > 0 && removal.price.declarations.length === 0 ? "" : `: ${priceText(removal.price)}`}.`, ...removal.byHand.length === 0 ? [] : [`  by hand (it shares their files): ${removal.byHand.join(", ")}`], ...kept === "" ? [] : [`  its other files: ${kept}`], ...removal.registrations.length === 0 ? [] : [`  its way in: ${states(removal.registrations)}`], "  then `silo status` it removed, with where it went."].join("\n");
-	}
-
-	return [
-		// (what isn't code has no price: with no code of its own, none is said)
-		`Removed "${name}"${removal.price.declarations.length === 0 && removal.files.length > 0 ? "" : `: ${priceText(removal.price)}`}.`,
-		...removal.files.length === 0 ? [] : [`  deleted: ${removal.files.join(", ")}`],
-		...removal.manifests.length === 0 ? [] : [`  taken out of: ${removal.manifests.map((each) => each.file).join(", ")}`],
-		...removal.byHand.length === 0 ? [] : [`  to take out by hand (it shares their files): ${removal.byHand.join(", ")}`],
-		...kept === "" ? [] : [`  its other files, to take out by hand: ${kept}`],
-		...removal.registrations.length === 0 ? [] : [`  its way in, to take out by hand: ${states(removal.registrations)}`],
-		...removal.docs.length === 0 ? [] : [`  still named in: ${removal.docs.join(", ")}`],
-		`  the ledger has its tombstone${removal.restore === undefined ? "" : ` (silo restore "${name}")`}. Nothing's committed: review the change, then commit it.`
-	].join("\n");
 }
 
 if (isEntry(import.meta)) {
@@ -589,13 +567,11 @@ if (isEntry(import.meta)) {
 
 		assert.deepEqual([weekly.nothing, weekly.files, weekly.docs, weekly.restore], [false, [".github/workflows/weekly.yml"], ["README.md"], "git checkout abc1234 -- .github/workflows/weekly.yml"]);
 		assert.equal(parseLedger(weekly.ledger)["weekly"].status, "removed");
-		assert.match(removalText("weekly", weekly), /^Removed "weekly"\.\n {2}deleted: \.github\/workflows\/weekly\.yml\n/u);
 		// (rules.txt is named by shared.yml, which ci.yml keeps: both stay)
 		const shared = taking([".github/workflows/shared.yml", "rules.txt", "both.sql", "pkg"]);
 
 		assert.deepEqual([shared.nothing, shared.files], [true, []]);
 		assert.deepEqual(shared.kept.toSorted((left, right) => left.file.localeCompare(right.file)), [{ "file": ".github/workflows/shared.yml", "by": [".github/workflows/ci.yml"] }, { "file": "pkg/migrations/0001.sql", "by": [] }, { "file": "pkg/package.json", "by": [] }, { "file": "rules.txt", "by": [".github/workflows/shared.yml"] }]);
-		assert.match(removalText("weekly", shared), /its other files: .*shared\.yml \(named in \.github\/workflows\/ci\.yml\)/u);
 		assert.equal(parseLedger(shared.ledger)["weekly"].status, "active");
 		// (and once shared.yml goes with it, so does what only it named)
 		delete texts[".github/workflows/ci.yml"];

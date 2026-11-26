@@ -408,7 +408,7 @@ export async function typescriptAnalyzer(options: TypeScriptAnalyzerOptions): Pr
 if (isEntry(import.meta)) {
 	void (async function() {
 		const assert: typeof import("node:assert").strict = (await import("node:assert")).strict;
-		const { replay } = await import("./history");
+		const { Replayer } = await import("./history");
 
 		// The TypeScript ≥ 7.1 lib tests with (its dev dependency `typescript-7`; lib's own `typescript` is older).
 		const modules = await typescriptModules(import.meta.dirname, "typescript-7");
@@ -448,12 +448,14 @@ if (isEntry(import.meta)) {
 			const steps = [];
 
 			try {
-				for await (const step of replay([
+				const replayer = new Replayer(async (oid) => blobs.get(oid)!, { "analyzer": analyzer });
+
+				for (const each of [
 					snapshot("2026-10-01", { "x/extension.ts": extension, "x/runner.ts": runner("\"a\""), "x/shout.ts": "export const shout = (s: string) => s + \"!\";\n", "x/other.ts": "export const other = () => 1;\n" }),
 					snapshot("2026-10-02", { "x/extension.ts": extension, "x/runner.ts": runner("\"a\""), "x/shout.ts": "export const shout = (s: string) => s + \"?\";\n", "x/other.ts": "export const other = () => 1;\n" }),
 					snapshot("2026-10-03", { "x/extension.ts": extension, "x/runner.ts": runner("\"a\""), "x/shout.ts": "export const shout = (s: string) => s + \"?\";\n", "x/other.ts": "export const other = () => 2;\n" })
-				], async (oid) => blobs.get(oid)!, { "analyzer": analyzer })) {
-					steps.push(step);
+				]) {
+					steps.push(await replayer.step(each));
 				}
 			} finally {
 				analyzer.close?.();
