@@ -116,8 +116,12 @@ export function runsPath(user: string, scope: RunScope = "shared"): string {
 	return `${scope === "local" ? LOCAL_DIR : SILO_DIR}/runs/${userFile(user)}.jsonl`;
 }
 
-/** Where `user`'s runs in an environment (`environmentKey`, ./evidence) keep what they observed of `file`. */
+/** Where `user`'s runs in an environment (`environmentKey`, ./evidence) keep what they observed of `file`: committed,
+ *  what was seen (./evidence `stableOf`), so a run that behaves as the ones before changes nothing. */
 export const evidencePathFor = (user: string, environmentKey: string, file: string): string => `${SILO_DIR}/evidence/${userFile(user)}/${environmentKey}/${file}.jsonl`;
+
+/** The same, on this machine only: every count, weight and run behind it, which change with each run. */
+export const localEvidencePathFor = (user: string, environmentKey: string, file: string): string => `${LOCAL_DIR}/evidence/${userFile(user)}/${environmentKey}/${file}.jsonl`;
 
 /** Where `user`'s annotations of `collection` (notes, …) on `file` go. */
 export const annotationsPath = (collection: string, user: string, file: string): string => `${SILO_DIR}/${slug(collection) ?? "annotations"}/${userFile(user)}/${file}.jsonl`;

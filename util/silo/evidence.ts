@@ -20,7 +20,7 @@
  */
 
 import type { WsConsumer } from "./detect.js";
-import { evidencePathFor, readable, slug, VERSIONS } from "./layout.js";
+import { evidencePathFor, localEvidencePathFor, readable, slug, VERSIONS } from "./layout.js";
 import { isEntry } from "@brianjenkins94/util/env";
 
 /** Where a run ran — a coarse class detected automatically, plus a name its user chose (never a fingerprint). */
@@ -607,9 +607,15 @@ export const HALF_LIFE_RUNS = 20;
 /** Below this many faded runs, a span no run reports any more (its code changed or went) is dropped. */
 const FORGOTTEN = 0.05;
 
-/** Where `user`'s runs in `environment` keep what they observed of `file` (repo-relative), from the repo root. */
+/** Where `user`'s runs in `environment` keep what they observed of `file` (repo-relative), from the repo root:
+ *  committed, what was seen (`stableOf`). */
 export function evidencePath(user: string, environment: Environment, file: string): string {
 	return evidencePathFor(user, environmentKey(environment), file);
+}
+
+/** The same on this machine (`.silo/local/`): every count, weight and run behind it (`Observation`). */
+export function localEvidencePath(user: string, environment: Environment, file: string): string {
+	return localEvidencePathFor(user, environmentKey(environment), file);
 }
 
 /** The observations in an evidence file — junk skipped, and a span's duplicate lines (a branch merge brings both
@@ -747,6 +753,81 @@ export function foldBranches(known: Observation[], branches: { "span": string; "
 	}));
 }
 
+/** What's committed of what was observed at a span (the user, 2026-11-26: "stable lines"): what was seen, not how
+ *  often or when — so a run that behaves as the ones before it changes no committed line, and one that doesn't (an arm
+ *  taken for the first time, a new type, a statement that stopped running) is the diff. The counts, weights and runs
+ *  behind it stay on the machine (`localEvidencePath`). `runs` is how many runs it rests on, as the floor of RUN_FLOORS
+ *  it has reached, so a quick fix's threshold can be held to someone else's evidence too. Time isn't committed: no two
+ *  runs' are the same. */
+export type StableObservation = { "span": string; "key": "bablr1"; "runs": number } & (
+	| { "kind": "reached"; "ran": boolean }
+	| { "kind": "value"; "tags": string[]; "nullish": boolean }
+	| { "kind": "branch"; "taken": number[] }
+	| { "kind": "purity"; "impure": (keyof PurityCounts)[]; "first"?: PurityObservation["first"]; "unseen"?: string }
+);
+
+/** The runs a stable line can say it rests on: each the floor of a range, so the line changes only as one is crossed. */
+export const RUN_FLOORS = [1, 3, 10, 30, 100];
+
+const floorOf = (runs: number): number => RUN_FLOORS.findLast((floor) => runs >= floor) ?? 0;
+
+/** What's committed of `observations` (`StableObservation`), sorted as `evidenceText` sorts. */
+export function stableOf(observations: Observation[]): StableObservation[] {
+	return observations.flatMap((observation): StableObservation[] => {
+		const base = { "span": observation.span, "key": observation.key, "runs": floorOf(Math.max(observation.ever, Math.round(observation.runs))) } as const;
+
+		switch (observation.kind) {
+			case "reached":
+				return [{ ...base, "kind": "reached", "ran": observation.ever > 0 }];
+
+			case "value":
+				return [{ ...base, "kind": "value", "tags": Object.keys(observation.tags).filter((tag) => (observation.tags[tag] ?? 0) > 0).sort(), "nullish": observation.nullish > 0 }];
+
+			case "branch":
+				return [{ ...base, "kind": "branch", "taken": observation.arms.flatMap((count, arm) => (count > 0 ? [arm] : [])) }];
+
+			case "purity":
+				return [{ ...base, "kind": "purity", "impure": (["write", "effect", "nondeterministic", "unwatched"] as const).filter((kind) => observation[kind] > 0), ...observation.first === undefined ? {} : { "first": observation.first }, ...observation.unseen === undefined ? {} : { "unseen": observation.unseen } }];
+
+			default:
+				return [];
+		}
+	});
+}
+
+const STABLE_KINDS = new Set<string>(["reached", "value", "branch", "purity"]);
+
+/** The stable observations in a committed evidence file. A line that isn't one (an earlier silo's, with its counts and
+ *  `lastAt`; junk) is skipped. */
+export function parseStable(text: string): StableObservation[] {
+	return text.split("\n").flatMap((line) => {
+		try {
+			const value = JSON.parse(line) as Partial<StableObservation> & { "lastAt"?: unknown };
+
+			return typeof value.span === "string" && STABLE_KINDS.has(value.kind as string) && typeof value.runs === "number" && value.lastAt === undefined ? [value as StableObservation] : [];
+		} catch {
+			return [];
+		}
+	});
+}
+
+/** A committed evidence file's text: one stable line per span, sorted by kind and span. Given the file's text before
+ *  (`kept`), its lines of a kind this silo doesn't know stay, as `evidenceText` keeps them; lines from before stable
+ *  lines (with `lastAt`) go: they're the machine's now. */
+export function stableText(stable: StableObservation[], kept = ""): string {
+	const unknown = kept.split("\n").flatMap((line) => {
+		try {
+			const value = JSON.parse(line) as { "kind"?: unknown; "span"?: unknown };
+
+			return typeof value.span === "string" && typeof value.kind === "string" && !KINDS.has(value.kind) ? [{ "order": value.kind + " " + value.span, "line": line }] : [];
+		} catch {
+			return [];
+		}
+	});
+
+	return [...stable.map((each) => ({ "order": each.kind + " " + each.span, "line": JSON.stringify(each) })), ...unknown].sort((a, b) => a.order.localeCompare(b.order)).map(({ line }) => line + "\n").join("");
+}
+
 /** One function's run, as a run reports it: its calls, how many were impure each way, and the first impurity. */
 export interface PurityReport extends PurityCounts { "span": string; "calls": number; "first"?: PurityObservation["first"]; "unseen"?: string }
 
@@ -872,6 +953,26 @@ if (isEntry(import.meta)) {
 		assert.deepEqual([twice[0]!.calls, twice[0]!.write, twice[0]!.first?.what, twice[0]!.ever], [6, 2, "total", 2]);
 		assert.ok(Math.abs(twice[0]!.w - (3 * 2 ** (-1 / HALF_LIFE_RUNS) + 3)) < 1e-9);
 		assert.deepEqual(parseEvidence(evidenceText(twice)), twice, "a purity line reads back");
+
+		// Stable lines: a run that behaves as the ones before changes no committed line; one that doesn't is the diff.
+		const ran = (id: number) => ({ "id": `r${String(id)}`, "at": `2026-11-26T00:00:0${String(id)}.000Z` });
+		const behaving = (known: Observation[], id: number, arms: number[]): Observation[] => foldBranches(foldValues(foldReached(known, [{ "span": "s", "count": 2 }, { "span": "dead", "count": 0 }], ran(id)), [{ "span": "v", "seen": 4, "nullish": 0, "tags": { "string": 4 } }], ran(id)), [{ "span": "b", "arms": arms }], ran(id));
+		const fourth = [1, 2, 3, 4].reduce<Observation[]>((known, id) => behaving(known, id, [0, 3]), []);
+		const fifth = behaving(fourth, 5, [0, 3]);
+
+		assert.notEqual(evidenceText(fifth), evidenceText(fourth), "the machine's counts move with every run");
+		assert.equal(stableText(stableOf(fifth)), stableText(stableOf(fourth)), "what's committed doesn't, when it behaves the same");
+		assert.deepEqual(stableOf(fourth).map((each) => [each.kind, each.span, each.runs]), [["reached", "s", 3], ["reached", "dead", 3], ["value", "v", 3], ["branch", "b", 3]], "four runs rest on the floor of 3");
+		assert.deepEqual(stableOf(fourth).find((each) => each.span === "dead"), { "span": "dead", "key": "bablr1", "runs": 3, "kind": "reached", "ran": false });
+
+		const otherArm = behaving(fifth, 6, [1, 3]);
+		const changed = stableText(stableOf(otherArm)).split("\n").filter((line) => !stableText(stableOf(fifth)).split("\n").includes(line));
+
+		assert.deepEqual(changed, ['{"span":"b","key":"bablr1","runs":3,"kind":"branch","taken":[0,1]}'], "an arm taken for the first time: that line, and only it");
+		assert.deepEqual(parseStable(stableText(stableOf(otherArm))), stableOf(otherArm).toSorted((one, other) => (one.kind + " " + one.span).localeCompare(other.kind + " " + other.span)), "stable lines read back");
+		assert.deepEqual(parseStable(evidenceText(otherArm)), [], "a line from before stable lines (with lastAt) isn't one");
+		assert.equal(stableOf(foldTimes([], [{ "span": "f", "selfMs": 3, "totalMs": 5, "profiledMs": 100, "callers": {}, "callees": {} }], ran(1))).length, 0, "time isn't committed");
+		assert.deepEqual([0, 1, 2, 3, 9, 10, 99, 100, 5000].map(floorOf), [0, 1, 1, 3, 3, 10, 30, 100, 100]);
 		assert.equal((foldPurity(twice, [], { "id": "r3", "at": "2026-10-03T00:00:00.000Z" })[0] as PurityObservation).calls, 6, "a function that didn't run keeps its counts, fading");
 
 		// A function's time in the runs that profiled it: its own and with what it called add up, faded, against how long
