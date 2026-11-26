@@ -811,21 +811,38 @@ export function parseStable(text: string): StableObservation[] {
 	});
 }
 
+/** The fields a stable line of this silo's writes: any other, on a line it rewrites, is kept. */
+const STABLE_FIELDS = new Set(["span", "key", "runs", "kind", "ran", "tags", "nullish", "taken", "impure", "first", "unseen"]);
+
 /** A committed evidence file's text: one stable line per span, sorted by kind and span. Given the file's text before
- *  (`kept`), its lines of a kind this silo doesn't know stay, as `evidenceText` keeps them; lines from before stable
- *  lines (with `lastAt`) go: they're the machine's now. */
+ *  (`kept`), what this silo doesn't know stays: a line of a kind it doesn't know, as `evidenceText` keeps one, and a
+ *  field it doesn't write on a line it rewrites. Lines from before stable lines (with `lastAt`) go: they're the
+ *  machine's now. */
 export function stableText(stable: StableObservation[], kept = ""): string {
-	const unknown = kept.split("\n").flatMap((line) => {
+	const unknown: { "order": string; "line": string }[] = [];
+	const extra = new Map<string, Record<string, unknown>>();
+
+	for (const line of kept.split("\n")) {
 		try {
-			const value = JSON.parse(line) as { "kind"?: unknown; "span"?: unknown };
+			const value = JSON.parse(line) as Record<string, unknown>;
 
-			return typeof value.span === "string" && typeof value.kind === "string" && !KINDS.has(value.kind) ? [{ "order": value.kind + " " + value.span, "line": line }] : [];
-		} catch {
-			return [];
-		}
-	});
+			if (typeof value["span"] !== "string" || typeof value["kind"] !== "string") {
+				continue;
+			}
 
-	return [...stable.map((each) => ({ "order": each.kind + " " + each.span, "line": JSON.stringify(each) })), ...unknown].sort((a, b) => a.order.localeCompare(b.order)).map(({ line }) => line + "\n").join("");
+			if (!KINDS.has(value["kind"])) {
+				unknown.push({ "order": value["kind"] + " " + value["span"], "line": line });
+			} else if (value["lastAt"] === undefined) {
+				const fields = Object.fromEntries(Object.entries(value).filter(([field]) => !STABLE_FIELDS.has(field)));
+
+				if (Object.keys(fields).length > 0) {
+					extra.set(value["kind"] + " " + value["span"], fields);
+				}
+			}
+		} catch { /* not a line of ours */ }
+	}
+
+	return [...stable.map((each) => ({ "order": each.kind + " " + each.span, "line": JSON.stringify({ ...each, ...extra.get(each.kind + " " + each.span) }) })), ...unknown].sort((a, b) => a.order.localeCompare(b.order)).map(({ line }) => line + "\n").join("");
 }
 
 /** One function's run, as a run reports it: its calls, how many were impure each way, and the first impurity. */
@@ -971,6 +988,10 @@ if (isEntry(import.meta)) {
 		assert.deepEqual(changed, ['{"span":"b","key":"bablr1","runs":3,"kind":"branch","taken":[0,1]}'], "an arm taken for the first time: that line, and only it");
 		assert.deepEqual(parseStable(stableText(stableOf(otherArm))), stableOf(otherArm).toSorted((one, other) => (one.kind + " " + one.span).localeCompare(other.kind + " " + other.span)), "stable lines read back");
 		assert.deepEqual(parseStable(evidenceText(otherArm)), [], "a line from before stable lines (with lastAt) isn't one");
+
+		const others = '{"span":"b","key":"bablr1","runs":3,"kind":"branch","taken":[0,1],"why":"a later silo\'s"}\n{"span":"x","key":"bablr1","runs":1,"kind":"shape","note":"kept"}\n';
+
+		assert.deepEqual(stableText(stableOf(otherArm), others).split("\n").filter((line) => line.includes('"why"') || line.includes('"shape"')), ['{"span":"x","key":"bablr1","runs":1,"kind":"shape","note":"kept"}', '{"span":"b","key":"bablr1","runs":3,"kind":"branch","taken":[0,1],"why":"a later silo\'s"}'].toSorted((one, other) => (JSON.parse(one).kind + " " + JSON.parse(one).span).localeCompare(JSON.parse(other).kind + " " + JSON.parse(other).span)), "what it doesn't know stays: a kind, and a field on a line it rewrites");
 		assert.equal(stableOf(foldTimes([], [{ "span": "f", "selfMs": 3, "totalMs": 5, "profiledMs": 100, "callers": {}, "callees": {} }], ran(1))).length, 0, "time isn't committed");
 		assert.deepEqual([0, 1, 2, 3, 9, 10, 99, 100, 5000].map(floorOf), [0, 1, 1, 3, 3, 10, 30, 100, 100]);
 		assert.equal((foldPurity(twice, [], { "id": "r3", "at": "2026-10-03T00:00:00.000Z" })[0] as PurityObservation).calls, 6, "a function that didn't run keeps its counts, fading");
