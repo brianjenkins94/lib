@@ -18,9 +18,12 @@ import type { DeclarationGraph } from "./graph";
 import type { TestStanding } from "./outcomes";
 import { isEntry } from "@brianjenkins94/util/env";
 import { digest, reach, TOP } from "./graph";
+import { readable, VERSIONS } from "./layout";
 
 /** A pass (or a failure) made where the code was written, for CI to take. */
 export interface Vouch {
+	/** Its shape's (./layout `VERSIONS`): none, from before there was one, is the first. */
+	"version"?: number;
 	/** The test: its file and titles, joined by ` › ` (`testId`). */
 	"test": string;
 	"outcome": "pass" | "fail";
@@ -39,16 +42,21 @@ export interface Vouch {
 /** A test, by its file and titles. */
 export const testId = (file: string, titles: readonly string[]): string => [file, ...titles].join(" › ");
 
-/** `vouches`, a line each, as a `.silo/vouches/<user>.jsonl` holds them. */
-export const vouchesText = (vouches: readonly Vouch[]): string => vouches.map((vouch) => JSON.stringify(vouch) + "\n").join("");
+/** `vouches`, a line each, as a `.silo/vouches/<user>.jsonl` holds them, each with its version. Given the file's text
+ *  before (`kept`), its lines this silo can't read (another version, or not a vouch) stay, first, as they were. */
+export function vouchesText(vouches: readonly Vouch[], kept = ""): string {
+	const unknown = kept.split("\n").filter((line) => line.trim() !== "" && parseVouches(line).length === 0).map((line) => line + "\n");
 
-/** The vouches in a `.silo/vouches/<user>.jsonl`: a line each, one that doesn't parse left out. */
+	return unknown.join("") + vouches.map((vouch) => JSON.stringify({ "version": VERSIONS.vouches, ...vouch }) + "\n").join("");
+}
+
+/** The vouches in a `.silo/vouches/<user>.jsonl`: a line each, one that doesn't parse, or of another version, left out. */
 export function parseVouches(text: string): Vouch[] {
 	return text.split("\n").flatMap((line) => {
 		try {
 			const vouch = JSON.parse(line) as Vouch;
 
-			return typeof vouch.test === "string" && typeof vouch.reached === "object" ? [vouch] : [];
+			return typeof vouch.test === "string" && typeof vouch.reached === "object" && readable(vouch, VERSIONS.vouches) ? [vouch] : [];
 		} catch {
 			return [];
 		}
@@ -256,7 +264,11 @@ if (isEntry(import.meta)) {
 		assert.deepEqual(why(selectTests({ ...base, "full": true })), ["run full run", "run full run"]);
 		assert.deepEqual(filesToRun(selectTests(base)), ["add.test.mjs"]);
 		// A vouch file's lines, back.
-		assert.deepEqual(parseVouches(vouchesText([vouch(after)]) + "not json\n"), [vouch(after)].map((each) => ({ ...each, "at": each.at })));
+		assert.deepEqual(parseVouches(vouchesText([vouch(after)]) + "not json\n"), [{ "version": 1, ...vouch(after) }]);
+		// Another version's line is left out of what's read, and kept in what's written back.
+		const newer = JSON.stringify({ ...vouch(after), "version": 2 });
+		assert.deepEqual(parseVouches(newer), []);
+		assert.equal(vouchesText([vouch(after)], `${newer}\n${vouchesText([vouch(before)])}`), `${newer}\n${vouchesText([vouch(after)])}`);
 		console.log("select: ok");
 	})();
 }

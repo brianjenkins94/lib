@@ -20,7 +20,7 @@
  */
 
 import type { WsConsumer } from "./detect.js";
-import { evidencePathFor, slug } from "./layout.js";
+import { evidencePathFor, readable, slug, VERSIONS } from "./layout.js";
 import { isEntry } from "@brianjenkins94/util/env";
 
 /** Where a run ran — a coarse class detected automatically, plus a name its user chose (never a fingerprint). */
@@ -42,6 +42,8 @@ export interface Environment {
 /** One run, as `.silo/runs/<user>.jsonl` keeps it. */
 export interface RunEnvelope {
 	"type": "run";
+	/** Its shape's (./layout `VERSIONS`): none, from before there was one, is the first. */
+	"version"?: number;
 	/** The run's id: what its observations carry to join it. A UUID — records outlive the session that made them. */
 	"id": string;
 	/** What was run, as typed (`node app.ts`, `npm run dev`), and the file or folder it ran (repo-relative) — or, for
@@ -168,12 +170,13 @@ export function environmentKey(environment: Environment): string {
 	return [environment.name, environment.runtime, environment.engine, environment.os].map((part) => slug(part) ?? "unknown").join(".");
 }
 
-/** An envelope as one line of `.silo/runs/<user>.jsonl`. */
+/** An envelope as one line of `.silo/runs/<user>.jsonl`, with its version. */
 export function envelopeLine(envelope: RunEnvelope): string {
-	return JSON.stringify(envelope) + "\n";
+	return JSON.stringify({ "type": envelope.type, "version": VERSIONS.runs, ...envelope }) + "\n";
 }
 
-/** The envelopes in a runs file — a line that isn't one (a merge's leftovers, a hand edit) is skipped — each run once
+/** The envelopes in a runs file — a line that isn't one (a merge's leftovers, a hand edit), or of another version, is
+ *  skipped — each run once
  *  (a branch merge can bring the same line in from both sides). */
 export function parseRuns(text: string): RunEnvelope[] {
 	const runs = new Map<string, RunEnvelope>();
@@ -182,7 +185,7 @@ export function parseRuns(text: string): RunEnvelope[] {
 		try {
 			const value = JSON.parse(line) as Partial<RunEnvelope>;
 
-			if (value.type === "run" && typeof value.id === "string") {
+			if (value.type === "run" && typeof value.id === "string" && readable(value, VERSIONS.runs)) {
 				runs.set(value.id, value as RunEnvelope);
 			}
 		} catch { /* not a line of ours */ }
@@ -634,9 +637,21 @@ export function parseEvidence(text: string): Observation[] {
 	return [...bySpan.values()];
 }
 
-/** An evidence file's text: one observation per line, sorted by kind and span so concurrent edits touch distinct lines. */
-export function evidenceText(observations: Observation[]): string {
-	return [...observations].sort((a, b) => (a.kind + " " + a.span).localeCompare(b.kind + " " + b.span)).map((observation) => JSON.stringify(observation) + "\n").join("");
+/** An evidence file's text: one observation per line, sorted by kind and span so concurrent edits touch distinct lines.
+ *  Given the file's text before (`kept`), its lines of a kind this silo doesn't know stay, sorted in with the rest. */
+export function evidenceText(observations: Observation[], kept = ""): string {
+	const unknown = kept.split("\n").flatMap((line) => {
+		try {
+			const value = JSON.parse(line) as { "kind"?: unknown; "span"?: unknown };
+
+			return typeof value.span === "string" && typeof value.kind === "string" && !KINDS.has(value.kind) ? [{ "order": value.kind + " " + value.span, "line": line }] : [];
+		} catch {
+			return [];
+		}
+	});
+	const known = observations.map((observation) => ({ "order": observation.kind + " " + observation.span, "line": JSON.stringify(observation) }));
+
+	return [...known, ...unknown].sort((a, b) => a.order.localeCompare(b.order)).map(({ line }) => line + "\n").join("");
 }
 
 /**
@@ -671,7 +686,7 @@ function fold<Kind extends Observation, Report extends { "span": string }>(kind:
 	for (const [span, report] of reported) {
 		const before = bySpan.get(span);
 
-		folded.push({ "span": span, "key": "bablr1", "kind": kind, ...add(before, report, fade), "runs": (before?.runs ?? 0) * fade + 1, "lastRun": run.id, "lastAt": run.at } as Kind);
+		folded.push({ ...before, "span": span, "key": "bablr1", "kind": kind, ...add(before, report, fade), "runs": (before?.runs ?? 0) * fade + 1, "lastRun": run.id, "lastAt": run.at } as Kind);
 	}
 
 	return folded;
@@ -837,6 +852,17 @@ if (isEntry(import.meta)) {
 		assert.deepEqual(all.runs.map((each) => each.id), ["b", "c", "a"]);
 		assert.equal(all.total, 3);
 		assert.deepEqual(all.effects[0], { "capability": "fs:read", "resource": "/workspace/rates.json", "how": "made", "calls": 3, "runs": 2, "first": "2026-10-01T00:00:00.000Z", "last": "2026-10-03T00:00:00.000Z" });
+
+		// A run's line says its version; one of another version isn't read.
+		assert.ok(envelopeLine(run("v", "2026-10-01T00:00:00.000Z", "app.js")).startsWith('{"type":"run","version":1,"id":"v"'));
+		assert.deepEqual(parseRuns([envelopeLine(run("v", "2026-10-01T00:00:00.000Z", "app.js")), JSON.stringify({ ...run("w", "2026-10-01T00:00:00.000Z", "app.js"), "version": 2 })].join("\n")).map((each) => each.id), ["v"]);
+
+		// A kind of observation this silo doesn't know, and a field it doesn't, are kept when a run is folded in and written.
+		const unknownKind = JSON.stringify({ "span": "f", "kind": "shape", "lastAt": "2026-10-01T00:00:00.000Z" });
+		const marked = [{ ...foldReached([], [{ "span": "f", "count": 1 }], { "id": "r0", "at": "2026-10-01T00:00:00.000Z" })[0]!, "note": "kept" }];
+		const written = evidenceText(foldReached(parseEvidence(evidenceText(marked) + unknownKind + "\n"), [{ "span": "f", "count": 2 }], { "id": "r1", "at": "2026-10-02T00:00:00.000Z" }), evidenceText(marked) + unknownKind + "\n");
+
+		assert.deepEqual(written.split("\n").filter(Boolean).map((line) => [JSON.parse(line).kind, JSON.parse(line).note]), [["reached", "kept"], ["shape", undefined]]);
 
 		// A function's runs, folded: calls and impure calls add up, the first impurity stays the first, and it fades.
 		const purity = (calls: number, extra: Partial<PurityReport> = {}): PurityReport => ({ "span": "f", "calls": calls, "write": 0, "effect": 0, "nondeterministic": 0, "unwatched": 0, ...extra });

@@ -20,6 +20,7 @@ import * as fs from "@brianjenkins94/util/fs";
 
 import { type Surface, type SurfaceEntry, type WsConsumer, add, classifyKind, consumerOf, detect, packageCaps, surfaceEntries } from "./detect.js";
 import { type BaselinePackages, JOIN, joinedBefore, joinsWanted, syncConsumer, syncPackages } from "./evidence.js";
+import { baselinePath, checked, versioned, VERSIONS } from "./layout.js";
 import { type SiloPaths, ensureSiloDir, findRoot, siloPaths } from "./paths.js";
 import { surfaceOf } from "./reach.js";
 import { type Rolldown, sliceCaps } from "./slice.js";
@@ -151,13 +152,14 @@ export function capabilitiesOf(file: string): string[] {
 
 export type { WsConsumer };
 type PkgEntry = BaselinePackages[string];
-export interface Baseline { "consumer": Record<string, WsConsumer>; "packages": BaselinePackages; "join"?: number }
+export interface Baseline { "version"?: number; "consumer": Record<string, WsConsumer>; "packages": BaselinePackages; "join"?: number }
 
-export const loadBaseline = (paths: SiloPaths): Baseline => ({ "consumer": {}, "packages": {}, ...(fs.existsSync(paths.baseline) ? JSON.parse(fs.readFileSync(paths.baseline)) : {}) });
+/** The baseline as `.silo/baseline.json` has it, with what it doesn't know kept; of another version, it throws. */
+export const loadBaseline = (paths: SiloPaths): Baseline => ({ "consumer": {}, "packages": {}, ...(fs.existsSync(paths.baseline) ? checked(baselinePath(), JSON.parse(fs.readFileSync(paths.baseline)) as Partial<Baseline>, VERSIONS.baseline) : {}) });
 
 export async function saveBaseline(paths: SiloPaths, b: Baseline): Promise<void> {
 	await ensureSiloDir(paths);
-	fs.writeFileSync(paths.baseline, JSON.stringify(b, null, 2) + "\n");
+	fs.writeFileSync(paths.baseline, JSON.stringify(versioned(b, VERSIONS.baseline), null, 2) + "\n");
 }
 
 /** The current OWN-CODE consumer surface under `target`, partitioned by workspace: per dependency, which
@@ -440,6 +442,9 @@ if (isEntry(import.meta)) {
 		fs.writeFileSync(paths.baseline, JSON.stringify({ ...loadBaseline(paths), "consumer": { ".": { "kit": { "kind": "package", "version": "3.0.0", "members": ["save"], "dynamic": false, "caps": [] } } }, "join": undefined }));
 		assert.deepEqual((await ensureBaseline(paths, root, typescript)).used, []);
 		assert.equal(loadBaseline(paths).join, 1);
+		assert.equal(loadBaseline(paths).version, 1, "written with its version");
+		fs.writeFileSync(paths.baseline, JSON.stringify({ ...loadBaseline(paths), "version": 2 }));
+		assert.throws(() => loadBaseline(paths), /baseline\.json is version 2/u);
 
 		await fs.rm(root, { "recursive": true, "force": true });
 	})();

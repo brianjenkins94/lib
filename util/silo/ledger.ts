@@ -34,6 +34,7 @@ import { isEntry } from "@brianjenkins94/util/env";
 import { priceOf, priceText } from "./cost";
 import { withoutWayIn } from "./features";
 import { includeByDefault } from "./history";
+import { ledgerPath, unreadable, VERSIONS } from "./layout";
 
 export type LedgerStatus = "active" | "experiment" | "parked" | "stopped" | "removed";
 
@@ -134,24 +135,45 @@ function ownership(ledger: Ledger, owned: NonNullable<DriftFacts["owned"]>): Dri
 	return found;
 }
 
-/** The ledger in `text` (`.silo/features.json`); empty when there's none or it isn't JSON. */
+/** The ledger in `text` (`.silo/features.json`); empty when there's none or it isn't JSON. Its version is `$version`, a
+ *  key no feature is named; of another version than this silo's, it throws (./layout `unreadable`). */
 export function parseLedger(text: string | undefined): Ledger {
-	try {
-		const parsed: unknown = JSON.parse(text ?? "{}");
+	let parsed: unknown;
 
-		return typeof parsed === "object" && parsed !== null && !Array.isArray(parsed) ? parsed as Ledger : {};
+	try {
+		parsed = JSON.parse(text ?? "{}");
 	} catch {
 		return {};
 	}
+
+	if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+		return {};
+	}
+
+	const { [VERSION_KEY]: stated, ...ledger } = parsed as Record<string, unknown>;
+
+	if (stated !== undefined && stated !== VERSIONS.features) {
+		throw unreadable(ledgerPath(), stated, VERSIONS.features);
+	}
+
+	return ledger as Ledger;
 }
 
-/** The ledger as it's written: entries sorted by name, each field in one order, so unrelated changes touch other lines. */
-export function ledgerText(ledger: Ledger): string {
-	// (a declared feature's fields too — what, docs, ways, tests: a field not listed here is dropped when it's written)
-	const order: (keyof LedgerEntry)[] = ["status", "why", "since", "until", "what", "docs", "key", "ways", "paths", "tests", "in", "restore"];
-	const sorted = Object.fromEntries(Object.keys(ledger).toSorted().map((name) => [name, Object.fromEntries(order.flatMap((field) => (ledger[name][field] === undefined ? [] : [[field, ledger[name][field]]])))]));
+/** Where the ledger says its version. */
+const VERSION_KEY = "$version";
 
-	return JSON.stringify(sorted, undefined, 2) + "\n";
+/** The ledger as it's written: its version, then entries sorted by name, each field in one order (one this silo doesn't
+ *  know after, sorted, kept as it was), so unrelated changes touch other lines. */
+export function ledgerText(ledger: Ledger): string {
+	const order: string[] = ["status", "why", "since", "until", "what", "docs", "key", "ways", "paths", "tests", "in", "restore"];
+	const fields = (entry: LedgerEntry): string[] => [...order, ...Object.keys(entry).filter((field) => !order.includes(field)).toSorted()];
+	const sorted = Object.fromEntries(Object.keys(ledger).toSorted().map((name) => [name, Object.fromEntries(fields(ledger[name]).flatMap((field) => {
+		const value = (ledger[name] as unknown as Record<string, unknown>)[field];
+
+		return value === undefined ? [] : [[field, value]];
+	}))]));
+
+	return JSON.stringify({ [VERSION_KEY]: VERSIONS.features, ...sorted }, undefined, 2) + "\n";
 }
 
 /** `ledger` with `name` set to `status` for `why` — `since` today when its status changes, kept when it doesn't — and any
@@ -523,6 +545,13 @@ if (isEntry(import.meta)) {
 		assert.throws(() => withStatus({}, "x", "experiment", "try", today), /until/u);
 		assert.throws(() => withStatus({}, "x", "maybe" as LedgerStatus, "?", today), /isn't a status/u);
 		assert.deepEqual(parseLedger("not json"), {});
+
+		// Its version, first; a field this silo doesn't know kept, after those it does; another version refused.
+		const odd = ledgerText({ "x": { "status": "active", "why": "w", "since": "2026-11-25", "owner": "ada", "ways": ["command|x"] } as LedgerEntry });
+		assert.ok(odd.startsWith('{\n  "$version": 1,'));
+		assert.deepEqual(Object.keys(parseLedger(odd)["x"]), ["status", "why", "since", "ways", "owner"]);
+		assert.deepEqual(Object.keys(parseLedger(odd)), ["x"], "the version isn't a feature");
+		assert.throws(() => parseLedger('{ "$version": 2, "x": {} }'), /features\.json is version 2/u);
 		// A lease: kept until a date — once it's passed, decide again.
 		assert.deepEqual(drift(withStatus({}, "export", "active", "kept a while", today, { "paths": ["src/old.ts"], "until": "2026-10-01" }), facts).map((each) => each.check), ["lease expired", "dead end", "dead end"]);
 		assert.deepEqual(drift(withStatus({}, "export", "active", "kept a while", today, { "paths": ["src/old.ts"], "until": "2027-01-01" }), facts).map((each) => each.check), ["dead end", "dead end"]);
