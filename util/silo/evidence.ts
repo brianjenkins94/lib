@@ -549,7 +549,9 @@ interface Observed {
 }
 
 /** Whether, and how often, a statement ran. */
-export interface ReachedObservation extends Observed { "kind": "reached" }
+/** Whether a statement ran: `ever` is the runs it ran in, `tried` the runs that reported it, ran or not (a strict count:
+ *  `runs` fades, and tops out near 29 at a half-life of 20, so a statement that never ran couldn't rest on more). */
+export interface ReachedObservation extends Observed { "kind": "reached"; "tried"?: number }
 
 /** What went through a value site (`a?.b`'s `a`, `a ?? b`'s `a`, a parameter, a return): strict counts of values seen,
  *  of nullish ones, and of each type tag (RUNTIME-EVIDENCE.md, the second slice). */
@@ -725,7 +727,8 @@ function mergeTags(a: Record<string, number>, b: Record<string, number>): Record
 export function foldReached(known: Observation[], reached: { "span": string; "count": number }[], run: { "id": string; "at": string }, halfLife = HALF_LIFE_RUNS): Observation[] {
 	return fold<ReachedObservation, { "span": string; "count": number }>("reached", known, reached, run, halfLife, (a, b) => ({ "span": a.span, "count": a.count + b.count }), (before, { count }, fade) => ({
 		"w": (before?.w ?? 0) * fade + count,
-		"ever": (before?.ever ?? 0) + (count > 0 ? 1 : 0)
+		"ever": (before?.ever ?? 0) + (count > 0 ? 1 : 0),
+		"tried": (before?.tried ?? Math.max(before?.ever ?? 0, Math.round(before?.runs ?? 0))) + 1
 	}));
 }
 
@@ -759,7 +762,7 @@ export function foldBranches(known: Observation[], branches: { "span": string; "
  *  behind it stay on the machine (`localEvidencePath`). `runs` is how many runs it rests on, as the floor of RUN_FLOORS
  *  it has reached, so a quick fix's threshold can be held to someone else's evidence too. Time isn't committed: no two
  *  runs' are the same. */
-export type StableObservation = { "span": string; "key": "bablr1"; "runs": number } & (
+export type StableObservation = { "span": string; "key": "bablr1"; "runs": number; "claim"?: Claim } & (
 	| { "kind": "reached"; "ran": boolean }
 	| { "kind": "value"; "tags": string[]; "nullish": boolean }
 	| { "kind": "branch"; "taken": number[] }
@@ -771,10 +774,47 @@ export const RUN_FLOORS = [1, 3, 10, 30, 100];
 
 const floorOf = (runs: number): number => RUN_FLOORS.findLast((floor) => runs >= floor) ?? 0;
 
+/** What a committed line can claim (the user, 2026-11-26: "contribute local evidence when it becomes high confidence"):
+ *  that a statement never ran, a value was never nullish, a branch only ever took one arm, a function was never impure
+ *  — each since its code last changed. Someone else's editor acts on a claim (a quick fix) without the counts behind it,
+ *  which stay on this machine; so a claim says the counts passed CLAIM_BAR, and a run that breaks it takes it away. */
+export type Claim = "neverRan" | "neverNullish" | "onlyArm" | "pure";
+
+/** What a claim rests on: runs, strictly counted, and tries in them (values seen, a branch's times, a function's calls;
+ *  for a statement, its runs). Stricter than a quick fix on this machine's own counts (3 runs, 10 tries: the person
+ *  sees them) because others act on a claim unseen: 100 tries never contradicted is at most 1 in 33 (95% sure). */
+export const CLAIM_BAR = { "runs": 30, "tries": 100 };
+
+/** The claim `observation`'s counts back, if any (`Claim`). */
+export function claimOf(observation: Observation): Claim | undefined {
+	const passes = (runs: number, tries: number): boolean => runs >= CLAIM_BAR.runs && tries >= CLAIM_BAR.tries;
+
+	switch (observation.kind) {
+		case "reached": {
+			const tried = observation.tried ?? Math.max(observation.ever, Math.round(observation.runs));
+
+			return observation.ever === 0 && tried >= CLAIM_BAR.runs ? "neverRan" : undefined;
+		}
+
+		case "value":
+			return observation.nullish === 0 && passes(observation.ever, observation.seen) ? "neverNullish" : undefined;
+
+		case "branch":
+			return observation.arms.filter((count) => count > 0).length === 1 && passes(observation.ever, observation.arms.reduce((total, count) => total + count, 0)) ? "onlyArm" : undefined;
+
+		case "purity":
+			return observation.write + observation.effect + observation.nondeterministic + observation.unwatched === 0 && passes(observation.ever, observation.calls) ? "pure" : undefined;
+
+		default:
+			return undefined;
+	}
+}
+
 /** What's committed of `observations` (`StableObservation`), sorted as `evidenceText` sorts. */
 export function stableOf(observations: Observation[]): StableObservation[] {
 	return observations.flatMap((observation): StableObservation[] => {
-		const base = { "span": observation.span, "key": observation.key, "runs": floorOf(Math.max(observation.ever, Math.round(observation.runs))) } as const;
+		const claim = claimOf(observation);
+		const base = { "span": observation.span, "key": observation.key, "runs": floorOf(Math.max(observation.ever, observation.kind === "reached" ? observation.tried ?? 0 : 0, Math.round(observation.runs))), ...claim === undefined ? {} : { "claim": claim } } as const;
 
 		switch (observation.kind) {
 			case "reached":
@@ -812,7 +852,7 @@ export function parseStable(text: string): StableObservation[] {
 }
 
 /** The fields a stable line of this silo's writes: any other, on a line it rewrites, is kept. */
-const STABLE_FIELDS = new Set(["span", "key", "runs", "kind", "ran", "tags", "nullish", "taken", "impure", "first", "unseen"]);
+const STABLE_FIELDS = new Set(["span", "key", "runs", "claim", "kind", "ran", "tags", "nullish", "taken", "impure", "first", "unseen"]);
 
 /** A committed evidence file's text: one stable line per span, sorted by kind and span. Given the file's text before
  *  (`kept`), what this silo doesn't know stays: a line of a kind it doesn't know, as `evidenceText` keeps one, and a
@@ -1044,6 +1084,26 @@ if (isEntry(import.meta)) {
 		assert.deepEqual(stableText(stableOf(otherArm), others).split("\n").filter((line) => line.includes('"why"') || line.includes('"shape"')), ['{"span":"x","key":"bablr1","runs":1,"kind":"shape","note":"kept"}', '{"span":"b","key":"bablr1","runs":3,"kind":"branch","taken":[0,1],"why":"a later silo\'s"}'].toSorted((one, other) => (JSON.parse(one).kind + " " + JSON.parse(one).span).localeCompare(JSON.parse(other).kind + " " + JSON.parse(other).span)), "what it doesn't know stays: a kind, and a field on a line it rewrites");
 		assert.equal(stableOf(foldTimes([], [{ "span": "f", "selfMs": 3, "totalMs": 5, "profiledMs": 100, "callers": {}, "callees": {} }], ran(1))).length, 0, "time isn't committed");
 		assert.deepEqual([0, 1, 2, 3, 9, 10, 99, 100, 5000].map(floorOf), [0, 1, 1, 3, 3, 10, 30, 100, 100]);
+
+		// Claims: a line claims what its counts back once they pass the bar (30 runs, 100 tries), and loses it when a run
+		// breaks it; a statement that never ran rests on the runs that reported it, which don't fade.
+		const thirty = Array.from({ "length": 30 }, (_, index) => index + 1).reduce<Observation[]>((known, id) => behaving(known, id, [0, 4]), []);
+		const claims = (known: Observation[]): Record<string, string | undefined> => Object.fromEntries(stableOf(known).map((each) => [each.span, each.claim]));
+
+		assert.deepEqual(claims(fourth), { "s": undefined, "dead": undefined, "v": undefined, "b": undefined }, "four runs claim nothing");
+		assert.deepEqual(claims(thirty), { "s": undefined, "dead": "neverRan", "v": "neverNullish", "b": "onlyArm" }, "thirty runs and 120 tries: each claims what it never did");
+		assert.equal((thirty.find((each) => each.span === "dead") as ReachedObservation).tried, 30);
+		assert.deepEqual(stableOf(thirty).find((each) => each.span === "dead"), { "span": "dead", "key": "bablr1", "runs": 30, "claim": "neverRan", "kind": "reached", "ran": false }, "and rests on 30");
+		assert.equal(claims(Array.from({ "length": 29 }, (_, index) => index + 1).reduce<Observation[]>((known, id) => behaving(known, id, [0, 4]), [])).dead, undefined, "29 runs don't");
+
+		const broken = foldBranches(foldValues(thirty, [{ "span": "v", "seen": 1, "nullish": 1, "tags": { "null": 1 } }], ran(31)), [{ "span": "b", "arms": [1, 0] }], ran(31));
+
+		assert.deepEqual([claims(broken).v, claims(broken).b, claims(broken).dead], [undefined, undefined, "neverRan"], "a run that breaks a claim takes it away; the rest stay");
+		assert.equal(stableOf(foldValues([], [{ "span": "v", "seen": 99, "nullish": 0, "tags": {} }], ran(1))).find((each) => each.span === "v")?.claim, undefined, "99 values in one run: too few runs");
+		assert.equal(claimOf({ ...foldPurity([], [purity(100)], ran(1))[0]!, "ever": 30 }), "pure");
+		assert.equal(claimOf({ ...foldPurity([], [purity(100, { "unwatched": 1 })], ran(1))[0]!, "ever": 30 }), undefined, "calls into code runs can't see: not claimed pure");
+		assert.ok(stableText(stableOf(thirty)).includes('"claim":"neverNullish"'), "a claim is written");
+		assert.deepEqual(parseStable(stableText(stableOf(thirty))).find((each) => each.span === "v")?.claim, "neverNullish", "and read back");
 
 		// The evidence diff: what's new at a span in both, nothing for more of the same or for code new or gone.
 		const committedBefore: StableObservation[] = [{ "span": "b", "key": "bablr1", "runs": 3, "kind": "branch", "taken": [1] }, { "span": "v", "key": "bablr1", "runs": 3, "kind": "value", "tags": ["object"], "nullish": false }, { "span": "s", "key": "bablr1", "runs": 3, "kind": "reached", "ran": false }, { "span": "gone", "key": "bablr1", "runs": 1, "kind": "reached", "ran": true }];
