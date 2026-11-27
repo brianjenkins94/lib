@@ -55,50 +55,128 @@ export function parseReach(file: string, text: string): TestReach[] {
 	return Object.entries(JSON.parse(text) as Record<string, Record<string, unknown[]>>).map(([name, reach]) => ({ "file": file, "name": name, "reach": reach }));
 }
 
-/** What each test ran, by file, kept in the repository (`.silo/last-run/reach.json`): its tests by file and name, and
- *  each file they ran with the tests (by index) that ran any of it. When it was read, and nothing finer — the check that
- *  reads it asks only whether a feature's tests run a file. */
+/** Tests by index, as runs: `3` is test 3, `[5, 9]` tests 5 to 9 (tests are sorted by file, so a file's are together). */
+export type TestRuns = (number | [number, number])[];
+
+/** What each test ran, by statement, kept in the repository (`.silo/last-run/reach.json`; the user, 2026-11-26: "time to
+ *  get more granular"): its tests by file and name, and each file they ran with, for each statement any of them ran (by
+ *  the line it starts on), the tests that ran it. So what no test ran is what's left of a file's statements, and which
+ *  tests a line needs is there without the run. `commit`, when known, is the code they ran. */
 export interface ReachRecord {
-	"version": 2;
+	"version": 3;
 	"at": string;
+	"commit"?: string;
 	"tests": { "file": string; "name": string }[];
-	"files": Record<string, number[]>;
+	"files": Record<string, Record<string, TestRuns>>;
 }
 
-/** The record of `tests`' reach, read `at`. */
-export function reachRecord(tests: TestReach[], at: string): ReachRecord {
+/** The line a statement starts on, however a reach names it: `[line, column, endLine, endColumn]` (a coverage run's),
+ *  `[line, endLine]` (an editor's kept reach), `[[line, column], [endLine, endColumn]]`, or `[line]`. */
+export function startLine(statement: unknown): number | undefined {
+	const first = Array.isArray(statement) ? statement[0] : statement;
+
+	return typeof first === "number" ? first : Array.isArray(first) && typeof first[0] === "number" ? first[0] : undefined;
+}
+
+/** `indices`, sorted, as runs. */
+function runsOf(indices: number[]): TestRuns {
+	const runs: TestRuns = [];
+
+	for (const index of [...new Set(indices)].sort((one, other) => one - other)) {
+		const last = runs.at(-1);
+		const end = Array.isArray(last) ? last[1] : last;
+
+		if (end !== undefined && index === end + 1) {
+			runs[runs.length - 1] = [Array.isArray(last) ? last[0] : end, index];
+		} else {
+			runs.push(index);
+		}
+	}
+
+	return runs;
+}
+
+/** The tests in `runs`. */
+export function testsIn(runs: TestRuns): number[] {
+	return runs.flatMap((run) => (Array.isArray(run) ? Array.from({ "length": run[1] - run[0] + 1 }, (_, offset) => run[0] + offset) : [run]));
+}
+
+/** The record of `tests`' reach, read `at`, of the code at `commit`. */
+export function reachRecord(tests: TestReach[], at: string, commit?: string): ReachRecord {
 	const sorted = tests.toSorted((one, other) => one.file.localeCompare(other.file) || one.name.localeCompare(other.name));
-	const files: Record<string, number[]> = {};
+	const files: Record<string, Map<number, number[]>> = {};
 
 	for (const [index, test] of sorted.entries()) {
 		for (const [file, statements] of Object.entries(test.reach)) {
-			if (statements.length > 0) {
-				(files[file] ??= []).push(index);
+			for (const statement of statements) {
+				const line = startLine(statement);
+
+				if (line !== undefined) {
+					files[file] ??= new Map();
+
+					const lines = files[file];
+
+					lines.set(line, [...lines.get(line) ?? [], index]);
+				}
 			}
 		}
 	}
 
-	return { "version": 2, "at": at, "tests": sorted.map(({ file, name }) => ({ "file": file, "name": name })), "files": Object.fromEntries(Object.entries(files).sort(([one], [other]) => one.localeCompare(other))) };
+	return {
+		"version": 3,
+		"at": at,
+		...commit === undefined ? {} : { "commit": commit },
+		"tests": sorted.map(({ file, name }) => ({ "file": file, "name": name })),
+		"files": Object.fromEntries(Object.entries(files).sort(([one], [other]) => one.localeCompare(other)).map(([file, lines]) => [file, Object.fromEntries([...lines].sort(([one], [other]) => one - other).map(([line, ran]) => [String(line), runsOf(ran)]))]))
+	};
+}
+
+/** A reach record's `text` read, either version: each file's tests (by index) and, from version 3, each statement's. */
+function readRecord(text: string | undefined): { "tests": { "file": string; "name": string }[]; "files": Record<string, { "tests": number[]; "lines"?: Record<string, number[]> }> } | undefined {
+	let record: { "version"?: unknown; "tests"?: { "file": string; "name": string }[]; "files"?: Record<string, unknown> };
+
+	try {
+		record = JSON.parse(text ?? "") as typeof record;
+	} catch {
+		return undefined;
+	}
+
+	if ((record.version !== 2 && record.version !== 3) || record.tests === undefined || record.files === undefined) {
+		return undefined;
+	}
+
+	return {
+		"tests": record.tests,
+		"files": Object.fromEntries(Object.entries(record.files).map(([file, ran]) => {
+			if (record.version === 2) {
+				return [file, { "tests": ran as number[] }];
+			}
+
+			const lines = Object.fromEntries(Object.entries(ran as Record<string, TestRuns>).map(([line, runs]) => [line, testsIn(runs)]));
+
+			return [file, { "tests": [...new Set(Object.values(lines).flat())].sort((one, other) => one - other), "lines": lines }];
+		}))
+	};
+}
+
+/** For each file in a reach record's `text`, the lines its statements start on that some test ran, and which tests (by
+ *  file and name); none from a record of version 2 (by file only), or none at all. */
+export function ranByLine(text: string | undefined): Record<string, Record<number, { "file": string; "name": string }[]>> {
+	const record = readRecord(text);
+
+	return Object.fromEntries(Object.entries(record?.files ?? {}).flatMap(([file, { lines }]) => (lines === undefined ? [] : [[file, Object.fromEntries(Object.entries(lines).map(([line, ran]) => [Number(line), ran.flatMap((index) => record!.tests[index] ?? [])]))]])));
 }
 
 /** For each file in a reach record's `text`, the test files whose tests ran it (./ledger's ownership check's `ran`);
  *  none when there's no record, or it's another version. */
 export function ranByFile(text: string | undefined): Record<string, string[]> {
-	let record: Partial<ReachRecord>;
+	const record = readRecord(text);
 
-	try {
-		record = JSON.parse(text ?? "") as Partial<ReachRecord>;
-	} catch {
+	if (record === undefined) {
 		return {};
 	}
 
-	if (record.version !== 2 || record.tests === undefined || record.files === undefined) {
-		return {};
-	}
-
-	const tests = record.tests;
-
-	return Object.fromEntries(Object.entries(record.files).map(([file, ran]) => [file, [...new Set(ran.flatMap((index) => (tests[index] === undefined ? [] : [tests[index].file])))]]));
+	return Object.fromEntries(Object.entries(record.files).map(([file, { tests }]) => [file, [...new Set(tests.flatMap((index) => (record.tests[index] === undefined ? [] : [record.tests[index].file])))]]));
 }
 
 /** Each test's reach against what the ledger declares, those least in their own features' code first. */
@@ -207,14 +285,19 @@ if (isEntry(import.meta)) {
 		assert.deepEqual(parseReach("test/a.mjs", JSON.stringify({ "t": { "src/a.ts": [[1, 0, 1, 2]] } })), [{ "file": "test/a.mjs", "name": "t", "reach": { "src/a.ts": [[1, 0, 1, 2]] } }]);
 		assert.deepEqual(observedAgainstDeclared(ledger, []), { "tests": [], "limit": 1, "few": [] });
 
-		// The record kept of what each test ran, and who ran each file, read back.
+		// The record kept of what each test ran, by statement, and who ran each file and line, read back.
 		const record = reachRecord([
-			{ "file": "test/notes.mjs", "name": "b", "reach": { "src/shared.ts": [[1]], "src/notes.ts": [[1]] } },
-			{ "file": "test/git.mjs", "name": "a", "reach": { "src/shared.ts": [[2]], "src/git.ts": [] } }
-		], today);
+			{ "file": "test/notes.mjs", "name": "b", "reach": { "src/shared.ts": [[1, 0, 1, 9], [4, 2, 6, 3]], "src/notes.ts": [[1, 3]] } },
+			{ "file": "test/git.mjs", "name": "a", "reach": { "src/shared.ts": [[[1, 0], [1, 9]], [[2, 0], [2, 4]]], "src/git.ts": [] } },
+			{ "file": "test/git.mjs", "name": "c", "reach": { "src/shared.ts": [[1]] } }
+		], today, "0123abc");
 
-		assert.deepEqual(record, { "version": 2, "at": today, "tests": [{ "file": "test/git.mjs", "name": "a" }, { "file": "test/notes.mjs", "name": "b" }], "files": { "src/notes.ts": [1], "src/shared.ts": [0, 1] } });
+		assert.deepEqual(record, { "version": 3, "at": today, "commit": "0123abc", "tests": [{ "file": "test/git.mjs", "name": "a" }, { "file": "test/git.mjs", "name": "c" }, { "file": "test/notes.mjs", "name": "b" }], "files": { "src/notes.ts": { "1": [2] }, "src/shared.ts": { "1": [[0, 2]], "2": [0], "4": [2] } } });
 		assert.deepEqual(ranByFile(JSON.stringify(record)), { "src/notes.ts": ["test/notes.mjs"], "src/shared.ts": ["test/git.mjs", "test/notes.mjs"] });
+		assert.deepEqual(ranByLine(JSON.stringify(record))["src/shared.ts"], { "1": [{ "file": "test/git.mjs", "name": "a" }, { "file": "test/git.mjs", "name": "c" }, { "file": "test/notes.mjs", "name": "b" }], "2": [{ "file": "test/git.mjs", "name": "a" }], "4": [{ "file": "test/notes.mjs", "name": "b" }] });
+		assert.deepEqual(testsIn([0, [2, 4], 7]), [0, 2, 3, 4, 7]);
+		assert.deepEqual(ranByFile(JSON.stringify({ "version": 2, "at": today, "tests": [{ "file": "test/a.mjs", "name": "t" }], "files": { "src/a.ts": [0] } })), { "src/a.ts": ["test/a.mjs"] }, "a record of version 2 still reads, by file");
+		assert.deepEqual(ranByLine(JSON.stringify({ "version": 2, "at": today, "tests": [], "files": { "src/a.ts": [] } })), {}, "and has no lines");
 		assert.deepEqual(ranByFile(JSON.stringify({ "version": 1, "tests": [], "reach": {} })), {});
 		assert.deepEqual(ranByFile(undefined), {});
 		assert.equal(observedText({ "tests": [], "limit": 1, "few": [] }).split("\n")[0], "Each test against the features its file declares, by the statements at most 1 tests ran.");
