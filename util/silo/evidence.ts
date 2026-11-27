@@ -845,6 +845,56 @@ export function stableText(stable: StableObservation[], kept = ""): string {
 	return [...stable.map((each) => ({ "order": each.kind + " " + each.span, "line": JSON.stringify({ ...each, ...extra.get(each.kind + " " + each.span) }) })), ...unknown].sort((a, b) => a.order.localeCompare(b.order)).map(({ line }) => line + "\n").join("");
 }
 
+/** What's new at a span since an earlier version of its committed lines (the evidence diff, RUNTIME-EVIDENCE.md *Not
+ *  built*): a statement that runs now, a value's new types or nullish now, a branch's arms taken now, a function's new
+ *  kinds of impurity. Only what's new: what was seen stays seen while a span's code is the same (its counts are strict),
+ *  and more runs alone (a floor crossed) say nothing changed. */
+export type StableChange = { "span": string } & (
+	| { "kind": "reached"; "ran": true }
+	| { "kind": "value"; "tags": string[]; "nullish": boolean }
+	| { "kind": "branch"; "taken": number[] }
+	| { "kind": "purity"; "impure": (keyof PurityCounts)[] }
+);
+
+/** What changed at each span in both `before` and `after` (a span only in one is code that's new or gone, not behavior
+ *  that changed). */
+export function stableChanges(before: StableObservation[], after: StableObservation[]): StableChange[] {
+	const earlier = new Map(before.map((each) => [each.kind + " " + each.span, each]));
+
+	return after.flatMap((now): StableChange[] => {
+		const was = earlier.get(now.kind + " " + now.span);
+
+		if (was === undefined) {
+			return [];
+		}
+
+		if (now.kind === "reached" && was.kind === "reached") {
+			return now.ran && !was.ran ? [{ "span": now.span, "kind": "reached", "ran": true }] : [];
+		}
+
+		if (now.kind === "value" && was.kind === "value") {
+			const tags = now.tags.filter((tag) => !was.tags.includes(tag));
+			const nullish = now.nullish && !was.nullish;
+
+			return tags.length > 0 || nullish ? [{ "span": now.span, "kind": "value", "tags": tags, "nullish": nullish }] : [];
+		}
+
+		if (now.kind === "branch" && was.kind === "branch") {
+			const taken = now.taken.filter((arm) => !was.taken.includes(arm));
+
+			return taken.length > 0 ? [{ "span": now.span, "kind": "branch", "taken": taken }] : [];
+		}
+
+		if (now.kind === "purity" && was.kind === "purity") {
+			const impure = now.impure.filter((kind) => !was.impure.includes(kind));
+
+			return impure.length > 0 ? [{ "span": now.span, "kind": "purity", "impure": impure }] : [];
+		}
+
+		return [];
+	});
+}
+
 /** One function's run, as a run reports it: its calls, how many were impure each way, and the first impurity. */
 export interface PurityReport extends PurityCounts { "span": string; "calls": number; "first"?: PurityObservation["first"]; "unseen"?: string }
 
@@ -994,6 +1044,13 @@ if (isEntry(import.meta)) {
 		assert.deepEqual(stableText(stableOf(otherArm), others).split("\n").filter((line) => line.includes('"why"') || line.includes('"shape"')), ['{"span":"x","key":"bablr1","runs":1,"kind":"shape","note":"kept"}', '{"span":"b","key":"bablr1","runs":3,"kind":"branch","taken":[0,1],"why":"a later silo\'s"}'].toSorted((one, other) => (JSON.parse(one).kind + " " + JSON.parse(one).span).localeCompare(JSON.parse(other).kind + " " + JSON.parse(other).span)), "what it doesn't know stays: a kind, and a field on a line it rewrites");
 		assert.equal(stableOf(foldTimes([], [{ "span": "f", "selfMs": 3, "totalMs": 5, "profiledMs": 100, "callers": {}, "callees": {} }], ran(1))).length, 0, "time isn't committed");
 		assert.deepEqual([0, 1, 2, 3, 9, 10, 99, 100, 5000].map(floorOf), [0, 1, 1, 3, 3, 10, 30, 100, 100]);
+
+		// The evidence diff: what's new at a span in both, nothing for more of the same or for code new or gone.
+		const committedBefore: StableObservation[] = [{ "span": "b", "key": "bablr1", "runs": 3, "kind": "branch", "taken": [1] }, { "span": "v", "key": "bablr1", "runs": 3, "kind": "value", "tags": ["object"], "nullish": false }, { "span": "s", "key": "bablr1", "runs": 3, "kind": "reached", "ran": false }, { "span": "gone", "key": "bablr1", "runs": 1, "kind": "reached", "ran": true }];
+		const committedNow: StableObservation[] = [{ "span": "b", "key": "bablr1", "runs": 10, "kind": "branch", "taken": [0, 1] }, { "span": "v", "key": "bablr1", "runs": 10, "kind": "value", "tags": ["null", "object"], "nullish": true }, { "span": "s", "key": "bablr1", "runs": 10, "kind": "reached", "ran": true }, { "span": "new", "key": "bablr1", "runs": 1, "kind": "reached", "ran": true }];
+
+		assert.deepEqual(stableChanges(committedBefore, committedNow), [{ "span": "b", "kind": "branch", "taken": [0] }, { "span": "v", "kind": "value", "tags": ["null"], "nullish": true }, { "span": "s", "kind": "reached", "ran": true }]);
+		assert.deepEqual(stableChanges(committedNow, committedNow.map((each) => ({ ...each, "runs": 30 }))), [], "more runs of the same: nothing changed");
 		assert.equal((foldPurity(twice, [], { "id": "r3", "at": "2026-10-03T00:00:00.000Z" })[0] as PurityObservation).calls, 6, "a function that didn't run keeps its counts, fading");
 
 		// A function's time in the runs that profiled it: its own and with what it called add up, faded, against how long
