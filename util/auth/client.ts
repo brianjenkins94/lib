@@ -120,7 +120,7 @@ export function createClient({ api, clientId, redirectUri, par = false, authoriz
 	let handle: Promise<oauth.DPoPHandle> | undefined;
 
 	/** A local server (a dev harness on localhost) is plain HTTP; oauth4webapi refuses that unless told. Only there. */
-	const local = /^http:\/\/(?:localhost|127\.0\.0\.1)(?::\d+)?$/u.test(api);
+	const local = /^http:\/\/(?:localhost|127\.0\.0\.1)(?::\d+)?(?:\/|$)/u.test(api);
 
 	/** Each request's options: its DPoP proof, and, for a local server only, plain HTTP allowed. */
 	const options = async (): Promise<{ "DPoP": oauth.DPoPHandle; [oauth.allowInsecureRequests]?: boolean }> => ({ "DPoP": await dpop(), ...local ? { [oauth.allowInsecureRequests]: true } : {} });
